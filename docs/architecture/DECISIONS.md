@@ -134,7 +134,9 @@ Status values: `accepted` · `superseded by ADR-NNN` · `revisit at Stage N`
 
 ## ADR-009 — Anthropic SDK, `claude-opus-5`
 
-**Status:** accepted · **Date:** 2026-07-26 · **Stage:** 0
+**Status:** ~~accepted~~ **superseded by [ADR-014](#adr-014--provider-agnostic-llm-behind-an-llmclient-port)** · **Date:** 2026-07-26 · **Stage:** 0
+
+> Superseded the same day: no Anthropic API key is available, so pinning a single vendor SDK made the Stage 1 core loop undemoable. The reasoning below about *model capability* still holds and is why Anthropic remains a supported adapter — what changed is that the provider is now a runtime choice rather than a hardcoded dependency.
 
 **Decision.** The official `anthropic` Python SDK, default model `claude-opus-5`, adaptive thinking enabled.
 
@@ -205,3 +207,37 @@ Status values: `accepted` · `superseded by ADR-NNN` · `revisit at Stage N`
 **Consequence.** `pip install -e . --no-deps` installs the package for imports; `pip install -r requirements.txt` installs the environment. Two commands instead of one, and one source of truth instead of two.
 
 **Revisit:** if the project adopts `uv` or Poetry, whose lockfiles make the dual declaration safe.
+
+---
+
+## ADR-014 — Provider-agnostic LLM behind an `LLMClient` port
+
+**Status:** accepted · **Date:** 2026-07-26 · **Stage:** 0 · **Supersedes:** ADR-009
+
+**Context.** No Anthropic API key is available, and none is budgeted. A hardcoded vendor SDK makes the Stage 1 core loop undemoable. Separately, [EVALUATION.md](../ml/EVALUATION.md) requires sweeping models to record the cost/accuracy tradeoff — which a single-vendor binding also prevents.
+
+**Decision.** The agent depends on an `LLMClient` **protocol** defined in `core/`, never on a vendor SDK. Concrete adapters are selected at startup by `LLM_PROVIDER` and injected. This is the Dependency Inversion Principle applied literally: the high-level agent policy and the low-level vendor detail both depend on the abstraction, and neither depends on the other.
+
+```
+        agent  ──depends on──▶  LLMClient (Protocol, core/)
+                                     ▲
+                    ┌────────────────┼────────────────┐
+          OpenAICompatibleAdapter   AnthropicAdapter  FakeLLMClient
+                    │                                      └─ used by every test
+      base_url selects: Groq · OpenRouter · Cerebras
+                        Gemini · Ollama · LM Studio
+```
+
+**Two adapters, not seven.** Nearly every provider now exposes an OpenAI-compatible `/chat/completions` endpoint, so one adapter parameterized by `base_url` covers Groq, OpenRouter, Cerebras, Gemini's compatibility endpoint, and local Ollama / LM Studio. Writing one class per vendor would violate DRY for no gain — the differences are configuration, not behaviour. A second native adapter exists for Anthropic because its tool-use and thinking surface is genuinely different, and it is the target if a key becomes available.
+
+**Alternatives.**
+- *LangChain / LiteLLM as the abstraction* — rejected. Both are large dependencies that would own the agent loop, and the tool-boundary design is the substance of this project ([ADR-003](#adr-003--mcp-for-the-tool-boundary)). Delegating it to a framework hides exactly the work worth showing. A protocol plus two adapters is ~150 lines and fully under test.
+- *Hardcode one free provider* — rejected: free tiers change terms and rate limits, and it reintroduces the same lock-in one vendor later.
+
+**Consequences.**
+- **The `FakeLLMClient` falls out for free.** It is just another implementation of the port, which is what makes the deterministic test strategy in [TESTING.md](../development/TESTING.md) §1 possible without mocking a vendor SDK's internals.
+- **Tool-calling support varies by provider and model.** The agent must degrade to prompt-based structured output where native tool calling is absent. The port exposes a `supports_tool_calling` capability flag rather than assuming.
+- Model quality varies enormously across free tiers, so **execution accuracy must be reported per provider/model** in [BENCHMARKS.md](../ml/BENCHMARKS.md), never as a single number.
+- Two new attack surfaces are introduced and are handled in [SECURITY.md](../operations/SECURITY.md) §14: **SSRF via a configurable `base_url`**, and **third-party data exposure** when schema and sampled row values are sent to a free-tier provider that may train on them.
+
+**Revisit:** never — provider independence is now a design property, not a workaround.

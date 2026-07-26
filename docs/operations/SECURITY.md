@@ -208,7 +208,55 @@ Properties:
 | LLM08 Excessive agency | **The central one.** The agent can only read, only via four tools, only under limits, and validation is separate from execution by design |
 | LLM10 Model theft | Out of scope |
 
-## 13. Incident response
+## 14. Multi-provider LLM risks
+
+Introduced by [ADR-014](../architecture/DECISIONS.md#adr-014--provider-agnostic-llm-behind-an-llmclient-port). Making the LLM endpoint configurable is necessary, but it adds two attack surfaces that a hardcoded vendor SDK did not have.
+
+### 14.1 SSRF via a configurable `base_url` — **High**
+
+**Vulnerability.** `LLM_BASE_URL` tells the client which host to send requests to. If that value ever becomes influenced by request data — a per-tenant override, a "bring your own endpoint" feature, a debug query parameter — the service becomes an SSRF primitive. *(OWASP A10:2021 — Server-Side Request Forgery; API7:2023.)*
+
+**Why it's dangerous.** The service makes outbound requests from inside the trust boundary, with whatever network position it holds. It also attaches `LLM_API_KEY` to those requests.
+
+**Attack scenario.** An attacker sets the base URL to `http://169.254.169.254/latest/meta-data/` and the service dutifully fetches cloud instance metadata — including IAM credentials — and returns the body as an "LLM response." Variants reach internal admin panels, `http://localhost:8000` (the service itself), or the Postgres port. A subtler version points at an attacker-controlled host purely to **harvest the API key** from the `Authorization` header.
+
+**Secure implementation.**
+- `LLM_BASE_URL` is **operator-only configuration**, read once at startup from the environment. It is never read from a request, a header, a session, or the database. This is the primary control.
+- Validate at startup, fail fast: scheme must be `https`, **or** `http` only when the host resolves to loopback (the documented local-Ollama case).
+- Enforce an allowlist of permitted hosts rather than blocklisting bad ones.
+- Resolve the hostname at startup and reject link-local (`169.254.0.0/16`), metadata IPs, and — unless explicitly loopback — private ranges.
+- Disable HTTP redirect following on the LLM client. A permitted host that 302s to `169.254.169.254` defeats a URL check performed only on the initial request.
+
+**Why the fix is secure.** Keeping the value out of the request path removes attacker influence entirely — the allowlist and IP checks are defence in depth for operator error, not the primary boundary. Disabling redirects closes the standard bypass of validate-then-fetch.
+
+**CIA impact.** Confidentiality (credential and internal-service disclosure) and Integrity (attacker-controlled text returned as model output, which then drives SQL generation).
+
+### 14.2 Third-party exposure of schema and row values — **Medium** (High on regulated data)
+
+**Vulnerability.** The agent sends table names, column names, comments, **and sampled row values** from `profile_table` to whichever provider is configured. On a free tier, submitted data is frequently retained and used for training. *(OWASP LLM06 — Sensitive Information Disclosure; GDPR/CCPA implications.)*
+
+**Why it's dangerous.** This is a data-exfiltration path that bypasses every control in §5. The read-only role correctly prevents the *agent* from writing, and the audit log correctly records what was read — but neither prevents data that was legitimately read from being transmitted to a third party and absorbed into a training set. It is irreversible.
+
+**Attack scenario.** Not an attacker action — a configuration mistake. The agent is pointed at a production database containing customer PII; `profile_table` samples five rows to disambiguate a column; those rows contain real names, emails, and account numbers; the free-tier provider retains them under terms nobody read. Later, a well-crafted prompt to that provider's public model surfaces fragments.
+
+**Secure implementation.**
+- **`profile_table` returns statistics by default, not values.** Null fraction, distinct count, min/max, and type are usually sufficient to disambiguate; raw sample rows are the exception, not the default.
+- Gate sample rows behind an explicit `ALLOW_VALUE_SAMPLING` flag, defaulting to `false`.
+- Detect and redact obvious PII patterns in sampled values before they enter a prompt (defence in depth — pattern matching is not a guarantee).
+- **Document the provider's retention terms in the deployment record**, and treat "provider trains on submitted data" as disqualifying for any non-public dataset.
+- For sensitive data, the supported configuration is **local inference** (Ollama / LM Studio), where nothing leaves the machine. This is the reason a local option is a first-class row in [CONFIG.md](CONFIG.md) §4 rather than a footnote.
+
+**Why the fix is secure.** Statistics are derived, non-reversible summaries — they carry the disambiguation signal without the underlying records. Defaulting sampling to off makes the risky path an explicit, auditable choice rather than a silent default.
+
+**CIA impact.** Confidentiality, with compliance exposure (GDPR Art. 44 cross-border transfer, CCPA) that is not undone by deleting anything on your side.
+
+### 14.3 Related: prompt injection reaches further with weaker models
+
+A free-tier model is generally more susceptible to injected instructions than a frontier model. This does **not** change the containment argument in §7 — a fully successful injection still only yields SQL, which is still parsed, still `SELECT`-only, and still runs under a role that cannot write. It does mean injection attempts will *succeed more often at the model layer*, so §7's position (contain, don't filter) matters more, not less. It also raises the value of the `MAX_TOOL_CALLS_PER_REQUEST` cap, since a manipulated weak model is likelier to loop.
+
+---
+
+## 15. Incident response
 
 > **TBD — Stage 6.**
 

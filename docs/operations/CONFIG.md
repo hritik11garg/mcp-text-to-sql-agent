@@ -42,12 +42,19 @@ All configuration comes from environment variables, loaded and validated by `pyd
 
 ## 4. Agent
 
+The agent depends on the `LLMClient` protocol, never on a vendor SDK ([ADR-014](../architecture/DECISIONS.md#adr-014--provider-agnostic-llm-behind-an-llmclient-port)). These variables select and configure the adapter.
+
 | Variable | Type | Default | Notes |
 |---|---|---|---|
-| `LLM_MODEL` | str | `claude-opus-5` | See [ADR-009](../architecture/DECISIONS.md#adr-009--anthropic-sdk-claude-opus-5) |
-| `LLM_EFFORT` | enum | `high` | `low` / `medium` / `high` / `xhigh` / `max` |
+| `LLM_PROVIDER` | enum | `openai_compatible` | `openai_compatible` / `anthropic` / `fake` |
+| `LLM_BASE_URL` | str | — | Required for `openai_compatible`. **Operator-only — never client-controlled** (SSRF; see [SECURITY.md](SECURITY.md) §14.1) |
+| `LLM_MODEL` | str | — | **Required.** Provider-specific model id |
+| `LLM_API_KEY` | SecretStr | — | Required unless the endpoint is local (Ollama / LM Studio) |
 | `LLM_MAX_TOKENS` | int | `16000` | |
-| `ANTHROPIC_API_KEY` | SecretStr | — | **Required** |
+| `LLM_TEMPERATURE` | float | `0.0` | Omitted for providers that reject it |
+| `LLM_TIMEOUT_MS` | int | `60000` | |
+| `LLM_SUPPORTS_TOOL_CALLING` | bool | `auto` | `auto` probes at startup; falls back to prompt-based structured output |
+| `LLM_EFFORT` | enum | — | Anthropic adapter only; ignored elsewhere |
 | `MAX_TOOL_CALLS_PER_REQUEST` | int | `20` | **Hard stop on agent loops** |
 | `MAX_SQL_RETRIES` | int | `3` | Self-correction budget per query |
 | `MAX_DECOMPOSITION_STEPS` | int | `5` | Sub-questions per compound question |
@@ -55,7 +62,20 @@ All configuration comes from environment variables, loaded and validated by `pyd
 
 **`MAX_TOOL_CALLS_PER_REQUEST` is not optional.** A self-correcting agent that fails to converge retries until something stops it. That something must be a counter.
 
-`LLM_MODEL` and `LLM_EFFORT` are configurable specifically so the eval harness can sweep them and record the cost/accuracy tradeoff. Lowering the default to save money is a decision that requires a measured comparison, not a config edit.
+`LLM_PROVIDER` and `LLM_MODEL` are configurable specifically so the eval harness can sweep them. **Accuracy is reported per provider/model**, never as a single number — free-tier model quality varies enormously, and a benchmark row without the model that produced it is meaningless.
+
+### Working `openai_compatible` configurations
+
+| Provider | `LLM_BASE_URL` | Key needed | Notes |
+|---|---|---|---|
+| Groq | `https://api.groq.com/openai/v1` | free tier | Very fast; good first choice |
+| OpenRouter | `https://openrouter.ai/api/v1` | free tier | Several `:free` models |
+| Cerebras | `https://api.cerebras.ai/v1` | free tier | |
+| Google Gemini | `https://generativelanguage.googleapis.com/v1beta/openai/` | free tier | OpenAI-compat endpoint |
+| **Ollama (local)** | `http://localhost:11434/v1` | **none** | Fully offline — no data leaves the machine |
+| LM Studio (local) | `http://localhost:1234/v1` | none | Offline |
+
+Verify current free-tier terms yourself before use — they change, and §14.2 of [SECURITY.md](SECURITY.md) explains why the terms matter here specifically.
 
 ## 5. Retrieval
 
