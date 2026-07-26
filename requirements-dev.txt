@@ -1,0 +1,25 @@
+# Development / test / training dependencies.
+# Install on top of the runtime set:
+#   pip install -r requirements.txt -r requirements-dev.txt
+#
+# Versions resolved and verified against PyPI on 2026-07-26 for Python 3.12.
+
+-r requirements.txt
+
+# --- Testing ---------------------------------------------------------------
+pytest==9.1.1
+pytest-asyncio==1.4.0         # async MCP client / FastAPI tests
+pytest-cov==7.1.0
+pytest-benchmark==5.2.3       # latency budgets in docs/operations/PERFORMANCE.md
+testcontainers[postgres]==4.15.0  # real Postgres + pgvector for integration tests
+
+# --- Linting / typing ------------------------------------------------------
+ruff==0.16.0                  # lint + format (replaces black/isort/flake8)
+mypy==2.3.0
+
+# --- ML training / evaluation ----------------------------------------------
+datasets==5.0.0               # Spider / BIRD loading + train/val splits
+accelerate==1.14.0            # device placement for the contrastive fine-tune
+
+# --- Load testing ----------------------------------------------------------
+locust==2.46.2                # concurrency + timeout behaviour under load

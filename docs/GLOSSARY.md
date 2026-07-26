@@ -1,0 +1,149 @@
+# Glossary
+
+Every term used across this documentation, defined once. Ordered roughly from protocol → retrieval → SQL → evaluation.
+
+---
+
+## Protocol and agent
+
+**MCP (Model Context Protocol)**
+An open protocol for exposing tools, resources, and prompts to LLM applications over JSON-RPC 2.0. Servers advertise capabilities; clients discover and invoke them. The point for this project: capabilities are described by the server at runtime rather than hardcoded into the agent.
+
+**MCP server**
+A process exposing a set of tools over MCP. This project runs four: `schema_search`, `validate_sql`, `execute_sql`, `profile_table`.
+
+**MCP client**
+The side that connects to servers, calls `tools/list` to discover what is available, and issues `tools/call`. Here, the agent is the client.
+
+**MCP host**
+An application that embeds an MCP client — Claude Desktop, an IDE, or this project's own agent. The reason MCP matters for portfolio purposes: any host can point at these servers.
+
+**Tool contract**
+The name, description, and JSON Schema a server publishes for a tool. The contract is the actual interface design work — a tool wrapped in a protocol with a vague description is a wrapper, not a capability.
+
+**Runtime tool discovery**
+Fetching the tool list from the server on connect instead of compiling it into the client. Adding a capability then requires no agent change.
+
+**Agent loop**
+The cycle of: read state → decide on a tool call → execute → observe result → repeat until the task is done or a budget is exhausted.
+
+**Decomposition**
+Splitting a compound question ("compare Q3 vs Q4 growth by region and flag anomalies") into several sub-queries plus a synthesis step.
+
+**Session memory**
+Retained prior results within a conversation, so follow-ups ("now just the top three") resolve without re-running everything.
+
+**Self-correction**
+Feeding a database or validation error back into the agent as a structured observation so it can revise the SQL, rather than surfacing the error to the user.
+
+**SSE (Server-Sent Events)**
+A one-directional HTTP streaming protocol used here to push agent progress to the client as it happens.
+
+---
+
+## Retrieval and ML
+
+**Schema linking**
+Mapping natural-language phrases to the specific tables and columns they refer to. "Revenue last quarter by region" → `orders.total_amount`, `orders.created_at`, `customers.region`. The dominant failure mode in text-to-SQL on large schemas.
+
+**Retriever**
+The component that, given a question, returns the top-k candidate schema elements. Here it is a sentence-transformer bi-encoder over serialized column descriptions.
+
+**Embedding**
+A dense vector representation of text such that semantically similar text lands nearby in vector space.
+
+**Bi-encoder**
+An architecture that embeds query and document independently, so document embeddings can be precomputed and searched with a vector index. Fast; less accurate than a cross-encoder.
+
+**Cross-encoder**
+An architecture that scores a (query, document) pair jointly. More accurate, but cannot precompute — every candidate needs a forward pass.
+
+**pgvector**
+A PostgreSQL extension adding a `vector` column type and approximate-nearest-neighbour indexes (HNSW, IVFFlat). Lets schema embeddings live in the same database as everything else.
+
+**Contrastive learning**
+Training that pulls matched pairs together in embedding space and pushes mismatched pairs apart. Here: (question, correct column) as positives, (question, wrong column) as negatives.
+
+**MultipleNegativesRankingLoss**
+The contrastive objective planned for the schema linker: within a batch, every other example's positive serves as a negative for the current example. Efficient — no explicit negative mining required, though hard negatives improve it.
+
+**Hard negative**
+A wrong answer that is *nearly* right, so the model must learn a fine distinction. For schema linking: a column with a similar name in a different table.
+
+**Recall@k**
+Of the schema elements actually needed to answer the question, the fraction that appear in the retriever's top-k results. The headline retrieval metric here, because a column that never gets retrieved can never appear in correct SQL.
+
+**Ablation**
+Removing or swapping one component to isolate its contribution. The fine-tuned-vs-baseline retriever comparison is the ablation this project commits.
+
+---
+
+## SQL and execution
+
+**AST (Abstract Syntax Tree)**
+A structured tree representation of parsed code. Validating SQL against its AST catches structural problems and lets you inspect what the query *does* — which tables it touches, whether it mutates — without executing it.
+
+**sqlglot**
+A Python SQL parser, transpiler, and optimizer. Used here to parse generated SQL into an AST, verify it is a single read-only statement, and check identifiers against the real schema.
+
+**EXPLAIN**
+A PostgreSQL command that returns the planner's execution plan without running the query. Catches unknown tables/columns and type errors, and exposes estimated cost — all without touching data.
+
+**Side-effect-free**
+A capability that changes no state and can be retried arbitrarily. `validate_sql` is side-effect-free by construction; `execute_sql` is not. That asymmetry is why they are separate MCP servers.
+
+**Read-only role**
+A PostgreSQL role granted `SELECT` only, with no write, DDL, or function-execution privileges. The outermost containment boundary — it holds even if every layer above it is compromised.
+
+**Statement timeout**
+A per-connection PostgreSQL setting (`statement_timeout`) that aborts a query exceeding a wall-clock limit. Prevents one pathological query from occupying a connection indefinitely.
+
+**Row limit**
+A cap on returned rows, enforced by injecting/enforcing `LIMIT` at the AST level rather than trusting the model to include one.
+
+**Blast radius**
+The maximum damage a compromised or malfunctioning component can do. Bounded here by the read-only role, timeouts, row limits, and cost caps acting together.
+
+**SQL injection**
+Executing attacker-controlled SQL by string-concatenating untrusted input into a query. Structurally different from this project's core risk — see prompt injection.
+
+**Prompt injection**
+Text that manipulates the model into taking unintended actions. Relevant here because a question, and even schema comments or column *values*, can carry instructions. Mitigation is containment (read-only role, validation tier), not filtering — see [SECURITY.md](operations/SECURITY.md).
+
+---
+
+## Evaluation
+
+**Spider**
+A large, cross-domain text-to-SQL benchmark: ~10k questions over 200 databases, with the test databases held out from training. The standard generalization benchmark.
+
+**BIRD**
+A text-to-SQL benchmark on larger, dirtier, more realistic databases. Requires external knowledge and reasoning over messy values, so scores run well below Spider.
+
+**Execution accuracy**
+The fraction of generated queries whose *result set* matches the gold query's result set. Robust to a query being written differently but correctly — the metric that matters for this project.
+
+**Exact match accuracy**
+String or AST equality against the gold query. Penalizes correct-but-differently-written SQL, so it is reported only as a secondary signal, if at all.
+
+**Task success (multi-step)**
+For compound questions, whether the final synthesized answer is correct — not whether each intermediate query was.
+
+**Invalid-query rate**
+The fraction of generated queries that fail to parse or fail `EXPLAIN`. The number the validation tier plus self-correction loop is designed to drive down.
+
+**Held-out set**
+Data never seen during training or prompt tuning, used for the final reported numbers. Kept separate from the development set used for iteration.
+
+---
+
+## Observability
+
+**OpenTelemetry**
+A vendor-neutral standard for traces, metrics, and logs.
+
+**Span**
+One timed unit of work inside a trace — a retrieval call, a validation attempt, a database execution.
+
+**Trace**
+The full tree of spans for one request, showing where the time went across agent, MCP servers, and database.

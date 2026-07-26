@@ -1,0 +1,123 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mcp-text-to-sql-agent"
+version = "0.1.0.dev0"
+description = "MCP-native text-to-SQL analytics agent with a fine-tuned schema linker"
+readme = "README.md"
+license = { file = "LICENSE" }
+requires-python = ">=3.12,<3.13"
+
+# NOTE: runtime dependencies are deliberately NOT listed here.
+# They live in requirements.txt as exact pins, which is the reproducibility
+# record for every benchmark in docs/ml/BENCHMARKS.md. Duplicating them here
+# as loose ranges creates two sources of truth that drift apart.
+#   pip install -r requirements.txt -r requirements-dev.txt
+#   pip install -e . --no-deps
+dependencies = []
+
+[project.scripts]
+# Filled in at Stage 2 (eval harness) and Stage 5 (training runs).
+# evals = "evals.cli:app"
+# train = "training.cli:app"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+# ---------------------------------------------------------------------------
+# ruff — formatting + linting + import sorting (replaces black, isort, flake8)
+# See docs/development/CODE_STYLE.md
+# ---------------------------------------------------------------------------
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = [
+    "E", "W",    # pycodestyle
+    "F",         # pyflakes
+    "I",         # isort
+    "N",         # pep8-naming
+    "UP",        # pyupgrade — enforces 3.12 idioms (list[str], X | None)
+    "B",         # bugbear
+    "C4",        # comprehensions
+    "SIM",       # simplify
+    "TID",       # tidy imports
+    "RUF",       # ruff-specific
+    "ASYNC",     # async correctness — blocking calls inside async def
+    "S",         # bandit security rules
+    "PT",        # pytest style
+    "LOG",       # logging correctness
+    "G",         # no f-strings in log calls (structlog needs key-value)
+    "ANN",       # require type annotations
+]
+ignore = [
+    "ANN401",    # allow explicit Any where justified by a comment
+    "S101",      # assert is fine in tests
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["ANN", "S105", "S106"]   # relaxed annotations; test creds are fake
+
+[tool.ruff.lint.flake8-tidy-imports]
+ban-relative-imports = "parents"
+
+# ---------------------------------------------------------------------------
+# mypy — strict on src/, per docs/development/CODE_STYLE.md §5
+# ---------------------------------------------------------------------------
+[tool.mypy]
+python_version = "3.12"
+files = ["src"]
+strict = true
+warn_unreachable = true
+warn_return_any = true
+disallow_untyped_defs = true
+disallow_any_generics = true
+no_implicit_reexport = true
+show_error_codes = true
+
+[[tool.mypy.overrides]]
+# These ship incomplete or absent stubs.
+module = ["sentence_transformers.*", "pgvector.*", "sqlglot.*", "datasets.*"]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "tests.*"
+disallow_untyped_defs = false
+
+# ---------------------------------------------------------------------------
+# pytest — see docs/development/TESTING.md
+# ---------------------------------------------------------------------------
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+addopts = "--strict-markers --strict-config -ra"
+markers = [
+    "unit: no I/O, fakes throughout",
+    "integration: requires a real Postgres via testcontainers",
+    "security: negative tests — the read-only role MUST be denied (release gate)",
+    "contract: MCP tool schema and behaviour contracts",
+    "e2e: full stack with a fake LLM",
+    "slow: excluded from the default run",
+]
+filterwarnings = ["error"]
+
+# ---------------------------------------------------------------------------
+# coverage — 85% floor on src/, per docs/development/TESTING.md §10
+# ---------------------------------------------------------------------------
+[tool.coverage.run]
+source = ["src"]
+branch = true
+
+[tool.coverage.report]
+fail_under = 85
+show_missing = true
+exclude_lines = [
+    "pragma: no cover",
+    "if TYPE_CHECKING:",
+    "raise NotImplementedError",
+    "@overload",
+]

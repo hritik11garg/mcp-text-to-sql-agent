@@ -1,0 +1,110 @@
+# ---------------------------------------------------------------------------
+# Secrets — never commit
+# ---------------------------------------------------------------------------
+.env
+.env.*
+!.env.example          # the placeholder template IS committed
+*.pem
+*.key
+secrets/
+
+# ---------------------------------------------------------------------------
+# Project-specific: things that are large, regenerable, or licensed
+# ---------------------------------------------------------------------------
+
+# Benchmark data. Spider and BIRD are CC BY-SA 4.0 and are deliberately NOT
+# vendored — a download script fetches them. See docs/ml/DATASETS.md §7.
+data/
+datasets/
+*.sqlite
+*.sqlite3
+*.db
+
+# Model checkpoints. Large, and derivative works of CC BY-SA data.
+# See docs/ml/TRAINING.md §10.
+checkpoints/
+models/
+*.safetensors
+*.bin
+*.pt
+*.ckpt
+
+# Eval harness output. Per-question artifacts are large and regenerable;
+# the *numbers* live in docs/ml/BENCHMARKS.md, which IS committed.
+results/
+runs/
+outputs/
+.benchmarks/
+
+# Local Postgres volume if bind-mounted by docker compose
+pgdata/
+
+# ---------------------------------------------------------------------------
+# Python
+# ---------------------------------------------------------------------------
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+.venv/
+venv/
+ENV/
+env/
+
+build/
+dist/
+*.egg-info/
+.eggs/
+pip-wheel-metadata/
+
+# ---------------------------------------------------------------------------
+# Tooling caches
+# ---------------------------------------------------------------------------
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.dmypy.json
+.hypothesis/
+
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+
+# ---------------------------------------------------------------------------
+# Logs and profiling
+# ---------------------------------------------------------------------------
+*.log
+logs/
+*.prof
+locust_report*.html
+
+# ---------------------------------------------------------------------------
+# Notebooks
+# ---------------------------------------------------------------------------
+.ipynb_checkpoints/
+
+# ---------------------------------------------------------------------------
+# Editors
+# ---------------------------------------------------------------------------
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# ---------------------------------------------------------------------------
+# OS
+# ---------------------------------------------------------------------------
+Thumbs.db
+ehthumbs.db
+desktop.ini
+.DS_Store
+
+# ---------------------------------------------------------------------------
+# NOT ignored, deliberately:
+#   docs/assets/     architecture + ER diagrams belong in version control
+#   .env.example     placeholder template
+#   requirements*.txt pinned deps are the reproducibility record
+# ---------------------------------------------------------------------------
