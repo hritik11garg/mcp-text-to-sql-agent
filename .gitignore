@@ -3,7 +3,10 @@
 # ---------------------------------------------------------------------------
 .env
 .env.*
-!.env.example          # the placeholder template IS committed
+# The placeholder template IS committed. Note: a trailing comment on a pattern
+# line does NOT work in gitignore -- `#` only starts a comment at the start of
+# a line, so it would silently become part of the pattern and match nothing.
+!.env.example
 *.pem
 *.key
 secrets/
