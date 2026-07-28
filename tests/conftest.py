@@ -22,7 +22,12 @@ import psycopg
 import pytest
 
 from adapters.llm.fake import FakeLLMClient
-from core.settings import AgentSettings, ExecutionSettings
+from core.settings import (
+    AgentSettings,
+    DatabaseSettings,
+    ExecutionSettings,
+    LLMSettings,
+)
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 PG_IMAGE = "pgvector/pgvector:pg16"
@@ -36,12 +41,19 @@ type Conn = psycopg.Connection[tuple[object, ...]]
 
 @pytest.fixture(autouse=True)
 def _isolate_env(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Stop the developer's real .env from leaking into tests.
+    """Stop the developer's real configuration from leaking into tests.
 
-    Without this, a populated .env makes settings tests pass locally and fail
-    in CI -- or worse, pass in both while asserting nothing.
+    Two independent sources have to be closed, and missing the second is easy:
 
-    No teardown needed: monkeypatch restores the environment itself.
+    1. Environment variables -- cleared below.
+    2. **The .env file** -- pydantic-settings reads it directly, bypassing
+       os.environ entirely, so deleting variables does nothing about it.
+
+    Only closing (1) produces tests that pass on a machine with no .env and
+    fail on one that has it -- which is exactly what happened the first time a
+    real .env was created here.
+
+    No teardown needed: monkeypatch restores both itself.
     """
     for var in (
         "LLM_PROVIDER",
@@ -53,6 +65,9 @@ def _isolate_env(monkeypatch: pytest.MonkeyPatch) -> None:
         "DATABASE_RO_URL",
     ):
         monkeypatch.delenv(var, raising=False)
+
+    for settings_cls in (LLMSettings, DatabaseSettings, ExecutionSettings, AgentSettings):
+        monkeypatch.setitem(settings_cls.model_config, "env_file", None)
 
 
 # --- pure fixtures ---------------------------------------------------------
