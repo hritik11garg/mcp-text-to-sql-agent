@@ -11,6 +11,18 @@
 *.key
 secrets/
 
+# Compose reads this automatically when present. It is where local ports and
+# credentials end up, so it must never be committed -- unlike the base
+# docker-compose.yml, which is.
+docker-compose.override.yml
+docker-compose.override.yaml
+
+# Database dumps. Loading a benchmark or snapshotting local state produces
+# these, and they contain real data.
+*.dump
+*.sql.gz
+*.sql.bz2
+
 # ---------------------------------------------------------------------------
 # Project-specific: things that are large, regenerable, or licensed
 # ---------------------------------------------------------------------------
@@ -38,6 +50,10 @@ results/
 runs/
 outputs/
 .benchmarks/
+
+# Raw embedding arrays, if ever written to disk rather than to pgvector.
+*.npy
+*.npz
 
 # Local Postgres volume if bind-mounted by docker compose
 pgdata/
@@ -73,6 +89,7 @@ pip-wheel-metadata/
 .coverage
 .coverage.*
 coverage.xml
+coverage.json
 htmlcov/
 
 # ---------------------------------------------------------------------------
@@ -96,6 +113,14 @@ locust_report*.html
 *.swp
 *.swo
 *~
+
+# Agent/editor tooling: shared project settings would be committed, but the
+# .local variants hold machine-specific paths and permissions.
+.claude/settings.local.json
+
+# Merge and patch leftovers -- committing these is always a mistake.
+*.orig
+*.rej
 
 # ---------------------------------------------------------------------------
 # OS
