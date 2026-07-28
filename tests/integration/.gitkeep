@@ -1,1 +1,1 @@
-[TBD -- Stage 1] Integration tests. Real Postgres via testcontainers.
+[TBD -- Stage 1] Integration tests. Postgres fixtures live in tests/conftest.py.

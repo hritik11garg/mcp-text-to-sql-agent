@@ -60,7 +60,18 @@ ignore = [
 ]
 
 [tool.ruff.lint.per-file-ignores]
-"tests/**" = ["ANN", "S105", "S106"]   # relaxed annotations; test creds are fake
+# Relaxed annotations; credentials in tests are ephemeral container fixtures.
+# S603/S607: tests shell out to `docker` and `alembic` resolved from PATH.
+"tests/**" = ["ANN", "S105", "S106", "S603", "S607"]
+
+# S608 flags f-string SQL. In migrations this is unavoidable and safe:
+# PostgreSQL role and schema names are *identifiers*, which cannot be bind
+# parameters. The rule that must hold instead -- and that review must check --
+# is that migrations interpolate ONLY module-level constants, never a value
+# derived from input. Where a real value is needed (the read-only role's
+# password in 002), it is bound via set_config and quoted server-side with
+# format(%L) rather than interpolated.
+"migrations/versions/**" = ["S608"]
 
 [tool.ruff.lint.flake8-tidy-imports]
 ban-relative-imports = "parents"

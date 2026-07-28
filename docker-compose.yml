@@ -1,0 +1,46 @@
+# Local development stack.
+#
+# Migrations run as a separate one-shot service rather than from an application
+# entrypoint: several replicas racing the same migration is a reliable way to
+# corrupt schema state. See docs/operations/DEPLOYMENT.md section 2.
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: t2sql-postgres
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-t2sql_owner}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+      POSTGRES_DB: ${POSTGRES_DB:-analytics}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      # "Container started" is not "database ready". Without a real check the
+      # api service starts, fails to connect, and restart-loops.
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-t2sql_owner} -d ${POSTGRES_DB:-analytics}"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+      start_period: 5s
+    restart: unless-stopped
+
+  migrate:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: migrate
+    container_name: t2sql-migrate
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-t2sql_owner}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-analytics}
+      SQL_AGENT_RO_PASSWORD: ${SQL_AGENT_RO_PASSWORD:?SQL_AGENT_RO_PASSWORD is required}
+    command: ["alembic", "upgrade", "head"]
+    restart: "no"
+    profiles: ["migrate"]
+
+volumes:
+  pgdata:
