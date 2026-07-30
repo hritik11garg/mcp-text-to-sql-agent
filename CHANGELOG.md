@@ -14,6 +14,20 @@ Versions map to build stages in [ROADMAP.md](docs/project/ROADMAP.md). Every ent
 - Documentation scaffolding: 28 documents across `docs/` plus root-level README, CHANGELOG, CONTRIBUTING, LICENSE.
 - `requirements.txt` / `requirements-dev.txt` pinned to versions verified against PyPI for Python 3.12.
 - `.python-version` pinning the interpreter to 3.12.
+- `pyproject.toml`: ruff, mypy (strict on `src/`), pytest markers, coverage floor.
+- **Provider-agnostic LLM access.** `LLMClient` protocol in `src/core/ports/`, with a fake adapter and a factory. One OpenAI-compatible adapter is planned to cover Groq, Gemini, OpenRouter, Ollama and LM Studio via `base_url`. See ADR-014, which supersedes ADR-009.
+- **Typed settings validated at startup** (`src/core/settings.py`), including an SSRF guard on `LLM_BASE_URL` that resolves the host and rejects link-local, private, reserved and multicast addresses.
+- **PostgreSQL 16 + pgvector**, Alembic migrations, and the `agent_meta` schema: `schema_elements`, `foreign_keys`, `sessions`, `session_turns`, `query_audit`, with an HNSW index for ANN retrieval.
+- **The read-only role** — `SELECT`-only, no privileges on `agent_meta`, with role-level `statement_timeout`, `idle_in_transaction_session_timeout`, `work_mem` and `default_transaction_read_only`.
+- **The schema catalog** — introspection of tables, columns, types, comments and foreign keys from `pg_catalog`; serialization to the text that gets embedded; an `Embedder` port with a sentence-transformer adapter and a dependency-free hashing adapter; and an idempotent, single-transaction indexer. `assert_catalog_ready` refuses startup when the configured retriever has no vectors indexed.
+- **Test suite: 126 tests** — 51 unit, 22 integration against a real Postgres via testcontainers, 53 security. The security suite is negative: it passes when the database refuses.
+
+### Fixed
+- `schema_elements` uniqueness constraint permitted unlimited duplicate table rows. `column_name` is `NULL` for table elements, and under the default `NULLS DISTINCT` two such rows never conflict, so `ON CONFLICT` never fired and every re-index would have appended another copy of every table. Rebuilt as `UNIQUE NULLS NOT DISTINCT` in migration 003.
+- `.gitignore` negation `!.env.example` was disabled by a trailing comment — `#` only starts a comment at the start of a line — which had silently excluded `.env.example` from the repository.
+
+### Security
+- Documented and mitigated two exfiltration paths in [SECURITY.md](docs/operations/SECURITY.md) §14: SSRF via a configurable `base_url` (§14.1), and third-party exposure of sampled row values (§14.2), including the schema catalog path (§14.2.1), where samples are persisted and re-sent on every retrieval hit and never appear in the audit log. Schema value sampling defaults to **off**.
 
 ---
 

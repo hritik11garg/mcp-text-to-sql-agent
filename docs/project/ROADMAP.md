@@ -13,7 +13,7 @@ Working checklist: [TASKS.md](TASKS.md).
 | Stage | Output | Weeks | Status | % |
 |---|---|---|---|---|
 | 0 | Scaffolding — docs, deps, interpreter pin | — | ✅ Done | 100% |
-| 1 | **Core loop** — retrieval, generation, validation, sandboxed execution | 1.5–2 | ⬜ Not started | 0% |
+| 1 | **Core loop** — retrieval, generation, validation, sandboxed execution | 1.5–2 | 🚧 In progress | ~35% |
 | 2 | **Eval harness** — Spider/BIRD subset, execution accuracy | 0.5 | ⬜ Not started | 0% |
 | 3 | **MCP servers + client refactor** | 0.5–1 | ⬜ Not started | 0% |
 | 4 | **Agent layer** — decomposition, session memory, self-correction | 1 | ⬜ Not started | 0% |
@@ -40,10 +40,14 @@ Scope: Postgres + pgvector up with roles and migrations; schema ingestion and em
 
 **Done when:**
 - [ ] Runs end to end from a clean checkout per the README
-- [ ] **The read-only negative test suite is green** — this gates the stage, not Stage 6
+- [x] **The read-only negative test suite is green** — this gates the stage, not Stage 6
 - [ ] Row limits and statement timeouts are enforced and tested
 - [ ] `.env.example` and [CONFIG.md](../operations/CONFIG.md) match the implementation
 - [ ] Span boundaries are in place (instrumentation added later, structure now)
+
+**Landed so far:** Postgres + pgvector with migrations and the read-only role (30 negative tests, green); the `LLMClient` and `Embedder` ports; typed settings with an SSRF guard; and the schema catalog — introspection, serialization, embedding, and an idempotent indexer.
+
+**Still open:** retrieval over pgvector ANN, SQL generation, sqlglot validation, sandboxed execution, and FastAPI + SSE. Row limits and timeouts exist at the *role* level and are tested; the per-request clamps are written but not yet exercised end to end.
 
 Security and limits belong here, not in Stage 6. Retrofitting containment into a working system means restructuring it; adding *tracing* to correct span boundaries is easy.
 

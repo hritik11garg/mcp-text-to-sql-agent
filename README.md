@@ -1,6 +1,13 @@
 # Text-to-SQL Analytics Agent (MCP-native)
 
-> **Status: Stage 0 — scaffolding.** No code yet. Documentation structure is in place; each document is filled in as its stage lands. See [ROADMAP](docs/project/ROADMAP.md) for stage status and [TASKS](docs/project/TASKS.md) for the working checklist.
+> **Status: Stage 1 — core loop, in progress.** Database, read-only role, and the schema catalog are in and tested; retrieval, generation, validation, and the API are not yet. Nothing below claims a benchmark number until the eval harness exists. See [ROADMAP](docs/project/ROADMAP.md) for stage status and [TASKS](docs/project/TASKS.md) for the working checklist.
+>
+> | Landed | Next |
+> |---|---|
+> | Postgres 16 + pgvector, Alembic migrations | Retrieval over pgvector ANN |
+> | `SELECT`-only role, proven by 30 negative tests | SQL generation behind the `LLMClient` port |
+> | Schema catalog — introspection, serialization, embedding | sqlglot AST validation + `EXPLAIN` |
+> | Provider-agnostic `LLMClient` and `Embedder` ports | Sandboxed execution, then FastAPI + SSE |
 
 An agent that answers analytical questions in plain English against a real PostgreSQL database. Capabilities are exposed as **four MCP servers** rather than hardcoded functions, so any MCP host — Claude Desktop, or your own client — can point at them and query its own database.
 
@@ -91,9 +98,28 @@ PostgreSQL 16+ with the `pgvector` extension is required. Docker Compose setup, 
 
 Copy `.env.example` to `.env` and fill in the values described in [CONFIG.md](docs/operations/CONFIG.md).
 
+Bring the database up and apply the migrations:
+
+```powershell
+docker compose up -d postgres
+python -m alembic upgrade head
+```
+
+That creates the `agent_meta` schema, the pgvector extension and the HNSW index, and the `SELECT`-only role the agent runs as.
+
+Verify the install — the security suite is the one that matters, and it passes by being **refused**:
+
+```powershell
+pytest                    # 126 tests; integration and security need Docker
+pytest -m security        # the read-only containment suite, on its own
+ruff check . ; mypy
+```
+
+The Postgres-backed tests skip cleanly without a running Docker daemon. In CI that is not good enough: *skipped* and *passed* look alike, so the pipeline must fail if the security suite did not actually run.
+
 ## Usage
 
-> **TBD — Stage 1/3.** Concrete commands land with the core loop and the MCP refactor.
+> **TBD — Stage 1/3.** End-to-end query commands land with the core loop; MCP host config lands with the refactor.
 
 Planned entrypoints:
 
@@ -103,17 +129,39 @@ Planned entrypoints:
 
 ## Folder structure
 
-> **TBD.** The source tree is created in Stage 1; this section is filled in then. Documentation layout as it stands:
+Directories marked *(stub)* exist with a docstring stating which stage fills them, so the intended shape is visible without pretending the code is there.
 
 ```
 .
 ├── PROJECT.md                  # PRD — objective, scope, timeline, success metrics
 ├── README.md                   # this file
-├── CHANGELOG.md
-├── CONTRIBUTING.md
-├── LICENSE
-├── requirements.txt
-├── requirements-dev.txt
+├── CHANGELOG.md · CONTRIBUTING.md · LICENSE
+├── pyproject.toml              # ruff, mypy, pytest, coverage — one config file
+├── requirements.txt · requirements-dev.txt
+├── docker-compose.yml          # Postgres 16 + pgvector, with a healthcheck
+├── alembic.ini
+├── migrations/
+│   └── versions/               # 001 extensions + agent_meta · 002 read-only role
+│                               # 003 schema_elements uniqueness fix
+├── src/
+│   ├── core/
+│   │   ├── settings.py         # typed config, validated at startup
+│   │   ├── exceptions.py       # domain error hierarchy
+│   │   └── ports/              # LLMClient, Embedder — protocols the app depends on
+│   ├── adapters/
+│   │   ├── llm/                # fake + factory; OpenAI-compatible adapter next
+│   │   └── embedding/          # sentence-transformer + hashing + factory
+│   ├── schema/                 # introspection, serialization, sensitivity, indexer
+│   ├── validation/             # (stub) sqlglot AST validation
+│   ├── execution/              # (stub) sandboxed execution under limits
+│   ├── profiling/              # (stub) column statistics
+│   ├── mcp_servers/            # (stub) four servers — Stage 3
+│   ├── agent/                  # (stub) planner, executor, memory — Stage 4
+│   └── api/                    # (stub) FastAPI + SSE
+├── tests/
+│   ├── unit/                   # no I/O, fakes throughout
+│   ├── integration/            # real Postgres via testcontainers
+│   └── security/               # negative tests — the role MUST be denied
 └── docs/
     ├── GLOSSARY.md
     ├── architecture/           # SYSTEM_ARCHITECTURE, API, MCP, DATABASE, DECISIONS
