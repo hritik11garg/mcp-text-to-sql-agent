@@ -250,6 +250,31 @@ Introduced by [ADR-014](../architecture/DECISIONS.md#adr-014--provider-agnostic-
 
 **CIA impact.** Confidentiality, with compliance exposure (GDPR Art. 44 cross-border transfer, CCPA) that is not undone by deleting anything on your side.
 
+#### 14.2.1 The same risk via the schema catalog — **and it is the worse of the two**
+
+`profile_table` is not the only path row values take out of the database. The schema catalog serializes each column as `"{table}.{column} ({type}) — {comment}. Examples: {v1}, {v2}, {v3}"`, and that string is embedded, **stored in `agent_meta.schema_elements`**, and quoted into the prompt on every request that retrieves the element.
+
+It is worse than `profile_table` in three ways, all of them consequences of persistence rather than of volume:
+
+| | `profile_table` | Schema catalog |
+|---|---|---|
+| Lifetime | One request | Until re-indexed |
+| Transmissions | One | Every retrieval hit, indefinitely |
+| Visibility | Appears in the audit log | Written once at index time, then invisible |
+
+The third is the trap: an operator reviewing the audit log to answer *"what data has left the building?"* will not see catalog samples there at all.
+
+**Secure implementation.** Four controls, in the order they are relied on:
+
+1. **`SCHEMA_SAMPLE_VALUES` defaults to `false`.** This is the one that matters. No sample value is read unless an operator explicitly turns it on.
+2. **Sensitive-looking columns are never read**, even when it is on — a name-based denylist (`email`, `ssn`, `password`, `salary`, `address`, and ~40 more) applied *before* the `SELECT`, so the values never enter the process. `SCHEMA_EXTRA_SENSITIVE_COLUMNS` can add to it and can never remove from it.
+3. **Serialization drops sample values for those columns a second time**, so a single missed check at the introspection layer does not write real data into the catalog permanently.
+4. **Values are truncated in SQL** (`left(col::text, n)`) and the per-column scan is `LIMIT`ed, so a large text column is neither transmitted nor held in memory in full.
+
+**Why the fix is secure.** Control 1 is a default, not a runtime check, so it protects deployments whose operator never read this document. Controls 2 and 3 are independent gates on the same predicate at different layers — the pattern list is a heuristic and is treated as one. Control 4 bounds the damage of the residual case where sampling is on and a column with an innocuous name (`notes`, `description`) holds personal data; that case is **not** solved here, and the honest mitigation for it remains local inference.
+
+**CIA impact.** Confidentiality. Availability too, marginally: unbounded sampling would seq-scan every table in the schema once per column at index time.
+
 ### 14.3 Related: prompt injection reaches further with weaker models
 
 A free-tier model is generally more susceptible to injected instructions than a frontier model. This does **not** change the containment argument in §7 — a fully successful injection still only yields SQL, which is still parsed, still `SELECT`-only, and still runs under a role that cannot write. It does mean injection attempts will *succeed more often at the model layer*, so §7's position (contain, don't filter) matters more, not less. It also raises the value of the `MAX_TOOL_CALLS_PER_REQUEST` cap, since a manipulated weak model is likelier to loop.

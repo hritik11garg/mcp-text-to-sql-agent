@@ -22,19 +22,19 @@ Convention: `[ ]` open · `[x]` done · `[~]` in progress · `[!]` blocked
 ## Stage 1 — Core loop
 
 ### Database
-- [ ] `docker-compose.yml` — Postgres 16 + pgvector, with a real healthcheck
-- [ ] Alembic init; migration 001: `CREATE EXTENSION vector`
-- [ ] Migration: `agent_meta` schema — `schema_elements`, `foreign_keys`, `sessions`, `session_turns`, `query_audit`
-- [ ] Migration: read-only role, grants, `REVOKE` on functions, role-level timeouts
-- [ ] **Negative tests: read-only role denied on write/DDL/`pg_read_file`/`agent_meta`** ← gates the stage
-- [ ] HNSW index on `schema_elements.embedding`
+- [x] `docker-compose.yml` — Postgres 16 + pgvector, with a real healthcheck
+- [x] Alembic init; migration 001: `CREATE EXTENSION vector`
+- [x] Migration: `agent_meta` schema — `schema_elements`, `foreign_keys`, `sessions`, `session_turns`, `query_audit`
+- [x] Migration: read-only role, grants, `REVOKE` on functions, role-level timeouts
+- [x] **Negative tests: read-only role denied on write/DDL/`pg_read_file`/`agent_meta`** ← gates the stage
+- [x] HNSW index on `schema_elements.embedding`
 - [ ] Load one target dataset
 
 ### Schema ingestion
-- [ ] Introspect tables, columns, types, comments, foreign keys
-- [ ] Serialize elements (name + type + comment + sample values)
-- [ ] Embed with the baseline model; write with `model_version`
-- [ ] Startup check: vectors exist for the configured `RETRIEVER_MODEL_VERSION`
+- [x] Introspect tables, columns, types, comments, foreign keys
+- [x] Serialize elements (name + type + comment + sample values)
+- [ ] Embed with the baseline model; write with `model_version` — *indexer and `model_version` done; the sentence-transformer adapter is written but has not been run against a downloaded model yet*
+- [x] Startup check: vectors exist for the configured `RETRIEVER_MODEL_VERSION`
 
 ### Retrieval
 - [ ] `SchemaRetriever` over pgvector ANN
@@ -43,10 +43,10 @@ Convention: `[ ]` open · `[x]` done · `[~]` in progress · `[!]` blocked
 - [ ] Latency check against the < 100 ms budget
 
 ### Generation
-- [ ] Anthropic client wrapper, `claude-opus-5`, injected not imported
+- [ ] OpenAI-compatible client adapter, injected not imported (ADR-014) — covers Groq, Gemini, OpenRouter, Ollama, LM Studio via `base_url`
 - [ ] `sql_gen` prompt v1 — dialect stated explicitly
 - [ ] Stable prompt prefix for caching; verify `cache_read_input_tokens` > 0
-- [ ] Fake LLM client for tests
+- [x] Fake LLM client for tests
 
 ### Validation
 - [ ] sqlglot parse → AST

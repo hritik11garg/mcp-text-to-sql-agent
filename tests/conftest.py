@@ -27,6 +27,7 @@ from core.settings import (
     DatabaseSettings,
     ExecutionSettings,
     LLMSettings,
+    RetrievalSettings,
 )
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -63,10 +64,20 @@ def _isolate_env(monkeypatch: pytest.MonkeyPatch) -> None:
         "LLM_ALLOWED_HOSTS",
         "DATABASE_URL",
         "DATABASE_RO_URL",
+        "DATASET",
+        "EMBEDDER_PROVIDER",
+        "RETRIEVER_MODEL",
+        "SCHEMA_SAMPLE_VALUES",
     ):
         monkeypatch.delenv(var, raising=False)
 
-    for settings_cls in (LLMSettings, DatabaseSettings, ExecutionSettings, AgentSettings):
+    for settings_cls in (
+        LLMSettings,
+        DatabaseSettings,
+        ExecutionSettings,
+        RetrievalSettings,
+        AgentSettings,
+    ):
         monkeypatch.setitem(settings_cls.model_config, "env_file", None)
 
 
@@ -81,6 +92,11 @@ def fake_llm() -> FakeLLMClient:
 @pytest.fixture
 def execution_settings() -> ExecutionSettings:
     return ExecutionSettings()
+
+
+@pytest.fixture
+def retrieval_settings() -> RetrievalSettings:
+    return RetrievalSettings()
 
 
 @pytest.fixture
@@ -175,6 +191,53 @@ def target_table(owner_connection: Conn) -> None:
         )
     """)
     owner_connection.execute("GRANT SELECT ON public.orders TO sql_agent_ro")
+
+
+@pytest.fixture(scope="session")
+def catalog_schema(owner_connection: Conn, target_table: None) -> None:
+    """A small schema with the features introspection has to handle.
+
+    Comments, a foreign key, a sensitive column name, and one table the
+    read-only role deliberately cannot SELECT -- so "only index what the agent
+    can read" is asserted against a real denial rather than assumed.
+    """
+    owner_connection.execute("""
+        CREATE TABLE IF NOT EXISTS public.customers (
+            id      bigserial PRIMARY KEY,
+            name    text NOT NULL,
+            email   text,
+            country text
+        )
+    """)
+    owner_connection.execute("""
+        ALTER TABLE public.orders
+            ADD COLUMN IF NOT EXISTS customer_id bigint REFERENCES public.customers(id)
+    """)
+
+    owner_connection.execute("COMMENT ON TABLE public.customers IS 'One row per customer account'")
+    owner_connection.execute(
+        "COMMENT ON COLUMN public.customers.country IS 'ISO 3166-1 alpha-2 country code'"
+    )
+    owner_connection.execute(
+        "COMMENT ON COLUMN public.orders.total_amount IS 'Order total including tax, in USD'"
+    )
+
+    owner_connection.execute("""
+        CREATE TABLE IF NOT EXISTS public.internal_payroll (
+            id     bigserial PRIMARY KEY,
+            amount numeric(12, 2) NOT NULL
+        )
+    """)
+
+    owner_connection.execute("GRANT SELECT ON public.customers TO sql_agent_ro")
+    owner_connection.execute("REVOKE ALL ON public.internal_payroll FROM sql_agent_ro")
+
+    for values in (("Ada", "ada@example.com", "GB"), ("Linus", "linus@example.com", "FI")):
+        owner_connection.execute(
+            "INSERT INTO public.customers (name, email, country) VALUES (%s, %s, %s) "
+            "ON CONFLICT DO NOTHING",
+            values,
+        )
 
 
 @pytest.fixture

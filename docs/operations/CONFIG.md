@@ -79,16 +79,41 @@ Verify current free-tier terms yourself before use — they change, and §14.2 o
 
 ## 5. Retrieval
 
+### Catalog and embedder — implemented
+
 | Variable | Type | Default | Notes |
 |---|---|---|---|
-| `RETRIEVER_MODEL_VERSION` | str | `baseline-v1` | Filters `schema_elements`; **vectors from different models are not comparable** |
-| `RETRIEVER_MODEL_PATH` | str | — | Local checkpoint path for the fine-tuned model |
+| `DATASET` | str | `default` | Namespace for catalog rows, so several schemas can share one database |
+| `EMBEDDER_PROVIDER` | enum | `sentence_transformer` | `sentence_transformer` / `hashing` |
+| `RETRIEVER_MODEL` | str | `sentence-transformers/all-MiniLM-L6-v2` | Hub id **or** a local checkpoint path. 384 dimensions, matching the vector column |
+| `RETRIEVER_LOCAL_FILES_ONLY` | bool | `false` | Refuse to download. Set `true` in CI and air-gapped deployments so an implicit fetch fails loudly |
+
+**There is no `RETRIEVER_MODEL_VERSION` setting, deliberately.** The version recorded on every row comes from the embedder itself — for `sentence_transformer` it *is* `RETRIEVER_MODEL`. A separately configured label could disagree with the model that actually produced the vectors, and that disagreement is silent: retrieval keeps returning k results, they are just meaningless. Pointing `RETRIEVER_MODEL` at a fine-tuned checkpoint therefore keeps the two vector spaces separable automatically.
+
+`hashing` is a dependency-free stand-in for tests and offline work. It has no semantic understanding, and its version string (`hashing-trigram-384`) says so — a catalog indexed with it cannot be searched with a real model by accident.
+
+**A model mismatched against the indexed vectors silently degrades retrieval** rather than erroring, because the query embedding lands in a different vector space than the corpus. `assert_catalog_ready` refuses startup when the configured model has no vectors indexed.
+
+### Schema sampling — implemented, and off by default
+
+| Variable | Type | Default | Notes |
+|---|---|---|---|
+| `SCHEMA_SAMPLE_VALUES` | bool | **`false`** | **Leave off** — see below |
+| `SCHEMA_SAMPLE_COUNT` | int | `3` | Distinct values kept per column |
+| `SCHEMA_SAMPLE_MAX_CHARS` | int | `40` | Truncation applied in SQL, not after fetching |
+| `SCHEMA_SAMPLE_SCAN_LIMIT` | int | `1000` | Rows examined per column; bounds indexing cost |
+| `SCHEMA_EXTRA_SENSITIVE_COLUMNS` | list[str] | `[]` | Added to the built-in denylist, never replacing it |
+
+**`SCHEMA_SAMPLE_VALUES` defaults to off and should stay off unless every column in the schema has been audited.** Sampling copies real rows into `schema_elements.serialized`, and that text is quoted into prompts sent to a third-party model — a path the read-only role does not protect, because the data is read legitimately and then transmitted. Unlike `profile_table`, catalog samples are *persisted* and re-sent on every retrieval hit, and they do not appear in the audit log. Full analysis in [SECURITY.md](SECURITY.md) §14.2.1. For sensitive data the supported configuration is local inference.
+
+### Retrieval tuning — planned (Stage 1 retrieval slice / Stage 6)
+
+| Variable | Type | Default | Notes |
+|---|---|---|---|
 | `RETRIEVAL_TOP_K` | int | `10` | |
 | `RETRIEVAL_TOP_K_CEILING` | int | `50` | |
 | `HNSW_EF_SEARCH` | int | `64` | Recall/latency knob; swept in Stage 6 |
 | `EMBEDDING_DEVICE` | enum | `auto` | `auto` / `cpu` / `cuda` |
-
-**A `RETRIEVER_MODEL_VERSION` mismatched against the indexed vectors silently degrades retrieval** rather than erroring — the query embedding lands in a different vector space than the corpus. Startup validation checks that vectors exist for the configured version.
 
 ## 6. API
 

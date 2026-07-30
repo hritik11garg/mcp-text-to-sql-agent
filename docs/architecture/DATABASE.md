@@ -83,7 +83,9 @@ Append-only. Every statement that reached `execute_sql`: SQL text, role, duratio
 
 - `element_type` CHECK to `('table','column')`.
 - `NOT NULL` on `dataset`, `element_type`, `table_name`, `serialized`, `model_version`.
-- `UNIQUE (dataset, table_name, column_name, model_version)` — prevents duplicate embeddings for one element under one model, which would skew retrieval scores.
+- `UNIQUE NULLS NOT DISTINCT (dataset, table_name, column_name, model_version)` — prevents duplicate embeddings for one element under one model, which would skew retrieval scores.
+
+  `NULLS NOT DISTINCT` (PostgreSQL 15+) is load-bearing, not decoration. A *table* element has no column, so `column_name` is `NULL`, and under the default `NULLS DISTINCT` two such rows never conflict — the constraint would permit unlimited duplicate table rows and `INSERT ... ON CONFLICT` would never fire for them. Migration 003 corrects this; migration 001 had the plain form.
 - `vector(384)` fixes the dimension; a model change with a different dimension is a migration, not a config toggle.
 
 ## 7. Read-only role

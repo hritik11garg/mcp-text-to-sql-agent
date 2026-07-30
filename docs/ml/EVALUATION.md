@@ -83,7 +83,7 @@ Three splits, with strictly different jobs:
 - **Emits both** a human-readable summary and machine-readable JSON for BENCHMARKS.md rows.
 
 ```powershell
-python -m evals.run --split held-out --retriever fine-tuned --model claude-opus-5 --out results/
+python -m evals.run --split held-out --retriever fine-tuned --model $env:LLM_MODEL --out results/
 ```
 
 ## 4. Baselines

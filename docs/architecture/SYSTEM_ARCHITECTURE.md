@@ -63,7 +63,7 @@ Sub-components:
 | **Self-correction** | Turns validation/execution errors into structured observations and re-attempts, up to a bounded retry count |
 | **Budget enforcement** | Caps tool calls, tokens, wall-clock time, and rows per request |
 
-Model: `claude-opus-5` via the Anthropic SDK, with adaptive thinking. Prompt versions live in [../ml/PROMPTS.md](../ml/PROMPTS.md).
+Model: whatever `LLM_PROVIDER` selects, behind the `LLMClient` port — the agent never imports a vendor SDK (ADR-014, which supersedes ADR-009). One OpenAI-compatible adapter covers Groq, Gemini, OpenRouter, Ollama and LM Studio via `base_url`. Prompt versions live in [../ml/PROMPTS.md](../ml/PROMPTS.md).
 
 ### 2.3 MCP servers
 

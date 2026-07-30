@@ -150,6 +150,58 @@ class ExecutionSettings(BaseSettings):
         return max(100, min(requested, self.statement_timeout_ceiling_ms))
 
 
+class EmbedderProvider(StrEnum):
+    SENTENCE_TRANSFORMER = "sentence_transformer"
+    HASHING = "hashing"
+
+
+class RetrievalSettings(BaseSettings):
+    """Schema catalog and retrieval configuration.
+
+    Security: ``schema_sample_values`` defaults to ``False`` because sampling
+    copies real rows into the catalog, and the catalog is quoted into prompts
+    sent to a third-party model. Turning it on is a deliberate, documented
+    decision about data leaving the building -- never a default.
+
+    See docs/operations/SECURITY.md section 14.2.
+    """
+
+    model_config = _ENV_FILE
+
+    dataset: str = "default"
+    """Namespace for catalog rows, so several schemas can share one database."""
+
+    embedder_provider: EmbedderProvider = EmbedderProvider.SENTENCE_TRANSFORMER
+    retriever_model: str = "sentence-transformers/all-MiniLM-L6-v2"
+    """The single source of truth for which model produces vectors.
+
+    384 dimensions, matching the catalog's vector column; small enough to run
+    on CPU in the demo path. A model of a different width is a migration, not
+    a config change. The value is also recorded as ``model_version`` on every
+    row, so pointing this at a fine-tuned checkpoint keeps the two vector
+    spaces separable.
+    """
+
+    retriever_local_files_only: bool = False
+    """Refuse to download the model. Useful in CI and air-gapped deployments,
+    where an implicit network fetch should fail loudly rather than succeed."""
+
+    schema_sample_values: bool = False
+    schema_sample_count: int = Field(default=3, ge=0, le=10)
+    schema_sample_max_chars: int = Field(default=40, ge=1, le=200)
+    schema_sample_scan_limit: int = Field(default=1_000, ge=1, le=100_000)
+    """Rows scanned per column when sampling. Bounds the cost of indexing a
+    large table; without it, indexing would seq-scan every table in the
+    schema once per column."""
+
+    schema_extra_sensitive_columns: tuple[str, ...] = ()
+    """Additional column-name substrings that must never be sampled.
+
+    Added to the built-in list rather than replacing it, so a deployment can
+    only ever tighten the rule by configuration.
+    """
+
+
 class AgentSettings(BaseSettings):
     """Bounds on the agent loop.
 
@@ -176,6 +228,7 @@ class Settings:
     llm: LLMSettings
     database: DatabaseSettings
     execution: ExecutionSettings
+    retrieval: RetrievalSettings
     agent: AgentSettings
 
     @classmethod
@@ -185,6 +238,7 @@ class Settings:
             llm=LLMSettings(),
             database=DatabaseSettings(),
             execution=ExecutionSettings(),
+            retrieval=RetrievalSettings(),
             agent=AgentSettings(),
         )
 
