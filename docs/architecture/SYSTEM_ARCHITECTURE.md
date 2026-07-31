@@ -78,7 +78,14 @@ Four processes, each a real capability boundary rather than a wrapper around a f
 
 ### 2.4 Retrieval subsystem
 
-Schema elements (tables and columns, serialized with names, types, comments, and a few representative values) are embedded and stored in pgvector. At query time the question is embedded and the top-k elements retrieved.
+Schema elements (tables and columns, serialized with names, types and comments) are embedded and stored in pgvector. At query time the question is embedded by the *same* embedder and the top-k elements retrieved, along with the foreign-key edges joining the tables that matched — retrieval that returns two tables without the path between them leaves the model to invent the join condition.
+
+Representative column values can also be included, but sampling is **off by default**: it copies real rows into the catalog, and the catalog is quoted into prompts sent to a third-party model. See [../operations/SECURITY.md](../operations/SECURITY.md) §14.2.
+
+Two properties are enforced rather than assumed:
+
+- **Vector spaces never mix.** Every query filters on `(dataset, model_version)`. That predicate is a *post*-filter as far as HNSW is concerned, which starves the scan unless iterative scan is enabled — [ADR-015](DECISIONS.md#adr-015--hnsw-iterative-scan-is-always-on-and-is-not-configurable) and [DATABASE.md](DATABASE.md) §5.1.
+- **The caller never widens a limit.** `k` and `table_filter` arrive from a language model and are clamped or refused at the retriever, not trusted from the tool schema.
 
 Two retriever variants ship, selected by config:
 - **Baseline** — off-the-shelf sentence-transformer.

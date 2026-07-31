@@ -75,6 +75,8 @@ Why validation and execution are separate capabilities, how blast radius is boun
 
 ## Features
 
+> These describe the finished system. The status block at the top of this file is the authority on what exists today.
+
 - **Runtime tool discovery** — the agent lists tools from each MCP server on connect; adding a capability does not require an agent code change.
 - **Side-effect-free validation tier** — sqlglot AST parse plus `EXPLAIN`, so invalid SQL is caught and retried without ever touching the executor.
 - **Error-feedback self-correction** — database errors are fed back as structured tool results, not swallowed.

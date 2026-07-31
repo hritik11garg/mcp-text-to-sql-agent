@@ -241,3 +241,27 @@ Status values: `accepted` · `superseded by ADR-NNN` · `revisit at Stage N`
 - Two new attack surfaces are introduced and are handled in [SECURITY.md](../operations/SECURITY.md) §14: **SSRF via a configurable `base_url`**, and **third-party data exposure** when schema and sampled row values are sent to a free-tier provider that may train on them.
 
 **Revisit:** never — provider independence is now a design property, not a workaround.
+
+---
+
+## ADR-015 — HNSW iterative scan is always on, and is not configurable
+
+**Status:** accepted · **Date:** 2026-07-31 · **Stage:** 1
+
+**Context.** Every retrieval query filters on `(dataset, model_version)` — mandatory, because vectors from different models are not comparable and mixing them degrades retrieval without erroring ([ADR-011](#adr-011--hnsw-over-ivfflat-for-the-vector-index), [DATABASE.md](DATABASE.md) §3).
+
+That predicate reads like a pre-filter. It is not. `EXPLAIN` shows it as a `Filter` applied to rows the HNSW scan has already returned, and with pgvector's default `hnsw.iterative_scan = off` the scan stops once its candidate list is exhausted. A filter that discards most candidates therefore leaves fewer than `k` rows — silently. Measured at 6 rows for `k=10` across two datasets, and **0 of 10** when the filter correlates with position in vector space, which is the normal case rather than the exotic one: a second dataset has its own vocabulary, and a re-index under a new `model_version` puts an entire second corpus in its own region by construction. Full measurements in [DATABASE.md](DATABASE.md) §5.1.
+
+**Decision.** `SchemaRetriever` sets `hnsw.iterative_scan = relaxed_order` on every search. It is **not** exposed as a configuration variable. Support is detected by querying `pg_settings`; on pgvector older than 0.8 the retriever logs a warning at construction rather than degrading silently.
+
+**Alternatives.**
+- *Leave pgvector's default* — rejected. It returns fewer results than requested with no error, and Recall@k is the ceiling on execution accuracy, so the damage lands on the project's primary metric while presenting as nothing.
+- *Expose `HNSW_ITERATIVE_SCAN` as a setting* — rejected, and this is the substantive part of the decision. It reads like a performance knob and is a correctness one. Someone tuning p95 would turn it off and be *correct about latency*; retrieval quality would drop, and the symptom would surface two components downstream as the model referencing columns it was never shown — where it would be diagnosed as a prompt problem.
+- *`strict_order`* — rejected. It buys an ordering guarantee that is already provided more cheaply: results are re-sorted by score in application code, so the ordering `strict_order` pays for is discarded.
+- *Parse `extversion` to detect support* — rejected. String comparison of version numbers is wrong at the edges, and setting an unknown GUC under a registered prefix warns rather than fails, so a naive attempt would hide the degradation in exactly the deployment that has it.
+
+**Tradeoff.** `relaxed_order` deliberately increases worst-case work per search — correctness bought with availability, bounded by pgvector's own `hnsw.max_scan_tuples`. `ef_search` remains configurable (`HNSW_EF_SEARCH`) because *its* wrong setting is visible as latency or as measurable recall.
+
+**Generalises to:** a knob whose wrong setting fails silently should not be a knob.
+
+**Revisit:** if the cost of `relaxed_order` at a realistic corpus size proves material under the Stage 6 performance work.
