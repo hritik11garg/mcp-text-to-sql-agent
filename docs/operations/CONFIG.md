@@ -149,7 +149,7 @@ Nearly all of the 120b's output is internal reasoning. Two consequences: budget 
 | `SCHEMA_SAMPLE_SCAN_LIMIT` | int | `1000` | Rows examined per column; bounds indexing cost |
 | `SCHEMA_EXTRA_SENSITIVE_COLUMNS` | list[str] | `[]` | Added to the built-in denylist, never replacing it |
 
-**`SCHEMA_SAMPLE_VALUES` defaults to off and should stay off unless every column in the schema has been audited.** Sampling copies real rows into `schema_elements.serialized`, and that text is quoted into prompts sent to a third-party model — a path the read-only role does not protect, because the data is read legitimately and then transmitted. Unlike `profile_table`, catalog samples are *persisted* and re-sent on every retrieval hit, and they do not appear in the audit log. Full analysis in [SECURITY.md](SECURITY.md) §14.2.1. For sensitive data the supported configuration is local inference.
+**`SCHEMA_SAMPLE_VALUES` defaults to off and should stay off unless every column in the schema has been audited.** Sampling copies real rows into `schema_elements.serialized` — a persistent copy of production data in a second table, which the read-only role does not protect because the data is read legitimately. Those values do **not** reach the model: the prompt is built from column name, type and comment, never from the serialized string ([SECURITY.md](SECURITY.md) §14.2.5, pinned by test). What sampling buys is retrieval quality; what it costs is a persisted copy that does not appear in the audit log. Full analysis in [SECURITY.md](SECURITY.md) §14.2.1. For sensitive data the supported configuration is local inference.
 
 ### Retrieval tuning — implemented
 

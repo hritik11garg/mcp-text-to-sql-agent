@@ -125,6 +125,15 @@ def render_context(context: RetrievalResult) -> str:
     for element in context.elements:
         by_table.setdefault(element.table, []).append(element)
 
+    # Structured fields only -- deliberately NOT element.serialized.
+    #
+    # `serialized` is the text that was embedded, and when SCHEMA_SAMPLE_VALUES
+    # is on it carries *real row values*. Rendering it here would send those to
+    # a third-party model on every retrieval hit. Building the block from
+    # name / type / comment instead means sampling can improve retrieval
+    # without ever putting row data in a prompt. Locked in by
+    # tests/security/test_no_row_data_in_prompt.py -- do not "simplify" this to
+    # use the pre-rendered string.
     lines: list[str] = []
     for table, elements in by_table.items():
         lines.append(f"TABLE {table}")

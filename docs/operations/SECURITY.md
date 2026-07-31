@@ -252,17 +252,19 @@ Introduced by [ADR-014](../architecture/DECISIONS.md#adr-014--provider-agnostic-
 
 #### 14.2.1 The same risk via the schema catalog — **and it is the worse of the two**
 
-`profile_table` is not the only path row values take out of the database. The schema catalog serializes each column as `"{table}.{column} ({type}) — {comment}. Examples: {v1}, {v2}, {v3}"`, and that string is embedded, **stored in `agent_meta.schema_elements`**, and quoted into the prompt on every request that retrieves the element.
+`profile_table` is not the only path row values take out of the database. The schema catalog serializes each column as `"{table}.{column} ({type}) — {comment}. Examples: {v1}, {v2}, {v3}"`, and that string is embedded and **stored in `agent_meta.schema_elements`**.
 
-It is worse than `profile_table` in three ways, all of them consequences of persistence rather than of volume:
+> **Corrected 2026-08-01.** This section previously said the serialized string is "quoted into the prompt on every request that retrieves the element". **It is not, and never was in the shipped code.** `render_context` builds the prompt from the structured fields — name, type, comment — and never reads `serialized`. Sampled values therefore influence *retrieval* (they are part of the embedded text) and never reach a model. That was accidental when first written; it is now deliberate, commented at the point of construction, and pinned by `tests/security/test_no_row_data_in_prompt.py`. See §14.2.5 for what the prompt does carry.
+
+What remains true is that sampling **persists** real values into a store, which is a smaller risk than transmission but not nothing:
 
 | | `profile_table` | Schema catalog |
 |---|---|---|
 | Lifetime | One request | Until re-indexed |
-| Transmissions | One | Every retrieval hit, indefinitely |
+| Leaves the network | Yes, once | **No** — retrieval renders structured fields only |
 | Visibility | Appears in the audit log | Written once at index time, then invisible |
 
-The third is the trap: an operator reviewing the audit log to answer *"what data has left the building?"* will not see catalog samples there at all.
+The last row is still the trap: an operator reviewing the audit log to answer *"what has been copied where?"* will not see catalog samples there at all.
 
 **Secure implementation.** Four controls, in the order they are relied on:
 
@@ -277,7 +279,7 @@ The third is the trap: an operator reviewing the audit log to answer *"what data
 
 ### 14.2.2 Retrieval is where the catalog's contents actually leave
 
-§14.2.1 covers what gets *written* into the catalog. Retrieval is what reads it back and hands it to prompt construction, so it is the point where a sampled value stops being a stored string and becomes an outbound token. Nothing new is exposed here — but the path only becomes live with retrieval, and the controls below belong with it.
+§14.2.1 covers what gets *written* into the catalog. Retrieval is what reads it back and hands it to prompt construction — but it hands over **structured fields**, not the serialized string, so a sampled value never becomes an outbound token (§14.2.5). The controls below are about the privileged connection retrieval holds, which is a separate concern and a real one.
 
 **Three properties of `SchemaRetriever` that are security decisions, not implementation details:**
 
@@ -333,6 +335,34 @@ On the AST all four are the same operation. **Smaller wins**: a caller asking fo
 **The audit runs as the owner, on a separate connection.** The read-only role has no privileges on `agent_meta`, so generated SQL cannot read, alter or erase the record of itself — asserted directly, with `SELECT`, `DELETE` and `INSERT` against `query_audit` all refused for the read-only role. Rejected attempts are recorded too: a query that never ran is exactly what an audit trail is for. **Result values are never stored**, only shapes and outcomes; writing rows here would copy the protected data into a second store and undo the point of bounding what the role can reach.
 
 **One trade, stated rather than buried.** An audit write failure is logged, not raised. A transient problem with `agent_meta` would otherwise fail every read the system serves. The compensating control is that the error log carries the same fields, so the record survives in a second place — and Stage 6 must alert on it, because an audit gap nobody is told about is the same as no audit. **CIA: Integrity** of the trail, traded for **Availability** of the service.
+
+### 14.2.5 What actually crosses the network boundary
+
+The prompt is the **only** place data leaves for a third party. The catalog, the audit trail and the logs all stay in a database the operator controls. So "what can leak?" is very nearly the question "what is in the prompt?", and the answer is enumerated and tested rather than assumed.
+
+**Sent to the model:**
+
+| Item | Why it must be | Risk |
+|---|---|---|
+| Table and column **names** | The model cannot write SQL against names it has not seen | Names can themselves be disclosive — `patient_hiv_status` discloses before any row does |
+| Column **types** | Needed for correct predicates and casts | Negligible |
+| Column **comments** | What lets the model write `country = 'FI'` rather than `'Finland'` | **Nothing sanitises them.** A comment containing personal data would be transmitted |
+| Foreign-key **edges** | Otherwise the model invents join conditions | Negligible |
+| The user's **question** | Unavoidable | Whatever the user typed. Truncated at 2,000 characters, not sanitised |
+
+**Never sent to the model:**
+
+- **Sampled row values.** Pinned by test, and commented at the point of construction.
+- **Query results.** No component sends result rows to a model today. **This changes in Stage 4**, where the synthesis step turns rows into a natural-language answer — that is the single largest upcoming change to this section, and it needs its own analysis before it is built.
+- **The API key**, connection strings, role names, or driver output.
+
+**Operator responsibilities this creates**, since none of them can be enforced in code:
+
+1. **Review schema comments before pointing the agent at a database.** They are transmitted verbatim.
+2. **Treat table and column names as disclosed.** Retrieval will surface any of them.
+3. **Check the provider's data-retention and training terms.** A free tier that trains on submitted data means schema names and comments become training data. For sensitive schemas the supported configuration is local inference (`LLM_BASE_URL=http://localhost:11434/v1`), which the SSRF guard permits for exactly this reason.
+
+**CIA impact.** Confidentiality. The residual is bounded by what a schema *describes* rather than what it contains — which is a genuinely smaller surface than row data, and is not zero.
 
 ### 14.3 Related: prompt injection reaches further with weaker models
 
