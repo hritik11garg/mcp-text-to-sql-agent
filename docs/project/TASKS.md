@@ -58,12 +58,12 @@ Convention: `[ ]` open · `[x]` done · `[~]` in progress · `[!]` blocked
 - [x] Unit tests for every rejection path
 
 ### Execution
-- [ ] Read-only connection pool
-- [ ] Re-validate independently of the caller
-- [ ] AST-level `LIMIT` injection, smaller-wins, clamped to ceiling
-- [ ] `SET LOCAL statement_timeout`
-- [ ] `truncated` flag returned
-- [ ] Audit-log write
+- [ ] Read-only connection pool — *the `ConnectionSource` seam exists and a single-connection adapter implements it; the real pool lands with the API, where a concurrent caller first exists*
+- [x] Re-validate independently of the caller
+- [x] AST-level `LIMIT` injection, smaller-wins, clamped to ceiling
+- [x] `SET LOCAL statement_timeout`
+- [x] `truncated` flag returned — distinguishes a server-imposed cut from a caller's own `LIMIT`
+- [x] Audit-log write — as the owner, on a separate connection, result values never stored
 
 ### API
 - [ ] `Settings` via pydantic-settings; startup validation

@@ -53,11 +53,15 @@ in a docstring. `ANALYZE` must never appear here: it executes the statement,
 and it would do so silently, because the results are discarded either way.
 """
 
-_ALLOWED_ROOTS = (exp.Select, exp.Union, exp.Intersect, exp.Except)
+ALLOWED_ROOTS = (exp.Select, exp.Union, exp.Intersect, exp.Except)
 """Statement types that can be read-only at the top level.
 
 Set operations are included because ``SELECT ... UNION SELECT ...`` parses with
 a ``Union`` root, not a ``Select`` one.
+
+Public because the executor narrows to the same tuple before injecting a row
+limit. Two lists of "shapes we accept" would drift, and the direction they
+would drift in is the executor accepting something validation rejects.
 """
 
 _FORBIDDEN_NODES = (
@@ -226,7 +230,7 @@ class SQLValidator:
         parses with a ``Select`` at the root and deletes every row. The tree
         walk below is what catches it.
         """
-        if not isinstance(statement, _ALLOWED_ROOTS):
+        if not isinstance(statement, ALLOWED_ROOTS):
             return _fail(
                 sql,
                 ValidationStage.READ_ONLY,

@@ -311,6 +311,29 @@ The security suite asserts both layers on the same payloads, so the pairing is c
 
 **Error translation.** Driver failures are mapped to the taxonomy in [../architecture/MCP.md](../architecture/MCP.md) §6 by SQLSTATE, and only `message_primary` is surfaced — a raw `str(exc)` carries statement position, hints and context lines. `permission_denied` is kept distinct from `table_not_found` on purpose: an agent that confuses "you may not read this" with "this does not exist" will retry with different spellings against a table it will never be allowed to see.
 
+### 14.2.4 The execution sandbox, and why the limit lives on the AST
+
+Execution is the only component that runs model-authored SQL. It is written assuming everything upstream of it has failed.
+
+**It re-validates, every time.** It does not trust that `validate_sql` was called. Another MCP host can call `execute_sql` directly, and a tool that is only safe when invoked in the right order is not safe — [../architecture/MCP.md](../architecture/MCP.md) §3.3 already required this, and the security suite asserts it by executing write payloads straight into the executor.
+
+**The row limit is injected into the parse tree, not appended as text.** This is the load-bearing detail. `sql + " LIMIT 500"` is defeated by anything that changes what the trailing text means:
+
+| Query the model writes | What appending produces |
+|---|---|
+| `SELECT ... -- trailing comment` | The limit is inside the comment. **Unlimited.** |
+| `SELECT ... ;` | Two statements, or a syntax error. |
+| `SELECT a FROM t UNION SELECT b FROM u` | Ambiguous — may bind to the last branch only. |
+| `SELECT ... LIMIT 10000` | Two `LIMIT` clauses. |
+
+On the AST all four are the same operation. **Smaller wins**: a caller asking for fewer rows gets what it asked for, a caller asking for more gets the ceiling, and the model's own `LIMIT` is an upper bound it can lower and never raise. **Severity High** if it were done by string append, OWASP API4 Unrestricted Resource Consumption, **CIA: Availability** (and Confidentiality — an unbounded result is an unbounded amount of data leaving for the model's context).
+
+**`truncated` distinguishes who did the cutting.** One row beyond the limit is fetched so that "there were exactly N" and "there were more than N" can be told apart without a second query, and the flag is only set when the *server's* cap was the binding one. Reporting a caller's own `LIMIT 10` as truncation would tell the agent it had lost data when it had not, and send it retrying a question that was already answered.
+
+**The audit runs as the owner, on a separate connection.** The read-only role has no privileges on `agent_meta`, so generated SQL cannot read, alter or erase the record of itself — asserted directly, with `SELECT`, `DELETE` and `INSERT` against `query_audit` all refused for the read-only role. Rejected attempts are recorded too: a query that never ran is exactly what an audit trail is for. **Result values are never stored**, only shapes and outcomes; writing rows here would copy the protected data into a second store and undo the point of bounding what the role can reach.
+
+**One trade, stated rather than buried.** An audit write failure is logged, not raised. A transient problem with `agent_meta` would otherwise fail every read the system serves. The compensating control is that the error log carries the same fields, so the record survives in a second place — and Stage 6 must alert on it, because an audit gap nobody is told about is the same as no audit. **CIA: Integrity** of the trail, traded for **Availability** of the service.
+
 ### 14.3 Related: prompt injection reaches further with weaker models
 
 A free-tier model is generally more susceptible to injected instructions than a frontier model. This does **not** change the containment argument in §7 — a fully successful injection still only yields SQL, which is still parsed, still `SELECT`-only, and still runs under a role that cannot write. It does mean injection attempts will *succeed more often at the model layer*, so §7's position (contain, don't filter) matters more, not less. It also raises the value of the `MAX_TOOL_CALLS_PER_REQUEST` cap, since a manipulated weak model is likelier to loop.
