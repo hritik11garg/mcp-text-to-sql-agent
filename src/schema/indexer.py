@@ -25,6 +25,7 @@ import re
 from dataclasses import asdict, dataclass
 from typing import Any
 
+from pgvector import Vector
 from pgvector.psycopg import register_vector
 from psycopg import Connection
 
@@ -141,7 +142,11 @@ class SchemaIndexer:
         with self._conn.transaction(), self._conn.cursor() as cur:
             written_ids: list[int] = []
             for row, vector in zip(rows, vectors, strict=True):
-                cur.execute(_UPSERT_SQL, (*row, vector, self._embedder.model_version))
+                # Vector(...), not the bare list: a list is adapted as
+                # double precision[], which an INSERT happens to coerce to the
+                # column type. Relying on that is how the read path ended up
+                # unable to use the same value in an operator expression.
+                cur.execute(_UPSERT_SQL, (*row, Vector(vector), self._embedder.model_version))
                 result = cur.fetchone()
                 if result is None:  # pragma: no cover - RETURNING always yields here
                     raise EmbeddingModelMismatchError("upsert returned no id")

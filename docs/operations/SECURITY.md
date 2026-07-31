@@ -275,6 +275,22 @@ The third is the trap: an operator reviewing the audit log to answer *"what data
 
 **CIA impact.** Confidentiality. Availability too, marginally: unbounded sampling would seq-scan every table in the schema once per column at index time.
 
+### 14.2.2 Retrieval is where the catalog's contents actually leave
+
+§14.2.1 covers what gets *written* into the catalog. Retrieval is what reads it back and hands it to prompt construction, so it is the point where a sampled value stops being a stored string and becomes an outbound token. Nothing new is exposed here — but the path only becomes live with retrieval, and the controls below belong with it.
+
+**Three properties of `SchemaRetriever` that are security decisions, not implementation details:**
+
+**1. It runs on the *owner* connection, by necessity.** `agent_meta` is unreadable to the read-only role — that is what stops generated SQL from reading or rewriting the catalog that steers it. The consequence is that the retrieval path holds a privileged connection, so the blast radius of a SQL-composition mistake in `src/schema/retrieval.py` is the whole database, not a `SELECT`. The file is therefore held to a stricter rule than the rest of the codebase: **every statement is a static module constant, and every caller-influenced value is a bound parameter.** There is no `psycopg.sql` composition in it at all, unlike `introspection.py`, which genuinely needs `Identifier`. A future change that introduces dynamic SQL here is a Critical finding regardless of how safe the inputs look.
+
+**2. `table_filter` is a containment lever, not only a relevance one.** It is bound as a `text[]` parameter (`table_name = ANY(%s)`), never composed into SQL — an injection point if it were, since in the finished system its value is chosen by a language model reading user-supplied text. There is a test that searches with a table name of `customers'; DROP TABLE agent_meta.schema_elements; --` and asserts the catalog survives. Restricting a search to named tables also bounds what the prompt can be shown, which is the cheapest way to keep a whole table's serialized text out of a request.
+
+**3. The query text is deliberately not logged.** The search log records the dataset, model version, `k`, result counts and duration — not the question and not the elements returned. Logging the question would copy potentially sensitive user text into a second store, the same argument migration 001 makes for `query_audit` never storing result values. "Add the query to the log, just while we debug retrieval" is the tempting change; it is a data-handling decision, not a logging one.
+
+**Resource bounds.** `k` is clamped to 50 and `table_filter` to 50 entries at request time, `ef_search` to 1000, and the iterative scan is bounded by pgvector's `hnsw.max_scan_tuples`. Without these, a caller — again, a language model — could ask for arbitrarily large results. **Severity Medium**, OWASP API4 Unrestricted Resource Consumption, **CIA: Availability**. Worth naming the trade taken here: `iterative_scan = relaxed_order` deliberately *increases* worst-case work per search, buying correctness (§5.1 of [../architecture/DATABASE.md](../architecture/DATABASE.md)) at a bounded availability cost.
+
+**Not yet done.** Unexpected `psycopg.Error` from a search propagates with driver text attached. There is no external boundary yet, so nothing leaks today — but the MCP tool layer in Stage 3 must sanitise it per [../architecture/MCP.md](../architecture/MCP.md) §6, which forbids raw driver output in tool errors. Similarly, `dataset` is currently operator configuration; if it ever becomes a per-request value it turns into a tenant-isolation control and needs authorization behind it.
+
 ### 14.3 Related: prompt injection reaches further with weaker models
 
 A free-tier model is generally more susceptible to injected instructions than a frontier model. This does **not** change the containment argument in §7 — a fully successful injection still only yields SQL, which is still parsed, still `SELECT`-only, and still runs under a role that cannot write. It does mean injection attempts will *succeed more often at the model layer*, so §7's position (contain, don't filter) matters more, not less. It also raises the value of the `MAX_TOOL_CALLS_PER_REQUEST` cap, since a manipulated weak model is likelier to loop.

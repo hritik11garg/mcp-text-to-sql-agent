@@ -1,13 +1,14 @@
 # Text-to-SQL Analytics Agent (MCP-native)
 
-> **Status: Stage 1 — core loop, in progress.** Database, read-only role, and the schema catalog are in and tested; retrieval, generation, validation, and the API are not yet. Nothing below claims a benchmark number until the eval harness exists. See [ROADMAP](docs/project/ROADMAP.md) for stage status and [TASKS](docs/project/TASKS.md) for the working checklist.
+> **Status: Stage 1 — core loop, in progress.** Database, read-only role, the schema catalog, and retrieval are in and tested; generation, validation, and the API are not yet. Nothing below claims a benchmark number until the eval harness exists. See [ROADMAP](docs/project/ROADMAP.md) for stage status and [TASKS](docs/project/TASKS.md) for the working checklist.
 >
 > | Landed | Next |
 > |---|---|
-> | Postgres 16 + pgvector, Alembic migrations | Retrieval over pgvector ANN |
-> | `SELECT`-only role, proven by 30 negative tests | SQL generation behind the `LLMClient` port |
-> | Schema catalog — introspection, serialization, embedding | sqlglot AST validation + `EXPLAIN` |
-> | Provider-agnostic `LLMClient` and `Embedder` ports | Sandboxed execution, then FastAPI + SSE |
+> | Postgres 16 + pgvector, Alembic migrations | SQL generation behind the `LLMClient` port |
+> | `SELECT`-only role, proven by 30 negative tests | sqlglot AST validation + `EXPLAIN` |
+> | Schema catalog — introspection, serialization, embedding | Sandboxed execution under row and time limits |
+> | Retrieval — pgvector ANN, join-path expansion, clamped limits | FastAPI + SSE |
+> | Provider-agnostic `LLMClient` and `Embedder` ports | MCP servers wrap all of the above in Stage 3 |
 
 An agent that answers analytical questions in plain English against a real PostgreSQL database. Capabilities are exposed as **four MCP servers** rather than hardcoded functions, so any MCP host — Claude Desktop, or your own client — can point at them and query its own database.
 
@@ -110,7 +111,7 @@ That creates the `agent_meta` schema, the pgvector extension and the HNSW index,
 Verify the install — the security suite is the one that matters, and it passes by being **refused**:
 
 ```powershell
-pytest                    # 126 tests; integration and security need Docker
+pytest                    # 181 tests; integration and security need Docker
 pytest -m security        # the read-only containment suite, on its own
 ruff check . ; mypy
 ```
@@ -151,7 +152,7 @@ Directories marked *(stub)* exist with a docstring stating which stage fills the
 │   ├── adapters/
 │   │   ├── llm/                # fake + factory; OpenAI-compatible adapter next
 │   │   └── embedding/          # sentence-transformer + hashing + factory
-│   ├── schema/                 # introspection, serialization, sensitivity, indexer
+│   ├── schema/                 # introspection, serialization, sensitivity, indexer, retrieval
 │   ├── validation/             # (stub) sqlglot AST validation
 │   ├── execution/              # (stub) sandboxed execution under limits
 │   ├── profiling/              # (stub) column statistics

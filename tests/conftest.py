@@ -68,6 +68,8 @@ def _isolate_env(monkeypatch: pytest.MonkeyPatch) -> None:
         "EMBEDDER_PROVIDER",
         "RETRIEVER_MODEL",
         "SCHEMA_SAMPLE_VALUES",
+        "RETRIEVAL_TOP_K",
+        "HNSW_EF_SEARCH",
     ):
         monkeypatch.delenv(var, raising=False)
 

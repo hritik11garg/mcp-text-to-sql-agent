@@ -34,13 +34,13 @@ Convention: `[ ]` open · `[x]` done · `[~]` in progress · `[!]` blocked
 - [x] Introspect tables, columns, types, comments, foreign keys
 - [x] Serialize elements (name + type + comment + sample values)
 - [ ] Embed with the baseline model; write with `model_version` — *indexer and `model_version` done; the sentence-transformer adapter is written but has not been run against a downloaded model yet*
-- [x] Startup check: vectors exist for the configured `RETRIEVER_MODEL_VERSION`
+- [x] Startup check: vectors exist for the configured retriever — `assert_catalog_ready`. (There is deliberately no `RETRIEVER_MODEL_VERSION` variable: the version comes from the embedder so it cannot drift. See CONFIG.md §5.)
 
 ### Retrieval
-- [ ] `SchemaRetriever` over pgvector ANN
-- [ ] Return foreign-key edges alongside matched elements
-- [ ] `table_filter` support
-- [ ] Latency check against the < 100 ms budget
+- [x] `SchemaRetriever` over pgvector ANN
+- [x] Return foreign-key edges alongside matched elements
+- [x] `table_filter` support
+- [ ] Latency check against the < 100 ms budget — *a guard against an accidental full scan is in place and green; the real p95 needs a realistic corpus and lands in Stage 6*
 
 ### Generation
 - [ ] OpenAI-compatible client adapter, injected not imported (ADR-014) — covers Groq, Gemini, OpenRouter, Ollama, LM Studio via `base_url`

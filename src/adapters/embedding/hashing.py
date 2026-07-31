@@ -93,10 +93,15 @@ def _trigrams(text: str) -> Iterator[str]:
 def _normalise(vector: list[float]) -> list[float]:
     """L2-normalise, per the port's contract.
 
-    An all-zero vector is returned unchanged rather than divided by zero. Only
-    empty input produces one, and cosine distance to a zero vector is
-    undefined in pgvector -- which is survivable here because serialization
-    always emits at least ``table.column (type)``.
+    An all-zero vector is returned unchanged rather than divided by zero.
+
+    Empty input does *not* produce one: the padded string ``"  "`` is still a
+    gram. The only route to a zero vector is exact cancellation -- two grams
+    landing on the same index with opposite signs -- which is unlikely but not
+    impossible at 384 dimensions. It matters because cosine distance to a zero
+    vector is undefined in pgvector, so every row would tie on NaN and the
+    ranking would be whatever order the scan produced. ``SchemaRetriever``
+    refuses such a query rather than ranking on it.
     """
     norm = math.sqrt(sum(value * value for value in vector))
     if norm == 0.0:

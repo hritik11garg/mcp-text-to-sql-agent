@@ -42,7 +42,8 @@ Ordered by expected payoff. **None applied before measurement** — that is how 
 | **Prompt caching** | LLM latency + spend | Prefix discipline; verify with `cache_read_tokens` |
 | **Lower `effort` on simple questions** | LLM latency | Accuracy tradeoff — needs a measured comparison |
 | **Fewer round trips** (better retrieval → fewer retries) | LLM latency | This is what the Stage 5 fine-tune buys, beyond accuracy |
-| **HNSW `ef_search` tuning** | Retrieval | Recall tradeoff; sweep against Recall@k |
+| **HNSW `ef_search` tuning** | Retrieval | Recall tradeoff; sweep against Recall@k. Configurable as `HNSW_EF_SEARCH` |
+| **HNSW `iterative_scan`** | Retrieval **correctness**, not just speed | Already on (`relaxed_order`). Turning it off is faster and silently returns fewer than `k` rows — see [../architecture/DATABASE.md](../architecture/DATABASE.md) §5.1 |
 | **Connection pool sizing** | Execution queueing | Database load |
 | **`MAX_ESTIMATED_COST`** | Tail latency | Rejects expensive queries pre-execution |
 | **Cross-encoder reranking** | Retrieval quality | *Adds* latency — [FUTURE.md](../project/FUTURE.md), not v1 |

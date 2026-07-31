@@ -201,6 +201,23 @@ class RetrievalSettings(BaseSettings):
     only ever tighten the rule by configuration.
     """
 
+    retrieval_top_k: int = Field(default=10, ge=1, le=50)
+    """Elements returned per search when a caller does not ask for a count.
+
+    The upper bound here mirrors the hard ceiling in ``schema.retrieval``,
+    which is the one that actually enforces it and which matches the published
+    ``schema_search`` tool schema. Duplicated rather than imported because the
+    core layer does not depend on the schema layer -- and a caller is clamped
+    at the retriever regardless, so this bound is the outer of two.
+    """
+
+    hnsw_ef_search: int = Field(default=40, ge=1, le=1_000)
+    """HNSW search breadth: higher is more accurate and slower.
+
+    The recall/latency knob swept in Stage 6. It is configuration rather than a
+    constant so that sweep does not require a code change.
+    """
+
 
 class AgentSettings(BaseSettings):
     """Bounds on the agent loop.

@@ -71,13 +71,36 @@ Append-only. Every statement that reached `execute_sql`: SQL text, role, duratio
 | Table | Index | Purpose |
 |---|---|---|
 | `schema_elements` | HNSW on `embedding` (`vector_cosine_ops`) | ANN retrieval |
-| `schema_elements` | btree on `(dataset, model_version)` | Filter before ANN; keeps vector spaces from mixing |
+| `schema_elements` | btree on `(dataset, model_version)` | Keeps vector spaces from mixing — but see below, it does not filter *before* the ANN scan |
 | `schema_elements` | btree on `(dataset, table_name)` | `table_filter` lookups, profiling |
 | `foreign_keys` | btree on `(dataset, from_table)` | Join-path expansion |
 | `session_turns` | btree on `(session_id, created_at)` | Session replay |
 | `query_audit` | btree on `created_at`, `request_id` | Incident lookup |
 
-**HNSW vs IVFFlat:** HNSW is planned — better recall at a given latency, no training step, and this corpus is small enough (thousands of elements, not millions) that build time and memory are not a concern. Revisit only if a target schema is unexpectedly enormous. Recorded in [DECISIONS.md](DECISIONS.md).
+**HNSW vs IVFFlat:** HNSW is used — better recall at a given latency, no training step, and this corpus is small enough (thousands of elements, not millions) that build time and memory are not a concern. Revisit only if a target schema is unexpectedly enormous. Recorded in [DECISIONS.md](DECISIONS.md).
+
+### 5.1 The `(dataset, model_version)` filter is a post-filter, and that starves the scan
+
+This page previously described the filter as running "before ANN". It does not, and the difference is not academic.
+
+`EXPLAIN` shows the predicate as a `Filter` applied to rows the HNSW index scan has **already returned**. With pgvector's default `hnsw.iterative_scan = off` the scan stops once its candidate list is exhausted, so a filter that discards most candidates leaves fewer than `k` rows — with no error, no warning, and a perfectly ordinary-looking result.
+
+Measured on PostgreSQL 16 / pgvector 0.8.5, two datasets of 5,000 elements each:
+
+| `k` | `ef_search` | `iterative_scan=off` | `iterative_scan=relaxed_order` |
+|---|---|---|---|
+| 10 | 40 | **6 rows** | 10 rows |
+| 50 | 50 | **8 rows** | 50 rows |
+| 50 | 200 | **32 rows** | 50 rows |
+
+It gets worse when the filter *correlates with position in vector space* — which is the normal case, not the exotic one, because a second dataset has its own vocabulary and a re-index under a new `model_version` puts a whole second corpus in its own region. On a corpus shaped that way the default returned **0 of 10 rows**.
+
+Two consequences worth internalising:
+
+- **Fewer candidates is lower Recall@k, and Recall@k is the ceiling on execution accuracy.** This failure attacks the project's primary metric while looking like nothing at all.
+- **Random test vectors will never find it.** They interleave datasets uniformly, so every candidate set is ~50% survivors and nothing starves. The regression test therefore builds a corpus where the two datasets use deliberately different vocabularies.
+
+`SchemaRetriever` sets `hnsw.iterative_scan = relaxed_order` per search (`relaxed_order` rather than `strict_order` because results are re-sorted by score in Python anyway, and it is the cheaper of the two). The scan stays bounded by pgvector's own `hnsw.max_scan_tuples`. On pgvector older than 0.8 the setting does not exist; the retriever detects that via `pg_settings` and logs a warning rather than silently degrading.
 
 ## 6. Constraints
 
@@ -144,6 +167,6 @@ Rules:
 Planned analysis:
 
 - **ANN recall/latency tradeoff** — HNSW `ef_search` sweep against Recall@k, so the retrieval latency budget in [../operations/PERFORMANCE.md](../operations/PERFORMANCE.md) is a measured choice.
-- **Pre-filter vs post-filter** — filtering by `(dataset, model_version)` before the ANN scan changes the plan substantially; measure rather than assume.
+- **~~Pre-filter vs post-filter~~** — measured, and the answer was not the one assumed. Written up in §5.1. What remains open is the *cost* of `iterative_scan = relaxed_order` at a realistic corpus size, and whether `strict_order` is ever worth its price.
 - **Connection pool sizing** — `execute_sql` is the contended resource; pool size is what actually bounds concurrent load on the database.
 - **The generated-SQL plans themselves** — the `estimated_cost` returned by `validate_sql` gives the agent a bail-out signal before execution. Calibrating the threshold is empirical work, not a guess.

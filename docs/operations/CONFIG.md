@@ -106,13 +106,21 @@ Verify current free-tier terms yourself before use — they change, and §14.2 o
 
 **`SCHEMA_SAMPLE_VALUES` defaults to off and should stay off unless every column in the schema has been audited.** Sampling copies real rows into `schema_elements.serialized`, and that text is quoted into prompts sent to a third-party model — a path the read-only role does not protect, because the data is read legitimately and then transmitted. Unlike `profile_table`, catalog samples are *persisted* and re-sent on every retrieval hit, and they do not appear in the audit log. Full analysis in [SECURITY.md](SECURITY.md) §14.2.1. For sensitive data the supported configuration is local inference.
 
-### Retrieval tuning — planned (Stage 1 retrieval slice / Stage 6)
+### Retrieval tuning — implemented
 
 | Variable | Type | Default | Notes |
 |---|---|---|---|
-| `RETRIEVAL_TOP_K` | int | `10` | |
-| `RETRIEVAL_TOP_K_CEILING` | int | `50` | |
-| `HNSW_EF_SEARCH` | int | `64` | Recall/latency knob; swept in Stage 6 |
+| `RETRIEVAL_TOP_K` | int | `10` | Elements per search when the caller does not ask for a count. Range 1–50 |
+| `HNSW_EF_SEARCH` | int | `40` | Recall/latency knob, range 1–1000; swept in Stage 6. Raised to `k` automatically when a caller asks for more than this |
+
+**There is no `RETRIEVAL_TOP_K_CEILING` setting.** The hard ceiling is `MAX_K = 50` in `schema.retrieval`, because it has to match the published `schema_search` tool schema in [../architecture/MCP.md](../architecture/MCP.md) §3.1 — a ceiling an operator can raise past the contract is not a ceiling. Every caller-supplied `k` is clamped there regardless of configuration, so `RETRIEVAL_TOP_K` is bounded twice: once at the configuration edge for operator typos, once at request time for hostile callers.
+
+**`hnsw.iterative_scan` is not configurable and is deliberately always on.** Turning it off makes searches faster and silently returns fewer results than asked for — a correctness setting wearing a performance setting's clothes. See [../architecture/DATABASE.md](../architecture/DATABASE.md) §5.1 for the measurements.
+
+### Retrieval tuning — planned (Stage 6)
+
+| Variable | Type | Default | Notes |
+|---|---|---|---|
 | `EMBEDDING_DEVICE` | enum | `auto` | `auto` / `cpu` / `cuda` |
 
 ## 6. API

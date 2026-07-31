@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import pytest
+from pydantic import ValidationError
 
 from core.exceptions import ConfigurationError
 from core.settings import (
@@ -10,6 +11,7 @@ from core.settings import (
     ExecutionSettings,
     LLMProvider,
     LLMSettings,
+    RetrievalSettings,
 )
 
 pytestmark = pytest.mark.unit
@@ -80,3 +82,25 @@ class TestExecutionSettings:
     )
     def test_timeout_is_clamped_not_trusted(self, requested: int | None, expected: int) -> None:
         assert ExecutionSettings().clamp_timeout_ms(requested) == expected
+
+
+class TestRetrievalSettings:
+    """The tuning knobs are bounded at the configuration edge as well as at the
+    retriever, because an operator typo and a hostile caller are different
+    threats and only one of them is clamped at request time."""
+
+    def test_defaults_match_the_documented_contract(self) -> None:
+        settings = RetrievalSettings()
+
+        assert settings.retrieval_top_k == 10
+        assert settings.hnsw_ef_search == 40
+
+    @pytest.mark.parametrize("top_k", [0, -1, 51, 10_000])
+    def test_top_k_outside_the_ceiling_is_refused(self, top_k: int) -> None:
+        with pytest.raises(ValidationError):
+            RetrievalSettings(retrieval_top_k=top_k)
+
+    @pytest.mark.parametrize("ef_search", [0, -1, 1_001])
+    def test_ef_search_outside_its_range_is_refused(self, ef_search: int) -> None:
+        with pytest.raises(ValidationError):
+            RetrievalSettings(hnsw_ef_search=ef_search)
