@@ -77,6 +77,25 @@ The agent depends on the `LLMClient` protocol, never on a vendor SDK ([ADR-014](
 
 Verify current free-tier terms yourself before use — they change, and §14.2 of [SECURITY.md](SECURITY.md) explains why the terms matter here specifically.
 
+### Worked example: Groq (or any OpenAI-compatible provider)
+
+One adapter covers every provider that exposes `/chat/completions`; they differ by `base_url` and nothing else (ADR-014).
+
+```dotenv
+LLM_PROVIDER=openai_compatible
+LLM_BASE_URL=https://api.groq.com/openai/v1
+LLM_MODEL=<a model id from the provider's console>
+LLM_API_KEY=<your key>
+```
+
+Other providers, same four lines: OpenRouter `https://openrouter.ai/api/v1`, Cerebras `https://api.cerebras.ai/v1`, Gemini `https://generativelanguage.googleapis.com/v1beta/openai`, local Ollama `http://localhost:11434/v1`, LM Studio `http://localhost:1234/v1`.
+
+**Model ids change.** Providers rename and retire them, so take the id from the provider's own model list rather than from any document — including this one. A wrong id fails on the first request with a provider error, not at startup.
+
+**Free tiers have daily token caps**, and hitting one on a benchmark run is normal rather than exceptional. Two consequences worth planning for: the eval harness must be resumable, and [BENCHMARKS.md](../ml/BENCHMARKS.md) records accuracy **per provider and model**, never as a single number — a run split across two models is two rows, not an average.
+
+**The key is read once, from the environment, at startup.** It is never logged, never included in an error message, and never populated from a request. `LLM_BASE_URL` is SSRF-checked before use — see [SECURITY.md](SECURITY.md) §14.1 — which is why a local `http://` endpoint is permitted but a private-range one is not.
+
 ## 5. Retrieval
 
 ### Catalog and embedder — implemented

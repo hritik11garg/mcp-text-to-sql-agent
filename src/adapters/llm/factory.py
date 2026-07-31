@@ -11,6 +11,7 @@ from core.ports.llm import LLMClient
 from core.settings import LLMProvider, LLMSettings
 
 from .fake import FakeLLMClient
+from .openai_compatible import OpenAICompatibleClient
 
 
 def build_llm_client(settings: LLMSettings) -> LLMClient:
@@ -25,10 +26,17 @@ def build_llm_client(settings: LLMSettings) -> LLMClient:
             return FakeLLMClient(model=settings.llm_model or "fake-model")
 
         case LLMProvider.OPENAI_COMPATIBLE:
-            # Stage 1: implemented alongside the first real generation call.
-            raise ConfigurationError(
-                "openai_compatible adapter is not implemented yet (Stage 1). "
-                "Set LLM_PROVIDER=fake to run without a provider."
+            return OpenAICompatibleClient(
+                model=settings.llm_model,
+                base_url=settings.llm_base_url,
+                api_key=(
+                    settings.llm_api_key.get_secret_value()
+                    if settings.llm_api_key is not None
+                    else None
+                ),
+                timeout_ms=settings.llm_timeout_ms,
+                max_tokens=settings.llm_max_tokens,
+                temperature=settings.llm_temperature,
             )
 
         case LLMProvider.ANTHROPIC:

@@ -43,9 +43,9 @@ Convention: `[ ]` open · `[x]` done · `[~]` in progress · `[!]` blocked
 - [ ] Latency check against the < 100 ms budget — *a guard against an accidental full scan is in place and green; the real p95 needs a realistic corpus and lands in Stage 6*
 
 ### Generation
-- [ ] OpenAI-compatible client adapter, injected not imported (ADR-014) — covers Groq, Gemini, OpenRouter, Ollama, LM Studio via `base_url`
-- [ ] `sql_gen` prompt v1 — dialect stated explicitly
-- [ ] Stable prompt prefix for caching; verify `cache_read_input_tokens` > 0
+- [x] OpenAI-compatible client adapter, injected not imported (ADR-014) — covers Groq, Gemini, OpenRouter, Ollama, LM Studio via `base_url`
+- [x] `sql_gen` prompt v1 — dialect stated explicitly
+- [~] Stable prompt prefix for caching — *the prefix is stable by construction and asserted in tests; `cache_read_tokens` is plumbed through `Usage` but has never been observed non-zero against a real provider*
 - [x] Fake LLM client for tests
 
 ### Validation

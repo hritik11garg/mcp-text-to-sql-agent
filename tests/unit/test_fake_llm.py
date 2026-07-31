@@ -46,12 +46,29 @@ def test_factory_builds_the_fake_provider() -> None:
     assert isinstance(client, LLMClient)
 
 
-def test_factory_reports_unimplemented_adapters_clearly() -> None:
+def test_factory_builds_the_openai_compatible_adapter() -> None:
+    """Groq, OpenRouter, Ollama and the rest differ by base_url alone, so one
+    adapter covers them and the factory is the only place that knows."""
     from adapters.llm.factory import build_llm_client
+    from adapters.llm.openai_compatible import OpenAICompatibleClient
 
     settings = LLMSettings(
         llm_provider=LLMProvider.OPENAI_COMPATIBLE,
         llm_base_url="https://api.groq.com/openai/v1",
+        llm_model="llama-3.3-70b-versatile",
+        llm_api_key="k",  # not a real credential
+    )
+    client = build_llm_client(settings)
+
+    assert isinstance(client, OpenAICompatibleClient)
+    assert client.model == "llama-3.3-70b-versatile"
+
+
+def test_factory_reports_unimplemented_adapters_clearly() -> None:
+    from adapters.llm.factory import build_llm_client
+
+    settings = LLMSettings(
+        llm_provider=LLMProvider.ANTHROPIC,
         llm_model="m",
         llm_api_key="k",  # not a real credential
     )
