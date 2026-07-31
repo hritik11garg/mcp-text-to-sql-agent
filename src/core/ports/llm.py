@@ -63,6 +63,17 @@ class LLMResponse:
     usage: Usage = field(default_factory=Usage)
     model: str = ""
 
+    truncated: bool = False
+    """The provider stopped at the token limit rather than at a natural end.
+
+    Worth a field of its own because on a *reasoning* model this is the
+    difference between a bug and a budget. Such models spend output tokens on
+    internal reasoning before emitting any content, so a limit set too low
+    returns an empty string having consumed the entire allowance -- with no
+    error anywhere. Measured on Groq: ``openai/gpt-oss-120b`` needs 45 output
+    tokens to answer "reply with OK", 43 of which are reasoning.
+    """
+
     @property
     def wants_tool_call(self) -> bool:
         return bool(self.tool_calls)

@@ -90,7 +90,33 @@ LLM_API_KEY=<your key>
 
 Other providers, same four lines: OpenRouter `https://openrouter.ai/api/v1`, Cerebras `https://api.cerebras.ai/v1`, Gemini `https://generativelanguage.googleapis.com/v1beta/openai`, local Ollama `http://localhost:11434/v1`, LM Studio `http://localhost:1234/v1`.
 
+Add a fallback chain so a spent daily cap does not end a run:
+
+```dotenv
+LLM_MODEL_FALLBACKS=qwen/qwen3.6-27b,llama-3.3-70b-versatile,llama-3.1-8b-instant
+```
+
+Comma-separated, in preference order, **same provider and same key** — this is a model chain, not a provider chain. Switching provider stays a `LLM_BASE_URL` change, deliberately: a second endpoint means a second credential and a second SSRF check, which is not configuration a running process should improvise.
+
+**Verify before you depend on it:**
+
+```powershell
+python -m generation.check
+python -m generation.check --model llama-3.1-8b-instant
+```
+
+One round trip; reports which model answered, latency, tokens, and cached tokens. It exists so a bad key, a retired model id, or a spent cap surfaces *here* rather than halfway through a benchmark run, where it looks like an agent bug.
+
 **Model ids change.** Providers rename and retire them, so take the id from the provider's own model list rather than from any document — including this one. A wrong id fails on the first request with a provider error, not at startup.
+
+**Reasoning models cost far more output tokens than they appear to.** Measured on Groq with the `sql_gen` prompt at k=10:
+
+| Model | Input | Output | Total per question |
+|---|---|---|---|
+| `openai/gpt-oss-120b` | 515 | 464 | **979** |
+| `llama-3.1-8b-instant` | 474 | 88 | **562** |
+
+Nearly all of the 120b's output is internal reasoning. Two consequences: budget roughly **2× per question** against a daily cap, and **never set `LLM_MAX_TOKENS` low** — a reasoning model whose budget is spent thinking returns an *empty string with no error*. The generator detects that case and names it, rather than reporting "empty response".
 
 **Free tiers have daily token caps**, and hitting one on a benchmark run is normal rather than exceptional. Two consequences worth planning for: the eval harness must be resumable, and [BENCHMARKS.md](../ml/BENCHMARKS.md) records accuracy **per provider and model**, never as a single number — a run split across two models is two rows, not an average.
 

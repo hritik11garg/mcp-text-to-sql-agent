@@ -38,6 +38,16 @@ class LLMUnavailableError(LLMError):
     """The provider could not be reached, or failed after retries."""
 
 
+class LLMQuotaExceededError(LLMUnavailableError):
+    """Rate limited, or out of quota, on this model.
+
+    Distinct from its parent because the recovery differs: the request is not
+    wrong and the provider is not down, so the same call against a *different*
+    model will usually succeed. Free tiers enforce per-model daily token caps,
+    so this is an ordinary operating condition rather than an incident.
+    """
+
+
 class LLMResponseError(LLMError):
     """The provider responded, but the response could not be used."""
 

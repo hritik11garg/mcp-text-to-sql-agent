@@ -116,6 +116,16 @@ class SQLGenerator:
         )
 
         if not sql:
+            if response.truncated:
+                # Almost always a reasoning model with too small a budget: the
+                # allowance was spent thinking and none was left to answer with.
+                # Saying so beats "empty response", which sends the reader
+                # looking for a bug in the prompt.
+                raise LLMResponseError(
+                    f"model {response.model!r} hit the token limit before producing any "
+                    f"SQL ({response.usage.output_tokens} output tokens, all of them "
+                    f"reasoning). Raise LLM_MAX_TOKENS."
+                )
             raise LLMResponseError("the model returned an empty response")
         if sql.upper().startswith(CANNOT_ANSWER):
             raise UnanswerableQuestionError(

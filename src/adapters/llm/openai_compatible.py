@@ -17,7 +17,7 @@ import logging
 from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any
 
-from core.exceptions import LLMResponseError, LLMUnavailableError
+from core.exceptions import LLMQuotaExceededError, LLMResponseError, LLMUnavailableError
 from core.ports.llm import LLMResponse, Message, ToolCall, ToolSpec, Usage
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
@@ -131,11 +131,30 @@ class OpenAICompatibleClient:
             # domain error; the class name is enough to diagnose without
             # forwarding a message that may quote the request -- and the
             # request carries the API key.
+            if _is_quota_error(exc):
+                raise LLMQuotaExceededError(
+                    f"model {self._model!r} is rate limited or out of quota"
+                ) from exc
             raise LLMUnavailableError(
                 f"the model provider could not be reached ({type(exc).__name__})"
             ) from exc
 
         return _from_wire(response, fallback_model=self._model)
+
+
+def _is_quota_error(exc: Exception) -> bool:
+    """Is this "try a different model" rather than "the provider is down"?
+
+    Checked by HTTP status rather than by exception class, because the class
+    name is SDK-specific and the status is part of the protocol every
+    compatible provider implements. 429 covers both per-minute rate limiting
+    and a spent daily token allowance -- free tiers do not distinguish them,
+    and neither response is improved by retrying the same model.
+    """
+    status = getattr(exc, "status_code", None)
+    if status == 429:
+        return True
+    return "ratelimit" in type(exc).__name__.casefold()
 
 
 def _to_wire(message: Message) -> dict[str, Any]:
@@ -177,6 +196,7 @@ def _from_wire(response: Any, *, fallback_model: str) -> LLMResponse:
         tool_calls=_read_tool_calls(message),
         usage=_read_usage(response),
         model=getattr(response, "model", None) or fallback_model,
+        truncated=getattr(choices[0], "finish_reason", None) == "length",
     )
 
 

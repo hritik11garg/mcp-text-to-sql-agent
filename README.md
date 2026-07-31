@@ -10,7 +10,7 @@
 > | Retrieval — pgvector ANN, join-path expansion, clamped limits | |
 > | Validation — sqlglot AST + `EXPLAIN`, refused at both layers | |
 > | Execution — row limits, timeouts, audit trail | |
-> | Generation — provider-agnostic, prompt-cache-friendly | |
+> | Generation — provider-agnostic, with a model fallback chain | |
 > | Provider-agnostic `LLMClient` and `Embedder` ports | |
 
 An agent that answers analytical questions in plain English against a real PostgreSQL database. Capabilities are exposed as **four MCP servers** rather than hardcoded functions, so any MCP host — Claude Desktop, or your own client — can point at them and query its own database.
@@ -116,7 +116,7 @@ That creates the `agent_meta` schema, the pgvector extension and the HNSW index,
 Verify the install — the security suite is the one that matters, and it passes by being **refused**:
 
 ```powershell
-pytest                    # 337 tests; integration and security need Docker
+pytest                    # 351 tests; integration and security need Docker
 pytest -m security        # the read-only containment suite, on its own
 ruff check . ; mypy
 ```

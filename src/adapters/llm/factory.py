@@ -11,6 +11,7 @@ from core.ports.llm import LLMClient
 from core.settings import LLMProvider, LLMSettings
 
 from .fake import FakeLLMClient
+from .fallback import FallbackLLMClient
 from .openai_compatible import OpenAICompatibleClient
 
 
@@ -26,17 +27,31 @@ def build_llm_client(settings: LLMSettings) -> LLMClient:
             return FakeLLMClient(model=settings.llm_model or "fake-model")
 
         case LLMProvider.OPENAI_COMPATIBLE:
-            return OpenAICompatibleClient(
-                model=settings.llm_model,
-                base_url=settings.llm_base_url,
-                api_key=(
-                    settings.llm_api_key.get_secret_value()
-                    if settings.llm_api_key is not None
-                    else None
-                ),
-                timeout_ms=settings.llm_timeout_ms,
-                max_tokens=settings.llm_max_tokens,
-                temperature=settings.llm_temperature,
+            api_key = (
+                settings.llm_api_key.get_secret_value()
+                if settings.llm_api_key is not None
+                else None
+            )
+
+            def build(model: str) -> OpenAICompatibleClient:
+                return OpenAICompatibleClient(
+                    model=model,
+                    base_url=settings.llm_base_url,
+                    api_key=api_key,
+                    timeout_ms=settings.llm_timeout_ms,
+                    max_tokens=settings.llm_max_tokens,
+                    temperature=settings.llm_temperature,
+                )
+
+            primary = build(settings.llm_model)
+            if not settings.llm_model_fallbacks:
+                return primary
+
+            # Wrapped only when there is something to fall back to, so the
+            # common path stays one object and a stack trace from a single-model
+            # deployment does not go through a chain that has no alternatives.
+            return FallbackLLMClient(
+                [primary, *(build(model) for model in settings.llm_model_fallbacks)]
             )
 
         case LLMProvider.ANTHROPIC:

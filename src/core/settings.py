@@ -14,14 +14,35 @@ import ipaddress
 import socket
 from dataclasses import dataclass
 from enum import StrEnum
+from typing import Annotated
 from urllib.parse import urlparse
 
-from pydantic import Field, SecretStr, model_validator
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic import BeforeValidator, Field, SecretStr, model_validator
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 from core.exceptions import ConfigurationError
 
 _ENV_FILE = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
+
+
+def _split_csv(value: object) -> object:
+    """Accept ``a,b,c`` where pydantic-settings would demand ``["a","b","c"]``."""
+    if isinstance(value, str):
+        return tuple(part.strip() for part in value.split(",") if part.strip())
+    return value
+
+
+CsvTuple = Annotated[tuple[str, ...], NoDecode, BeforeValidator(_split_csv)]
+"""A list-valued setting written the way a .env file is actually written.
+
+``NoDecode`` is the load-bearing part. Without it pydantic-settings tries to
+JSON-decode any complex-typed field *at the source*, before validators run, so
+``LLM_MODEL_FALLBACKS=a,b`` fails with a parse error rather than reaching any
+code that could interpret it. Requiring JSON inside a .env file is a trap:
+CONFIG.md documents these as plain lists, every example writes them
+comma-separated, and the error message names neither the format nor the field's
+purpose.
+"""
 
 
 class LLMProvider(StrEnum):
@@ -52,8 +73,21 @@ class LLMSettings(BaseSettings):
     llm_temperature: float = Field(default=0.0, ge=0.0, le=2.0)
     llm_timeout_ms: int = Field(default=60_000, ge=1_000, le=600_000)
 
-    llm_allowed_hosts: tuple[str, ...] = ()
+    llm_allowed_hosts: CsvTuple = ()
     """Optional host allowlist. Empty means "any host passing the IP checks"."""
+
+    llm_model_fallbacks: CsvTuple = ()
+    """Models to try, in order, when ``LLM_MODEL`` is out of quota.
+
+    Free tiers cap tokens **per model per day**, so exhausting one is routine
+    rather than exceptional. Listing alternatives here turns a spent cap from a
+    failed benchmark run into a logged switch.
+
+    Same provider and same key -- this is a model chain, not a provider chain.
+    Switching provider is still a ``LLM_BASE_URL`` change, deliberately: a
+    second endpoint means a second credential and a second SSRF check, which is
+    configuration a running process should not be improvising.
+    """
 
     @model_validator(mode="after")
     def _check_provider_requirements(self) -> LLMSettings:
@@ -194,7 +228,7 @@ class RetrievalSettings(BaseSettings):
     large table; without it, indexing would seq-scan every table in the
     schema once per column."""
 
-    schema_extra_sensitive_columns: tuple[str, ...] = ()
+    schema_extra_sensitive_columns: CsvTuple = ()
     """Additional column-name substrings that must never be sampled.
 
     Added to the built-in list rather than replacing it, so a deployment can
