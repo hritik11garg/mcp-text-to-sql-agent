@@ -1,14 +1,15 @@
 # Text-to-SQL Analytics Agent (MCP-native)
 
-> **Status: Stage 1 — core loop, in progress.** Database, read-only role, the schema catalog, and retrieval are in and tested; generation, validation, and the API are not yet. Nothing below claims a benchmark number until the eval harness exists. See [ROADMAP](docs/project/ROADMAP.md) for stage status and [TASKS](docs/project/TASKS.md) for the working checklist.
+> **Status: Stage 1 — core loop, in progress.** Database, read-only role, the schema catalog, retrieval, and SQL validation are in and tested; generation, execution, and the API are not yet. Nothing below claims a benchmark number until the eval harness exists. See [ROADMAP](docs/project/ROADMAP.md) for stage status and [TASKS](docs/project/TASKS.md) for the working checklist.
 >
 > | Landed | Next |
 > |---|---|
-> | Postgres 16 + pgvector, Alembic migrations | SQL generation behind the `LLMClient` port |
-> | `SELECT`-only role, proven by 30 negative tests | sqlglot AST validation + `EXPLAIN` |
-> | Schema catalog — introspection, serialization, embedding | Sandboxed execution under row and time limits |
-> | Retrieval — pgvector ANN, join-path expansion, clamped limits | FastAPI + SSE |
-> | Provider-agnostic `LLMClient` and `Embedder` ports | MCP servers wrap all of the above in Stage 3 |
+> | Postgres 16 + pgvector, Alembic migrations | FastAPI + SSE |
+> | `SELECT`-only role, proven by 30 negative tests | MCP servers wrap all of the above in Stage 3 |
+> | Schema catalog — introspection, serialization, embedding | SQL generation behind the `LLMClient` port |
+> | Retrieval — pgvector ANN, join-path expansion, clamped limits | Sandboxed execution under row and time limits |
+> | Validation — sqlglot AST + `EXPLAIN`, 76 security tests | |
+> | Provider-agnostic `LLMClient` and `Embedder` ports | |
 
 An agent that answers analytical questions in plain English against a real PostgreSQL database. Capabilities are exposed as **four MCP servers** rather than hardcoded functions, so any MCP host — Claude Desktop, or your own client — can point at them and query its own database.
 
@@ -113,7 +114,7 @@ That creates the `agent_meta` schema, the pgvector extension and the HNSW index,
 Verify the install — the security suite is the one that matters, and it passes by being **refused**:
 
 ```powershell
-pytest                    # 181 tests; integration and security need Docker
+pytest                    # 247 tests; integration and security need Docker
 pytest -m security        # the read-only containment suite, on its own
 ruff check . ; mypy
 ```
@@ -155,7 +156,7 @@ Directories marked *(stub)* exist with a docstring stating which stage fills the
 │   │   ├── llm/                # fake + factory; OpenAI-compatible adapter next
 │   │   └── embedding/          # sentence-transformer + hashing + factory
 │   ├── schema/                 # introspection, serialization, sensitivity, indexer, retrieval
-│   ├── validation/             # (stub) sqlglot AST validation
+│   ├── validation/             # sqlglot AST stages + EXPLAIN, no I/O below stage 5
 │   ├── execution/              # (stub) sandboxed execution under limits
 │   ├── profiling/              # (stub) column statistics
 │   ├── mcp_servers/            # (stub) four servers — Stage 3

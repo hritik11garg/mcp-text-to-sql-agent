@@ -291,6 +291,26 @@ The third is the trap: an operator reviewing the audit log to answer *"what data
 
 **Not yet done.** Unexpected `psycopg.Error` from a search propagates with driver text attached. There is no external boundary yet, so nothing leaks today — but the MCP tool layer in Stage 3 must sanitise it per [../architecture/MCP.md](../architecture/MCP.md) §6, which forbids raw driver output in tool errors. Similarly, `dataset` is currently operator configuration; if it ever becomes a per-request value it turns into a tenant-isolation control and needs authorization behind it.
 
+### 14.2.3 The validation tier is defence in depth, not the boundary
+
+Worth stating plainly because the opposite is the natural assumption: `validate_sql` rejecting `DELETE` is **not** what stops a delete. The read-only role is (§5). A parser has to model every construct the database understands, and the construct it models wrongly is the one that gets through — the role does not have that failure mode.
+
+The security suite asserts both layers on the same payloads, so the pairing is checked rather than believed:
+
+| Payload | Why it is interesting |
+|---|---|
+| `WITH gone AS (DELETE FROM orders RETURNING id) SELECT * FROM gone` | Parses with a **`Select` root**. A root-node-only read-only check passes it, and it deletes every row. Only a full tree walk catches it. |
+| `SELECT * INTO stolen FROM customers` | Creates a table. `Select` root, no DDL node anywhere in the tree — invisible to both other checks. |
+| `SELECT 1; DROP TABLE orders` | Stacked statements. |
+| `SELECT ... FOR UPDATE` | Takes row locks. |
+| `VACUUM FULL orders` | sqlglot parses anything it does not model into an opaque `Command` node. Accepting one means trusting the parser exactly where it says it does not understand the input. |
+
+**One asymmetry, measured rather than assumed.** PostgreSQL does *not* refuse `VACUUM`, `VACUUM FULL` or `ANALYZE` from a non-owner — it emits a warning and skips the table. No data changes and nothing is disclosed, so it is not a hole, but it is the single case where the parser does work the role does not. "The role refuses everything dangerous" is very nearly true, and this is the exception.
+
+**`EXPLAIN`, never `EXPLAIN ANALYZE`.** `ANALYZE` executes the statement. Adding it would silently convert the tier the agent is told it may retry freely into the expensive one it must not — silently, because the results are discarded either way. The executed statement is a single named constant (`EXPLAIN_PREFIX`) so the security suite can assert on it directly rather than trusting a docstring.
+
+**Error translation.** Driver failures are mapped to the taxonomy in [../architecture/MCP.md](../architecture/MCP.md) §6 by SQLSTATE, and only `message_primary` is surfaced — a raw `str(exc)` carries statement position, hints and context lines. `permission_denied` is kept distinct from `table_not_found` on purpose: an agent that confuses "you may not read this" with "this does not exist" will retry with different spellings against a table it will never be allowed to see.
+
 ### 14.3 Related: prompt injection reaches further with weaker models
 
 A free-tier model is generally more susceptible to injected instructions than a frontier model. This does **not** change the containment argument in §7 — a fully successful injection still only yields SQL, which is still parsed, still `SELECT`-only, and still runs under a role that cannot write. It does mean injection attempts will *succeed more often at the model layer*, so §7's position (contain, don't filter) matters more, not less. It also raises the value of the `MAX_TOOL_CALLS_PER_REQUEST` cap, since a manipulated weak model is likelier to loop.

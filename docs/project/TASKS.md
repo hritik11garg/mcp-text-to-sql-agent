@@ -49,13 +49,13 @@ Convention: `[ ]` open · `[x]` done · `[~]` in progress · `[!]` blocked
 - [x] Fake LLM client for tests
 
 ### Validation
-- [ ] sqlglot parse → AST
-- [ ] Single-statement check
-- [ ] Read-only node check (`SELECT` / read-only `WITH`)
-- [ ] Identifier resolution against the catalog
-- [ ] `EXPLAIN` + estimated cost
-- [ ] Structured error types with nearest-match suggestions
-- [ ] Unit tests for every rejection path
+- [x] sqlglot parse → AST
+- [x] Single-statement check
+- [x] Read-only node check — full tree walk, not just the root, so data-modifying CTEs and `SELECT ... INTO` are caught
+- [x] Identifier resolution against the catalog
+- [x] `EXPLAIN` + estimated cost, with a cost ceiling
+- [x] Structured error types with nearest-match suggestions
+- [x] Unit tests for every rejection path
 
 ### Execution
 - [ ] Read-only connection pool
