@@ -33,7 +33,7 @@ Comparison rules — each is a judgement call that changes the number, so each i
 
 **Why execution accuracy, not exact match.** Exact match penalizes correct SQL written differently — a join reordered, a subquery written as a CTE. That measures stylistic conformity, not correctness. Exact match is recorded as a secondary signal only.
 
-**Known weakness, stated up front.** Execution accuracy is vulnerable to coincidental matches: a wrong query can return the right rows on one dataset. It is the best available metric, not a perfect one.
+**Known weakness, stated up front.** Execution accuracy is vulnerable to coincidental matches: a wrong query can return the right rows on one dataset. This is exactly what Spider's official **Test Suite Accuracy** exists to catch — it re-runs against several randomly generated databases — so numbers here are systematically the more generous of the two. It is the best metric available without generating those databases, not a perfect one. See §2.
 
 ### 1.2 Recall@k (retrieval)
 
@@ -77,6 +77,8 @@ Three splits, with strictly different jobs:
 | **Smoke** (~20 questions) | Fast regression check | Every commit |
 
 **The held-out split is not an iteration surface.** Tuning against it converts it into a dev split and the reported number becomes optimistic. If it gets used for iteration, that is recorded and a fresh held-out split is carved.
+
+**Execution accuracy here is not Spider's official metric.** Spider has used **Test Suite Accuracy** since November 2020 — the query is run against several randomly generated databases so that a query returning the right rows by coincidence on one instance is caught. This harness executes against a single database, which is the *more generous* of the two: it counts false positives a test suite would reject. Every BENCHMARKS.md row must name which metric it is, and a number from here belongs in a published *range*, not next to a leaderboard entry. See [DATASETS.md](DATASETS.md) §1.
 
 **Splits are files, and the assignment is a property of the database name.** `python -m benchmark.load splits` writes one JSONL per split plus a committed assignment map. Membership is `blake2b(seed:db_id)` into a fixed band rather than a seeded shuffle, so adding databases never moves the ones already assigned — a shuffle would silently move held-out databases into train, and the split file would look exactly as deterministic as before ([ADR-021](../architecture/DECISIONS.md#adr-021--splits-are-a-hash-of-the-database-name-not-a-seeded-shuffle)).
 

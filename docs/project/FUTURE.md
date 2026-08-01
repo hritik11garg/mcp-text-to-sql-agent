@@ -118,6 +118,11 @@ Cut reasons: `scope` (good, doesn't fit 6 weeks) · `unproven` (needs a measurem
 
 **Why not v1.** Needs validation against human grading before it can be trusted, and v1's multi-step eval set is small enough to grade by hand. An unvalidated automatic grader produces numbers that look rigorous and are not.
 
+### Test Suite Accuracy
+`scope` · Score against several randomly generated databases per question rather than one, which is Spider's official metric.
+
+**Why not v1.** It catches coincidental matches — a wrong query that happens to return the right rows on the one instance that exists — so the number it produces is strictly lower and strictly better. Not v1 because it needs a database generator that perturbs contents while preserving the schema and constraints, which is a project of its own, and because the single-database number is the one that stays comparable to the majority of published work. The consequence is recorded rather than hidden: [EVALUATION.md](../ml/EVALUATION.md) §2 states that numbers here are the more generous of the two, and every BENCHMARKS row names its metric.
+
 ### Continuous evaluation
 `scope` · Run the eval on every merge, track drift over time.
 

@@ -66,6 +66,8 @@ KNOWN_ARTIFACTS: dict[str, Artifact] = {
         homepage="https://yale-lily.github.io/spider",
         url=None,
         note=(
+            "Spider 1.0 -- NOT Spider 2.0, which is a different task on paid "
+            "BigQuery/Snowflake warehouses and ships no SQLite databases. "
             "Distributed via Google Drive, which serves an interstitial rather "
             "than the file for automated clients. Download it in a browser and "
             "pass --archive."

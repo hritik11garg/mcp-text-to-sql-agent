@@ -18,6 +18,7 @@ Each row records:
 | Commit | The only way to reproduce it |
 | Split | `dev` / `held-out` / `smoke` — **never mix them in one table** |
 | Dataset | Spider / BIRD / both, with subset size |
+| Metric | `execution accuracy (single DB)` unless stated. **Not** Spider's official Test Suite Accuracy, which is stricter — see [EVALUATION.md](EVALUATION.md) §2 |
 | Archive digest | The `sha256` from `data/artifacts.lock.json`. Both benchmarks have been re-released with corrections, so two rows computed from different archives are not comparable and nothing else in this table would say so |
 | Conversion verified | That `benchmark.load verify` exited 0 for every database in the split. A number from an unverified conversion measures the conversion, not the system |
 | Retriever | `model_version` from `schema_elements` |

@@ -4,18 +4,25 @@
 
 ---
 
-## 1. Spider
+## 1. Spider 1.0
 
 **What it is.** A large cross-domain text-to-SQL benchmark: roughly 10k questions across ~200 databases spanning 138 domains. Test databases are disjoint from training databases, so it measures generalization to unseen schemas rather than memorization.
 
-**Why it is here.** It is the standard reference point — a number on Spider is comparable to published work. Schemas are small and clean, which makes it the right benchmark for getting the core loop correct.
+**Why it is here.** It is the standard reference point, and schemas are small and clean, which makes it the right benchmark for getting the core loop correct.
+
+> **Spider 1.0, not Spider 2.0 — and this needs saying now that both exist.** Spider 2.0 is a different task, not a newer version of this one: it targets real enterprise warehouses on **BigQuery and Snowflake**, which are paid cloud services, and it is agentic multi-step work over project codebases rather than single-query text-to-SQL. It fails this project's constraint that everything required to run, evaluate and demo it is free and open source ([PROJECT.md](../../PROJECT.md)), and it does not ship the SQLite databases this loader converts. Spider 2.0 is the more interesting target for the Stage 4 agent layer, and it is not a substitute here.
+>
+> Spider 1.0's leaderboard closed to new submissions in February 2024 and its test set is public. That costs nothing this project needs — the goal is a number in a published range, not a leaderboard row.
+
+**Comparability, stated precisely.** Since November 2020 Spider's *official* metric has been **Test Suite Accuracy**: the query is executed against several randomly generated databases, so a query that coincidentally returns the right rows on one instance is caught. This harness computes **execution accuracy against a single database** ([EVALUATION.md](EVALUATION.md) §1.1). The two are not the same number, and this one is the **more generous** of the pair — it counts false positives that a test suite would reject. Numbers produced here are in a comparable *range* to published work and are not directly comparable to a leaderboard entry, and BENCHMARKS.md rows must say which metric they are.
 
 **Weakness, stated up front.** Spider schemas are *too* clean: few columns, clear names, meaningful comments. Schema linking is not very hard on them, so Spider alone would flatter the retriever and understate what the fine-tune contributes.
 
 | Field | Value |
 |---|---|
-| Source | Yale LILY group |
+| Source | Yale LILY group — the Spider **1.0** dataset link on <https://yale-lily.github.io/spider> |
 | Format | SQLite databases + question/SQL pairs |
+| Layout | `database/<db_id>/<db_id>.sqlite`, plus `train_spider.json` / `dev.json` / `tables.json` |
 | License | CC BY-SA 4.0 |
 | Subset used | **TBD** — recorded once acquired |
 | SHA256 of archive | Recorded in `data/artifacts.lock.json` on first acquisition |
@@ -28,8 +35,9 @@
 
 | Field | Value |
 |---|---|
-| Source | BIRD-bench |
+| Source | BIRD-bench — <https://bird-bench.github.io/> |
 | Format | SQLite databases + question/SQL pairs + evidence annotations |
+| Layout | `dev_databases/<db_id>/<db_id>.sqlite` — note the folder is not called `database`, so pass it to `--databases` explicitly. Each folder also holds `database_description/*.csv`, which is why databases are matched on the **directory** name rather than by globbing `*.sqlite` |
 | License | CC BY-SA 4.0 |
 | Subset used | **TBD** — recorded once acquired |
 | SHA256 of archive | Recorded in `data/artifacts.lock.json` on first acquisition |
