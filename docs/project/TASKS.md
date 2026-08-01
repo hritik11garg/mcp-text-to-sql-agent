@@ -109,21 +109,22 @@ Convention: `[ ]` open · `[x]` done · `[~]` in progress · `[!]` blocked
 
 ## Stage 3 — MCP servers + client refactor
 
-- [ ] `schema_search` server
-- [ ] `validate_sql` server
-- [ ] `execute_sql` server
-- [ ] `profile_table` server (with mandatory truncation) — *the profiler and its bounds are built; this is the MCP wrapper over them*
-- [ ] Tool descriptions that state **when** to call, not just what
-- [ ] Schema-enforced limits (`maximum`, `enum`, `required`) — enforced server-side, not just declared
-- [ ] Structured `isError: true` responses, never protocol exceptions
-- [ ] stdio + Streamable HTTP transports
-- [ ] **All logging to stderr** — stdout is the JSON-RPC channel
-- [ ] Agent refactored to MCP client with `tools/list` discovery
-- [ ] Contract tests + schema snapshot diffing
-- [ ] Degradation behaviour per MCP.md §7
-- [ ] Claude Desktop config, verified working
-- [ ] **Re-run eval — accuracy unchanged**
-- [ ] MCP.md filled in; CHANGELOG v0.3
+- [x] `schema_search` server
+- [x] `validate_sql` server
+- [x] `execute_sql` server
+- [x] `profile_table` server (with mandatory truncation)
+- [x] Tool descriptions that state **when** to call, not just what
+- [x] Schema-enforced limits (`maximum`, `enum`, `required`) — enforced server-side, not just declared, and the published ceilings are *imported from* the components that clamp so the two cannot drift
+- [x] Structured `isError: true` responses, never protocol exceptions — including argument validation, which MCP.md had wrongly filed under protocol errors
+- [~] stdio + Streamable HTTP transports — *stdio ships; Streamable HTTP lands with the API layer, where a network-reachable endpoint first needs authentication*
+- [x] **All logging to stderr** — and stdout is claimed for the protocol at startup, so a stray `print` is noise rather than a corrupted stream
+- [x] MCP client with `tools/list` discovery (`ToolRegistry`) — *the agent loop that drives it is Stage 4*
+- [x] Contract tests + schema snapshot diffing
+- [x] Degradation behaviour per MCP.md §7 — a server that fails to start is recorded and skipped
+- [x] Claude Desktop config — MCP.md §9, with the four failure modes that produce confusing errors
+- [ ] **Re-run eval — accuracy unchanged** — *blocked on the Stage 2 harness; this is the one Stage 3 gate that cannot be closed out of order*
+- [x] MCP.md filled in
+- [ ] CHANGELOG v0.3
 
 ## Stage 4 — Agent layer
 

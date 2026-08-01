@@ -1,6 +1,6 @@
 # MCP Design
 
-> **Status: contracts are design intent — Stage 3 confirms them.** Tool schemas, error taxonomy, and versioning policy below are decided; exact JSON payloads are validated against the implementation when the MCP refactor lands.
+> **Status: implemented.** All four servers ship, and the schemas below are the ones they publish — asserted against a committed snapshot in `tests/contract/tool_schemas.json`, so this page and the code cannot drift. The client half (`tools/list` discovery) ships too. Still open: Streamable HTTP transport, and re-running the eval to confirm accuracy is unchanged, which waits on the Stage 2 harness.
 
 This is the document that decides whether this project reads as "MCP-native" or as "three functions in a protocol wrapper." The substance is in the contracts, not the transport.
 
@@ -21,7 +21,9 @@ The `validate_sql` / `execute_sql` split is the central design decision. Validat
 
 ## 2. Transport and lifecycle
 
-- **Transport:** stdio for local/host-driven use (Claude Desktop launches the server as a subprocess), Streamable HTTP for the deployed configuration.
+- **Transport:** stdio for local/host-driven use (the host launches the server as a subprocess) — **implemented**. Streamable HTTP for the deployed configuration — not yet; it lands with the API layer, which is where a network-reachable endpoint first needs authentication anyway.
+
+> ⚠️ **Over stdio, stdout *is* the protocol.** One stray `print` — in this code, in a dependency, or in a debugging session somebody forgot to undo — writes a line the host cannot parse, and the session dies reporting a JSON decode error that names nothing about the cause. Each server therefore hands the real stdout to the transport and repoints `sys.stdout` at stderr at startup, so a stray write is noise instead of a protocol violation. Logging is forced onto stderr for the same reason, with `force=True` so an earlier `basicConfig` by a library cannot leave the root logger pointed at stdout.
 - **Protocol:** JSON-RPC 2.0 per the MCP specification.
 - **Lifecycle:** `initialize` → capability negotiation → `tools/list` → `tools/call`.
 
@@ -180,6 +182,12 @@ The agent builds its available-tool set from these responses at connect time. Co
 - Tool descriptions are the model's only selection signal, so they are versioned and treated as prompts — see [../ml/PROMPTS.md](../ml/PROMPTS.md).
 - If `tools/list` returns a tool the agent has no policy for, it is still callable. The agent does not filter to a hardcoded allowlist; that would defeat the point.
 
+Implemented as `ToolRegistry` in `src/agent/discovery.py`. Two properties of it are worth stating because they are where "discovery" stops being decorative:
+
+**A server that fails to start costs a capability, not a session.** `connect()` records the failure and continues, which is what makes §7 below a behaviour rather than a table.
+
+**It must be opened and closed in the same task.** The stdio transport is built on anyio task groups, whose cancel scopes must be exited by the task that entered them. This is a real constraint of the transport rather than an implementation choice, and it is called out because the failure surfaces at teardown — after every call has already succeeded — and names nothing about the cause.
+
 ## 5. Request / response format
 
 Standard MCP `tools/call`:
@@ -209,8 +217,14 @@ Two distinct failure classes, deliberately not conflated:
 
 | Class | Mechanism | Example | Agent response |
 |---|---|---|---|
-| **Protocol error** | JSON-RPC error response | Unknown tool, malformed params | Bug — surface it, don't retry |
-| **Tool error** | `isError: true` + content | Invalid SQL, timeout, unknown table | Expected — read it and correct |
+| **Protocol error** | JSON-RPC error response | A tool name no server advertises | Bug — surface it, don't retry |
+| **Tool error** | `isError: true` + content | Invalid SQL, timeout, unknown table, **a schema violation** | Expected — read it and correct |
+
+> **Corrected when this was built.** This table previously placed "malformed params" with protocol errors. It belongs with tool errors, and the reasoning matters: the arguments are written by a *model*, so a value out of range is an ordinary, correctable mistake rather than a caller bug. Returning it as a protocol error would kill the call and give the agent nothing to read — at exactly the point where models most often get things wrong. Argument validation therefore produces `error_type: "invalid_arguments"` in the same envelope as every other failure, naming the offending field. The one case that still raises is a tool name no server advertises, because no argument change fixes it.
+
+**`isError` is derived, not set alongside the payload.** The flag and the payload's `ok` field carry the same fact, so one is computed from the other — two fields stating one thing independently is a bug waiting to happen. `ok` exists inside the payload because structured content is optional in MCP: against a host that does not support it the model sees only the JSON text block, and a failure that announces itself in the first line of that text is much harder to misread as a result.
+
+**A failed validation is not a tool error.** `validate_sql` returning `valid: false` is the answer to the question that was asked, not a failure to answer it — so `isError` is `false` and the payload carries the diagnosis. Conflating the two would make "the SQL is wrong" indistinguishable from "the tool is broken", and those call for different responses.
 
 A tool error is a normal outcome. The self-correction loop depends on the agent *receiving* the failure as readable content; an exception that terminates the call gives it nothing to work with.
 
@@ -222,9 +236,16 @@ Error content is structured:
  "suggestion": "Nearest matches: total_amount, revenue_usd"}
 ```
 
-`error_type` values: `syntax_error`, `unknown_identifier`, `not_read_only`, `multiple_statements`, `explain_failed`, `statement_timeout`, `row_limit_exceeded`, `table_not_found`, `permission_denied`, `connection_failed`.
+`error_type` values: `syntax_error`, `unknown_identifier`, `not_read_only`, `multiple_statements`, `explain_failed`, `statement_timeout`, `row_limit_exceeded`, `table_not_found`, `permission_denied`, `connection_failed`, `invalid_arguments`, `execution_failed`, `internal_error`.
 
 **Never leaked in tool errors:** connection strings, role names, file paths, or raw driver tracebacks.
+
+That last rule needs an active control rather than good intentions, because **the SDK's own catch-all returns `str(exc)`** — and for a `psycopg` error that string can carry a connection string with its password. So the dispatcher catches everything first and splits it two ways:
+
+- **A domain exception** (`TextToSQLError` and its subclasses) passes its message through. Those messages were written by this project for the agent to read, and withholding them would remove the information self-correction runs on.
+- **Anything else** becomes `internal_error` with a fixed generic message. The real exception goes to stderr via `logger.exception`, where the operator sees it and the model does not.
+
+The mapping is ordered most-specific-first rather than keyed by type, because the hierarchy is nested: `StatementTimeoutError` and `PermissionDeniedError` are both `ExecutionError`, and matching the parent first would erase the distinction that decides whether retrying is worth anything.
 
 ## 7. Degradation
 
@@ -245,4 +266,35 @@ Error content is structured:
 
 ## 9. Host configuration
 
-> **TBD — Stage 3.** The Claude Desktop `claude_desktop_config.json` block, plus the equivalent for a generic MCP host, land with the refactor. This is the section that makes the project *runnable by other people*, so it gets copy-pasteable config and a troubleshooting cross-reference to [../operations/TROUBLESHOOTING.md](../operations/TROUBLESHOOTING.md).
+Each server is a module launched with `python -m`. Any MCP host that speaks stdio can run them; the block below is the `claude_desktop_config.json` shape, and the same four entries translate directly to other hosts.
+
+```json
+{
+  "mcpServers": {
+    "schema-search": {
+      "command": "D:\\mcp-text-to-sql-agent\\.venv\\Scripts\\python.exe",
+      "args": ["-m", "mcp_servers.schema_search"],
+      "env": {
+        "PYTHONPATH": "D:\\mcp-text-to-sql-agent\\src",
+        "DATABASE_URL": "postgresql://agent_owner:...@localhost:5432/analytics",
+        "DATABASE_RO_URL": "postgresql://sql_agent_login:...@localhost:5432/analytics",
+        "DATASET": "default"
+      }
+    },
+    "validate-sql":  { "command": "...python.exe", "args": ["-m", "mcp_servers.validate_sql"],  "env": { "...": "same" } },
+    "execute-sql":   { "command": "...python.exe", "args": ["-m", "mcp_servers.execute_sql"],   "env": { "...": "same" } },
+    "profile-table": { "command": "...python.exe", "args": ["-m", "mcp_servers.profile_table"], "env": { "...": "same" } }
+  }
+}
+```
+
+Four points that are easy to get wrong, each of which produces a confusing failure:
+
+- **Use the virtualenv's interpreter by absolute path.** A host does not inherit an activated environment, so a bare `python` resolves to whatever is first on the system `PATH` and fails on the first import.
+- **Set `PYTHONPATH` to `src/`.** The packages live there rather than at the repo root.
+- **Both database URLs are required**, and they must be different roles. `DATABASE_RO_URL` is the containment boundary; pointing both at the owner would leave every other control in place and remove the only one that cannot be reasoned around.
+- **Index the catalog before first launch.** A server whose catalog is empty rejects every identifier it is ever asked about, so it refuses to start instead — the error names the dataset.
+
+**Servers do not need an LLM key.** They are called *by* a model; they never call one. `LLM_PROVIDER=fake` is a valid configuration for running the servers alone under a host like Claude Desktop, where the host supplies the model.
+
+Startup failures land on stderr, which most hosts surface in a log pane rather than in the conversation. Troubleshooting: [../operations/TROUBLESHOOTING.md](../operations/TROUBLESHOOTING.md).

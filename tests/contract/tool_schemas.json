@@ -1,0 +1,122 @@
+{
+  "execute_sql": {
+    "description": "Execute a validated read-only SELECT and return the rows. Only call this after validate_sql returned valid: true. The query runs as a SELECT-only role under a row limit and a statement timeout, and the limit is applied server-side whether or not the query has its own -- if truncated is true, there were more rows than were returned and the answer must say so. A statement_timeout error means the query was too expensive: narrow it, add a filter, or aggregate more aggressively. Do not retry it unchanged.",
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "max_rows": {
+          "description": "Fewer rows than the server default, if you need fewer",
+          "maximum": 5000,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "sql": {
+          "maxLength": 100000,
+          "minLength": 1,
+          "type": "string"
+        },
+        "timeout_ms": {
+          "description": "A shorter timeout than the server default",
+          "maximum": 60000,
+          "minimum": 100,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "sql"
+      ],
+      "type": "object"
+    }
+  },
+  "profile_table": {
+    "description": "Get column statistics for a table: null fraction, distinct count, extremes for numeric and date columns, and the most frequent values. Call this to choose between two similarly-named columns, or to see how values are actually stored before writing a WHERE clause against them -- a column may hold 'FI' rather than 'Finland', and a query filtering on the wrong form returns zero rows without any error. Numbers are computed over a bounded scan of the table, not the whole of it, so treat them as indicative rather than exact. Any field the server withheld is listed in 'withheld' with the reason: that means the value was suppressed, not that the column is empty.",
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "columns": {
+          "description": "Profile only these columns. Naming the two or three you are choosing between is cheaper and clearer than profiling the table",
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 30,
+          "minItems": 1,
+          "type": "array"
+        },
+        "sample_rows": {
+          "description": "Raw example values per column. Returns none unless the server is configured to allow value sampling",
+          "maximum": 5,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "table": {
+          "description": "Table name, as returned by search_schema",
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "table"
+      ],
+      "type": "object"
+    }
+  },
+  "search_schema": {
+    "description": "Find the tables and columns relevant to a natural-language question. Call this before writing SQL. Returns ranked schema elements with types and comments, plus the foreign-key edges connecting the tables that matched -- use those edges to write joins rather than guessing them. If a generated query referenced an identifier that turned out not to exist, call this again with a more specific phrasing rather than inventing a name.",
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "k": {
+          "default": 10,
+          "description": "How many elements to return",
+          "maximum": 50,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "query": {
+          "description": "The question or phrase to find schema elements for",
+          "minLength": 1,
+          "type": "string"
+        },
+        "table_filter": {
+          "description": "Restrict results to these tables",
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 50,
+          "minItems": 1,
+          "type": "array"
+        }
+      },
+      "required": [
+        "query"
+      ],
+      "type": "object"
+    }
+  },
+  "validate_sql": {
+    "description": "Check that a SQL query parses, is a single read-only SELECT, and references only tables and columns that exist. Runs EXPLAIN without executing the query, so it is cheap and safe to call repeatedly -- call it on every generated query before execute_sql, every time. On failure it names the stage that rejected the query and, for an unknown identifier, the nearest real name: use that to fix the query rather than retrying it unchanged. It also returns the planner's estimated cost, so an implausibly expensive query can be abandoned before it is run.",
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "dialect": {
+          "default": "postgres",
+          "description": "Only postgres is supported",
+          "enum": [
+            "postgres"
+          ],
+          "type": "string"
+        },
+        "sql": {
+          "description": "The SQL to check. Exactly one statement",
+          "maxLength": 100000,
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "sql"
+      ],
+      "type": "object"
+    }
+  }
+}

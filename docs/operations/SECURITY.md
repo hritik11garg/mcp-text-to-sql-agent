@@ -403,6 +403,32 @@ Plus two bounds that are availability controls rather than disclosure ones: `PRO
 
 **CIA impact.** Confidentiality, primarily, with the same compliance exposure as §14.2 that deleting anything on your side does not undo. Availability secondarily — an unbounded profile of a wide table seq-scans it once per column and can fill the agent's entire context budget in one tool result.
 
+### 14.2.7 The MCP layer — a channel that can be corrupted, and a boundary failures cross — **Medium**
+
+The four servers add no new capability. They add a *transport*, and a transport has its own failure modes.
+
+**Vulnerability 1 — stream corruption.** Over stdio, stdout is the JSON-RPC channel. Any other write to it is a protocol violation. *(Availability; OWASP API8 Security Misconfiguration.)*
+
+**Why it's dangerous.** Not a disclosure, but a denial: the host reports a JSON decode error and the session ends. The cause is a `print` somewhere in the process — possibly in a dependency, possibly left behind after debugging — and nothing in the error names it. Worse, a *traceback* written to stdout during startup would put the connection string, password included, into the stream.
+
+**Secure implementation.** `claim_stdout()` hands the real stream to the transport and repoints `sys.stdout` at stderr before anything else runs; logging is forced onto stderr so an earlier `basicConfig` by a library cannot redirect it. A source-level test asserts no server module calls `print`, and a subprocess test asserts that a `print` after `claim_stdout()` lands on stderr while the protocol stream still works.
+
+**Vulnerability 2 — failure messages crossing a boundary.** A tool result goes to a language model and from there to a third-party provider. The MCP SDK's own catch-all returns `str(exc)` for any unhandled exception, and for a `psycopg` error that can carry a connection string, a role name, or a file path. *(OWASP LLM06 / A09; Confidentiality.)*
+
+**Attack scenario.** No attacker needed. A misconfigured `DATABASE_RO_URL`, a network blip mid-query, or an exotic column type raises something the handler did not anticipate; the driver's message quotes the connection; the provider retains the submission.
+
+**Secure implementation.** The dispatcher catches everything before the SDK can, and splits it: domain exceptions (`TextToSQLError`) pass their message through because those were written for the agent to read; anything else becomes a fixed generic string, with the real exception logged to stderr where the operator sees it and the model does not. Tested by asserting a planted password appears nowhere in the *whole serialized result*, not merely in the message field.
+
+**Vulnerability 3 — the protocol as a way around the controls.** A published `max_rows` or `k` that the server does not actually clamp is documentation, not a limit. *(OWASP API4 Unrestricted Resource Consumption.)*
+
+**Secure implementation, and the structural point.** Every bound lives in the *component*, not the server — because another MCP host can connect to `execute_sql` alone, and a tool that is only safe when invoked in the right order is not safe. The servers are thin adapters that add no enforcement of their own. Published ceilings are **imported from** the components that clamp (`MAX_K`, `MAX_TABLE_FILTER`) or derived from settings (`max_rows`, `sample_rows`), so the number a caller is told and the number enforced cannot drift. Source-level tests assert `execute_sql` constructs its own validator, runs on the read-only connection, and audits over the owner connection.
+
+**Why the fixes are secure.** Each addresses a property of the transport rather than of the caller, so none depends on the model behaving. The bounds argument is structural: there is nothing to bypass at the protocol layer because the protocol layer enforces nothing.
+
+**Not yet done.** Streamable HTTP is not implemented, and it is where authentication first becomes necessary — an HTTP-reachable `execute_sql` with no auth is a different risk class from a subprocess a host launched. It lands with the API layer for that reason, not by accident.
+
+**CIA impact.** Availability (stream corruption), Confidentiality (failure messages), Integrity is unaffected — the read-only role is unchanged by any of this.
+
 ### 14.3 Related: prompt injection reaches further with weaker models
 
 A free-tier model is generally more susceptible to injected instructions than a frontier model. This does **not** change the containment argument in §7 — a fully successful injection still only yields SQL, which is still parsed, still `SELECT`-only, and still runs under a role that cannot write. It does mean injection attempts will *succeed more often at the model layer*, so §7's position (contain, don't filter) matters more, not less. It also raises the value of the `MAX_TOOL_CALLS_PER_REQUEST` cap, since a manipulated weak model is likelier to loop.

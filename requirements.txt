@@ -18,6 +18,7 @@
 
 # --- MCP: servers + client -------------------------------------------------
 mcp==1.28.1
+jsonschema==4.26.0            # tool-argument validation; direct, not via mcp
 
 # --- API layer -------------------------------------------------------------
 fastapi==0.140.0

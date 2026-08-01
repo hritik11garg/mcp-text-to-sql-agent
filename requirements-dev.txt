@@ -16,6 +16,7 @@ testcontainers[postgres]==4.15.0  # real Postgres + pgvector for integration tes
 # --- Linting / typing ------------------------------------------------------
 ruff==0.16.0                  # lint + format (replaces black/isort/flake8)
 mypy==2.3.0
+types-jsonschema==4.26.0.20260518
 
 # --- ML training / evaluation ----------------------------------------------
 datasets==5.0.0               # Spider / BIRD loading + train/val splits

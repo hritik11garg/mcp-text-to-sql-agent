@@ -79,11 +79,13 @@ Scope: four MCP servers; agent becomes an MCP client with runtime discovery; std
 **Demo:** point Claude Desktop at the servers and query a database from it.
 
 **Done when:**
-- [ ] All four servers pass contract tests
-- [ ] Agent discovers tools at runtime — no hardcoded tool list
-- [ ] `execute_sql` validates independently of the caller
-- [ ] Verified working in Claude Desktop with copy-pasteable config
+- [x] All four servers pass contract tests
+- [x] Agent discovers tools at runtime — no hardcoded tool list
+- [x] `execute_sql` validates independently of the caller
+- [x] Copy-pasteable Claude Desktop config ([../architecture/MCP.md](../architecture/MCP.md) §9) — *written from the working stdio configuration; not yet run inside Claude Desktop itself*
 - [ ] **Eval re-run — accuracy unchanged.** A refactor that silently changed behaviour is a regression.
+
+**Built ahead of Stage 2, deliberately and with one cost.** The servers landed before the eval harness because all four capabilities existed to be wrapped and this is the project's headline claim. The cost is the last checkbox: there is no baseline to re-run against, so "accuracy unchanged" cannot be *measured* yet. What stands in for it is that every server is a thin adapter over a component that was already tested directly, with contract tests asserting the same behaviour over the wire — which is an argument, not a measurement, and the checkbox stays open until it is one.
 
 The risk here is shipping a protocol wrapper. Contract quality — descriptions that say *when* to call, schema-enforced limits, structured errors — is the actual work. See [../architecture/MCP.md](../architecture/MCP.md) §3.
 

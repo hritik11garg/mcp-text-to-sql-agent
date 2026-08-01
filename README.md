@@ -1,18 +1,18 @@
 # Text-to-SQL Analytics Agent (MCP-native)
 
-> **Status: Stage 1 — core loop, in progress.** Database, read-only role, the schema catalog, retrieval, validation, sandboxed execution, SQL generation and table profiling are in and tested; the API and the MCP servers are not yet. Nothing below claims a benchmark number until the eval harness exists. See [ROADMAP](docs/project/ROADMAP.md) for stage status and [TASKS](docs/project/TASKS.md) for the working checklist.
+> **Status: Stage 1 core loop plus the Stage 3 MCP layer.** The four servers run and are callable from any MCP host over stdio. Still open: the HTTP API, and the eval harness that every accuracy number waits on. Nothing below claims a benchmark number until that exists. See [ROADMAP](docs/project/ROADMAP.md) for stage status and [TASKS](docs/project/TASKS.md) for the working checklist.
 >
 > | Landed | Next |
 > |---|---|
+> | **Four MCP servers over stdio, with runtime `tools/list` discovery** | The eval harness — every accuracy number waits on it |
 > | Postgres 16 + pgvector, Alembic migrations | FastAPI + SSE, and the `/health` · `/ready` pair |
-> | `SELECT`-only role, proven by 30 negative tests | The eval harness — every accuracy number waits on it |
-> | Schema catalog — introspection, serialization, embedding | MCP servers wrap all of the above in Stage 3 |
+> | `SELECT`-only role, proven by 30 negative tests | Streamable HTTP transport, which is where auth first matters |
+> | Schema catalog — introspection, serialization, embedding | The agent loop that drives the discovered tools |
 > | Retrieval — pgvector ANN, join-path expansion, clamped limits | |
 > | Validation — sqlglot AST + `EXPLAIN`, refused at both layers | |
 > | Execution — row limits, timeouts, audit trail | |
 > | Generation — provider-agnostic, with a model fallback chain | |
 > | Profiling — column stats under a documented disclosure budget | |
-> | Provider-agnostic `LLMClient` and `Embedder` ports | |
 
 An agent that answers analytical questions in plain English against a real PostgreSQL database. Capabilities are exposed as **four MCP servers** rather than hardcoded functions, so any MCP host — Claude Desktop, or your own client — can point at them and query its own database.
 
@@ -117,7 +117,7 @@ That creates the `agent_meta` schema, the pgvector extension and the HNSW index,
 Verify the install — the security suite is the one that matters, and it passes by being **refused**:
 
 ```powershell
-pytest                    # 452 tests; integration and security need Docker
+pytest                    # 574 tests; integration, security and contract need Docker
 pytest -m security        # the read-only containment suite, on its own
 ruff check . ; mypy
 ```
@@ -126,12 +126,20 @@ The Postgres-backed tests skip cleanly without a running Docker daemon. In CI th
 
 ## Usage
 
-> **TBD — Stage 1/3.** End-to-end query commands land with the core loop; MCP host config lands with the refactor.
+**As MCP servers — available now.** Each is a module launched over stdio:
 
-Planned entrypoints:
+```powershell
+python -m mcp_servers.schema_search
+python -m mcp_servers.validate_sql
+python -m mcp_servers.execute_sql
+python -m mcp_servers.profile_table
+```
+
+Point Claude Desktop or any stdio-speaking MCP host at them with the config in [MCP.md](docs/architecture/MCP.md) §9. They need both database URLs and an indexed catalog; they do **not** need an LLM key, since they are called by a model rather than calling one.
+
+Still planned:
 
 - **HTTP API** — `POST /query`, streaming progress over SSE. See [API.md](docs/architecture/API.md).
-- **MCP host** — point Claude Desktop (or any MCP host) at the four servers. Contracts and config: [MCP.md](docs/architecture/MCP.md).
 - **CLI** — eval harness and training runs via `typer` entrypoints.
 
 ## Folder structure
@@ -163,12 +171,13 @@ Directories marked *(stub)* exist with a docstring stating which stage fills the
 │   ├── validation/             # sqlglot AST stages + EXPLAIN, no I/O below stage 5
 │   ├── execution/              # row limits, timeouts, audit trail
 │   ├── profiling/              # column statistics under a disclosure budget
-│   ├── mcp_servers/            # (stub) four servers — Stage 3
-│   ├── agent/                  # (stub) planner, executor, memory — Stage 4
+│   ├── mcp_servers/            # four servers + the shared error contract
+│   ├── agent/                  # tools/list discovery; planner and memory — Stage 4
 │   └── api/                    # (stub) FastAPI + SSE
 ├── tests/
 │   ├── unit/                   # no I/O, fakes throughout
 │   ├── integration/            # real Postgres via testcontainers
+│   ├── contract/               # servers as subprocesses over real stdio
 │   └── security/               # negative tests — the role MUST be denied
 └── docs/
     ├── GLOSSARY.md

@@ -298,3 +298,35 @@ A second, smaller trade: `min`/`max` were described as statistics in the origina
 **Generalises to:** a control that is easy to describe and hard to bound ("we filter PII") is worse than a control that is narrow and provable ("a value under this frequency is never emitted") — because the first one changes operator behaviour and the second one does not.
 
 **Revisit:** when Stage 4 sends query *results* to a model for synthesis. That path has no frequency to threshold on, so it needs a different answer rather than this one stretched.
+
+---
+
+## ADR-017 — Servers claim stdout, and validate arguments themselves
+
+**Status:** accepted · **Date:** 2026-08-01 · **Stage:** 3
+
+**Context.** Exposing four capabilities over stdio adds two failure modes the components underneath do not have, and both produce errors that name nothing about their cause.
+
+**stdout is the JSON-RPC channel.** Anything else written there is a protocol violation. The host reports a JSON decode error; the actual cause is a `print` somewhere in the process — possibly in a dependency, possibly left behind after debugging.
+
+**The SDK's catch-all returns `str(exc)`.** Any exception a handler raises becomes tool content the model reads. For a `psycopg` error that string can carry a connection string with its password, which is exactly what [MCP.md](MCP.md) §6 forbids crossing this boundary.
+
+**Decision.** Three things, all in one shared module so a fifth server inherits them.
+
+1. **`claim_stdout()` at startup.** The real stdout is handed to the transport and `sys.stdout` is repointed at stderr. A stray write becomes a log line instead of a corrupted stream. Logging is configured with `force=True` for the same reason — `basicConfig` is a no-op once any handler exists, so a library that configured logging onto stdout first would otherwise keep it.
+2. **The dispatcher catches every exception before the SDK can.** Domain exceptions pass their message through, because those messages were written for the agent to read. Everything else becomes a fixed generic message, with the real exception on stderr.
+3. **Arguments are validated in the dispatcher, not by the SDK's `validate_input`.** Same library, same schema; what changes is the shape of the failure.
+
+**Alternatives.**
+- *Rely on discipline for stdout* — rejected. The rule is easy to state and impossible to enforce by review, because the offending `print` may be in a dependency. A guard costs three lines and converts a session-killing failure into noise.
+- *Let the SDK validate input* — rejected, and this is the substantive part. The SDK returns a bare text message on a schema violation, so that one failure would reach the agent in a different shape from every other failure. The agent dispatches on `error_type`; a hole in that dispatch at exactly the point where a *model* most often gets things wrong is the worst possible place for one. Validating in the dispatcher gives `invalid_arguments` in the standard envelope, naming the offending field.
+- *Return schema violations as protocol errors* — rejected, and it required correcting [MCP.md](MCP.md) §6, which had filed "malformed params" under protocol errors. The arguments are written by a model, so an out-of-range value is an ordinary correctable mistake rather than a caller bug. A protocol error kills the call and gives the agent nothing to read.
+- *Let handlers return dicts and accept the SDK's result construction* — rejected once measured. Returning a dict makes the SDK set `isError: false` unconditionally, so every tool failure would arrive flagged as a success. Handlers still return dicts; the dispatcher builds the result.
+
+**Tradeoff.** Reimplementing argument validation is duplication in principle — mitigated by calling the same `jsonschema` with the same schema, so it is a wrapper rather than a second implementation. `jsonschema` becomes a direct dependency and is pinned in `requirements.txt` rather than relied on transitively through `mcp`.
+
+Claiming stdout also means a genuinely useful `print` during development goes to stderr, which is mildly surprising. Stated in the module docstring; the alternative is worse.
+
+**Generalises to:** when a library's default error path is *more* informative than your own, that is usually a leak, not a feature.
+
+**Revisit:** when the Streamable HTTP transport lands. The stdout guard is stdio-specific and becomes inert there; the error contract is not, and must apply identically.
