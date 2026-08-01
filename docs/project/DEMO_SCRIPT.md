@@ -14,9 +14,9 @@ Run 10 minutes before, not 30 seconds before.
 
 - [ ] `docker compose ps` — Postgres healthy
 - [ ] `curl localhost:8000/ready` — all dependencies green
-- [ ] Vectors present for the configured `RETRIEVER_MODEL_VERSION`
-- [ ] `ANTHROPIC_API_KEY` set and working (one cheap test call)
-- [ ] Target dataset loaded
+- [ ] Vectors present for the configured `RETRIEVER_MODEL`
+- [ ] `LLM_API_KEY` set and working — `python -m generation.check` verifies the provider in one round trip
+- [ ] Target dataset loaded **and verified** — `python -m benchmark.load verify ...` exits 0
 - [ ] Terminal font large enough to read on a shared screen
 - [ ] Recorded fallback video accessible offline
 - [ ] An MCP host configured (MCP Inspector via `npx` is the zero-account option; any stdio host works)

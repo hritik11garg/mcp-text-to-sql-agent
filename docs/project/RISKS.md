@@ -25,12 +25,14 @@ Scored `likelihood × impact`, both low/medium/high. Reviewed at each stage boun
 
 **What actually reduced this risk most** was building the servers *last*, over components that had been designed without any knowledge of MCP. Every bound already lived where all callers pass, so the servers had nothing left to enforce — which is what makes them thin rather than what makes them wrappers. A protocol wrapper is what you get when the protocol layer is where the thinking happens.
 
-**Residual.** The Stage 3 gate — re-run the eval, accuracy unchanged — is still open, because the Stage 2 harness does not exist yet. Thin adapters plus contract tests are an argument that behaviour is preserved; they are not a measurement of it.
+**Residual.** The Stage 3 gate — re-run the eval, accuracy unchanged — is still open. The harness and the loader both exist now; what is missing is the pipeline wired into the answerer seam and a benchmark actually loaded. Thin adapters plus contract tests are an argument that behaviour is preserved; they are not a measurement of it.
 
 ### R-04 · Spider/BIRD → Postgres conversion corrupts the benchmark
 **Medium × High.** Dynamic vs static typing, identifier case-folding, date-as-text columns. A silent conversion difference invalidates every number downstream.
 
-**Mitigation.** Conversion is verified, not assumed: every gold query executes against both the SQLite original and the Postgres copy, result sets compared. Verification is a Stage 2 gate.
+**Mitigation — implemented.** Conversion is verified, not assumed: every gold query executes against both the SQLite original and the Postgres copy, result sets compared with the eval harness's *own* comparator ([ADR-022](../architecture/DECISIONS.md#adr-022--the-conversion-is-verified-by-the-eval-harnesss-own-comparator)). A database is verified only if **every** comparable query agrees, and `benchmark.load verify` exits 3 otherwise, so a CI step cannot pass while reporting the data is wrong. Gold errors — reference queries that fail on their own SQLite database — are counted separately and never blamed on the conversion.
+
+**Residual.** No archive has been put through it yet, so this is a control that is built and tested rather than one that has been exercised on real data. The dirty-data cases it is most needed for are in BIRD, which is also where it is least proven.
 
 ### R-05 · Self-correction burns budget without recovering
 **Medium × Medium.** The loop can look busy while never converging — a plausible-looking feature that adds cost and latency for nothing.
@@ -76,7 +78,7 @@ Scored `likelihood × impact`, both low/medium/high. Reviewed at each stage boun
 ### R-12 · Train/eval leakage inflates Recall@k
 **Medium × High.** Splitting by question instead of database puts the same schema elements on both sides, producing an impressive, meaningless number.
 
-**Mitigation.** Split by database. Disjointness is asserted in code, and splits are committed as a file rather than regenerated.
+**Mitigation — implemented.** Split by database. Disjointness holds by construction: a `db_id` hashes into exactly one band, and a question naming a database with no assignment raises rather than defaulting into dev. Splits are committed as a file rather than regenerated, and membership depends only on the database's own name, so growing the corpus cannot move a held-out database into train ([ADR-021](../architecture/DECISIONS.md#adr-021--splits-are-a-hash-of-the-database-name-not-a-seeded-shuffle)).
 
 ### R-13 · Held-out set gets used for iteration
 **Medium × Medium.** Easy to do accidentally; converts the reported number into an optimistic one.

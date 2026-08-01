@@ -84,7 +84,7 @@ Checklist to be verified, not just written:
 - [ ] Rate limits active (request, token, and concurrent-stream)
 - [ ] Statement timeout set on the role *and* per transaction
 - [ ] Connection pool sized against database capacity, not application concurrency
-- [ ] Vectors indexed for the configured `RETRIEVER_MODEL_VERSION`
+- [ ] Vectors indexed for the configured `RETRIEVER_MODEL` (the recorded `model_version` comes from the embedder — there is deliberately no separate version variable, see [CONFIG.md](CONFIG.md) §5)
 - [ ] Audit logging on and writable
 - [ ] Secrets from a secret store; none in the image or in logs
 - [ ] Health and readiness probes wired to the orchestrator

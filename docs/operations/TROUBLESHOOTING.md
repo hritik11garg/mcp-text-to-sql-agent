@@ -95,7 +95,7 @@ The configured embedding model's dimension does not match the column type. `vect
 
 Check in this order:
 
-1. **`RETRIEVER_MODEL_VERSION` vs indexed vectors.** The single most likely cause. Query embeddings from one model against corpus embeddings from another land in different vector spaces — and this **fails silently**, returning plausible-looking garbage rather than an error.
+1. **`RETRIEVER_MODEL` vs indexed vectors.** The single most likely cause. Query embeddings from one model against corpus embeddings from another land in different vector spaces — and this **fails silently**, returning plausible-looking garbage rather than an error.
    ```sql
    SELECT model_version, count(*) FROM agent_meta.schema_elements GROUP BY 1;
    ```
@@ -152,7 +152,7 @@ The tool description is the model's only selection signal. If a tool is not bein
 
 ### `authentication_error`
 
-`ANTHROPIC_API_KEY` unset in the process's environment. A key in `.env` does not reach a process that never loaded `.env`.
+`LLM_API_KEY` unset in the process's environment. A key in `.env` does not reach a process that never loaded `.env`. (There is no provider-specific key variable — one adapter serves every OpenAI-compatible endpoint, so there is one key setting.)
 
 ### `rate_limit_error` during eval runs
 
@@ -237,7 +237,7 @@ Check the split. If databases straddle train and eval, the model has memorized t
 
 A real possibility, and a publishable result ([ADR-006](../architecture/DECISIONS.md#adr-006--fine-tune-the-schema-linker-rather-than-retrieve-more-candidates)). Before concluding it, rule out:
 
-1. `RETRIEVER_MODEL_VERSION` mismatch — corpus not re-embedded with the new model.
+1. `RETRIEVER_MODEL` mismatch — corpus not re-embedded with the new model. The recorded `model_version` comes from the embedder, so pointing `RETRIEVER_MODEL` at a checkpoint is what separates the vector spaces.
 2. Overfitting on a small pair set — check the training curve.
 3. Learning rate too high, degrading the pretrained representation.
 4. Evaluating on the wrong split.

@@ -43,6 +43,8 @@ The tree as built — `README.md` carries the annotated version. Principles it f
 - **Each MCP server is its own package** with its own entrypoint — they are separate processes.
 - **Shared code goes in a `core/` package** and depends on nothing above it.
 - **The demo UI lives in `web/`, outside `src/`.** A different language and toolchain, built to static files that FastAPI serves — keeping it out of the Python package tree means `pip install` and `pytest` never touch it.
+- **A top-level package name must not shadow an installed one.** This is a `src` layout, so every package under `src/` is importable as a top-level name for the whole process. Naming one `datasets` would shadow the HuggingFace library for `transformers`, and the failure surfaces as an unrelated library breaking at a distance. The benchmark loader is `benchmark/` for this reason.
+- **Offline tools live in `src/` like everything else, and compose only the settings they use.** `benchmark.load` builds `BenchmarkSettings` + `DatabaseSettings` rather than `Settings.load()`, because a tool that validates configuration for a subsystem it never calls gets worked around with a fake value — and a fake value in the environment outlives the command that needed it.
 - **No circular imports.** If two modules need each other, the shared piece belongs in `core/`.
 
 ## 4. Dependency injection
