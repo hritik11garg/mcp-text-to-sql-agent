@@ -12,6 +12,8 @@
 | SQL validation | **< 50 ms** p95 | `mcp.call validate_sql` | Parse + `EXPLAIN`, no execution. Called repeatedly, so it must stay cheap |
 | Table profiling | **< 1 s** p95 | `mcp.call profile_table` | One bounded scan per column, so cost is `PROFILE_MAX_COLUMNS` × `PROFILE_SCAN_LIMIT`. Its own `PROFILE_TIMEOUT_MS` (10 s) is deliberately shorter than the executor's — profiling is a side quest during answering and should give up long before the real query would |
 | Query execution | **< 2 s** p95 | `db_query_duration_seconds` | Analytical aggregates on benchmark-sized data |
+| MCP call overhead | **< 20 ms** p95 | `mcp.call` minus tool duration | Framing plus a local pipe. Anything larger means the cost is in serialization, not the protocol |
+| MCP server startup | **< 3 s** | Process launch → `tools/list` returned | Four subprocesses, each opening two connections and loading the catalog. Paid once per session, and it is why the catalog is a snapshot rather than re-read per call |
 | SSE first token | **< 500 ms** | Time to first event | Perceived responsiveness |
 | End-to-end (single query) | **< 8 s** p95 | `request_duration_seconds` | Dominated by LLM generation |
 | End-to-end (multi-step) | **< 25 s** p95 | — | N sub-queries plus synthesis |

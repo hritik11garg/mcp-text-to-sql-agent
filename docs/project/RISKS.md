@@ -21,7 +21,11 @@ Scored `likelihood × impact`, both low/medium/high. Reviewed at each stage boun
 ### R-03 · MCP refactor reads as a wrapper
 **Medium × High.** The stated failure mode in PROJECT.md: "I wrapped three functions in a protocol." Spotted in two minutes.
 
-**Mitigation.** Contract quality is the Stage 3 deliverable, not the plumbing. Descriptions that say *when* to call. Schema-enforced limits, verified enforced server-side by contract tests rather than merely declared. Structured errors the agent can act on. `execute_sql` re-validating independently, because another host can call it directly. The `validate_sql`/`execute_sql` split is the design argument, and it is recorded with its reasoning in [ADR-002](../architecture/DECISIONS.md#adr-002--validation-and-execution-are-separate-mcp-servers).
+**Mitigation — implemented.** Contract quality was the Stage 3 deliverable, not the plumbing. Descriptions that say *when* to call, asserted by contract tests. Schema-enforced limits whose published ceilings are **imported from** the components that clamp them, so the advertised number and the enforced one cannot drift. Structured errors the agent can act on, with `error_type` ordered most-specific-first. `execute_sql` re-validating independently, because another host can call it directly. The `validate_sql`/`execute_sql` split is the design argument, recorded in [ADR-002](../architecture/DECISIONS.md#adr-002--validation-and-execution-are-separate-mcp-servers).
+
+**What actually reduced this risk most** was building the servers *last*, over components that had been designed without any knowledge of MCP. Every bound already lived where all callers pass, so the servers had nothing left to enforce — which is what makes them thin rather than what makes them wrappers. A protocol wrapper is what you get when the protocol layer is where the thinking happens.
+
+**Residual.** The Stage 3 gate — re-run the eval, accuracy unchanged — is still open, because the Stage 2 harness does not exist yet. Thin adapters plus contract tests are an argument that behaviour is preserved; they are not a measurement of it.
 
 ### R-04 · Spider/BIRD → Postgres conversion corrupts the benchmark
 **Medium × High.** Dynamic vs static typing, identifier case-folding, date-as-text columns. A silent conversion difference invalidates every number downstream.

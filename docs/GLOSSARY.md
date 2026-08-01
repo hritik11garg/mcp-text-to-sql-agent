@@ -15,6 +15,18 @@ A process exposing a set of tools over MCP. This project runs four: `schema_sear
 **MCP client**
 The side that connects to servers, calls `tools/list` to discover what is available, and issues `tools/call`. Here, the agent is the client.
 
+**`tools/list` / `tools/call`**
+The discovery call and the invocation call. The client's capability set comes from the `tools/list` response rather than from a constant — which is what makes adding a fifth capability an operations change rather than a code change.
+
+**stdio transport**
+The host launches the server as a subprocess and speaks JSON-RPC over its stdin/stdout. **stdout is the protocol**, so anything else written there corrupts the stream.
+
+**Tool error vs protocol error**
+A tool error is an expected, readable outcome (`isError: true` plus structured content) that the agent corrects itself from. A protocol error is a JSON-RPC-level failure — a bug, not something to retry. Invalid *arguments* are a tool error here, not a protocol error, because they are written by a model.
+
+**Structured content**
+A typed payload returned alongside the text block of a tool result. Optional in MCP, so the text block must carry the whole payload on its own.
+
 **MCP host**
 An application that embeds an MCP client — Claude Desktop, an IDE, or this project's own agent. The reason MCP matters for portfolio purposes: any host can point at these servers.
 

@@ -36,7 +36,7 @@ All configuration comes from environment variables, loaded and validated by `pyd
 | `STATEMENT_TIMEOUT_MS` | int | `30000` | Also set on the role in the database |
 | `STATEMENT_TIMEOUT_CEILING_MS` | int | `60000` | Hard cap |
 | `MAX_ESTIMATED_COST` | float | `1000000` | Bail out on `EXPLAIN` cost before executing |
-| `WORK_MEM` | str | `32MB` | Per-connection sort memory |
+| `WORK_MEM` | str | `32MB` | Per-connection sort memory. **Not an environment variable** — set as a role attribute by migration 002, so it cannot be raised by a caller |
 
 `MAX_ESTIMATED_COST` is the cheap defence against expensive queries: the planner has already estimated cost during validation, so an obviously catastrophic query can be rejected without spending the execution budget on it. Calibrating the threshold is empirical — see [../architecture/DATABASE.md](../architecture/DATABASE.md) §9.
 
@@ -55,8 +55,8 @@ The agent depends on the `LLMClient` protocol, never on a vendor SDK ([ADR-014](
 | `LLM_TIMEOUT_MS` | int | `60000` | |
 | `LLM_ALLOWED_HOSTS` | list[str] | `[]` | Optional host allowlist for `LLM_BASE_URL`. Empty means "any host that passes the IP checks". Comma-separated |
 | `LLM_MODEL_FALLBACKS` | list[str] | `[]` | Models tried in order on a 429. Same provider, same key — see §4.2. Comma-separated |
-| `LLM_SUPPORTS_TOOL_CALLING` | bool | `auto` | `auto` probes at startup; falls back to prompt-based structured output |
-| `LLM_EFFORT` | enum | — | Anthropic adapter only; ignored elsewhere |
+| `LLM_SUPPORTS_TOOL_CALLING` | bool | `auto` | *Planned.* Today the capability is a property of the `LLMClient` adapter, not a setting |
+| `LLM_EFFORT` | enum | — | *Planned.* Anthropic adapter only, and that adapter is not built |
 | `MAX_TOOL_CALLS_PER_REQUEST` | int | `20` | **Hard stop on agent loops** |
 | `MAX_SQL_RETRIES` | int | `3` | Self-correction budget per query |
 | `MAX_DECOMPOSITION_STEPS` | int | `5` | Sub-questions per compound question |
@@ -193,7 +193,9 @@ Profiling is the one component whose **output is row data by design** — it exi
 
 **There is no setting that widens which tables may be profiled.** The catalog is the allowlist, and a name not in it is rejected before any statement is composed. That is a containment boundary, not a convenience — see [SECURITY.md](SECURITY.md) §14.2.6, control 1.
 
-## 6. API
+## 6. API — planned (Stage 1 close-out)
+
+> None of these exist yet. `src/api/` is a stub; the variables below are the design intent for when it lands.
 
 | Variable | Type | Default | Notes |
 |---|---|---|---|
@@ -208,7 +210,9 @@ Profiling is the one component whose **output is row data by design** — it exi
 
 Binding to `0.0.0.0` without `API_KEY` set is a **startup error**, not a warning. An unauthenticated endpoint that runs LLM-generated SQL and bills tokens should not be reachable by accident.
 
-## 7. Observability
+## 7. Observability — planned (Stage 6)
+
+> None of these exist yet. Logging today is `logging.basicConfig` at the server entrypoints, forced onto stderr.
 
 | Variable | Type | Default | Notes |
 |---|---|---|---|
@@ -223,7 +227,9 @@ Binding to `0.0.0.0` without `API_KEY` set is a **startup error**, not a warning
 
 **`LOG_RESULT_VALUES` defaults to off and should stay off.** Logging result values copies the data the read-only role is protecting into a second store with different retention and access controls. Useful for local debugging; a data-exposure vector anywhere else.
 
-## 8. Feature flags
+## 8. Feature flags — planned (Stage 4)
+
+> **None of these exist yet, and one of them reads like a safety control.** `EXPLAIN_ONLY_MODE` is described below as "generate + validate, never execute" — setting it today does nothing, and `execute_sql` will execute. The control that actually stops execution is the read-only role plus not running the `execute_sql` server at all. Flagged here rather than left to be discovered.
 
 | Variable | Type | Default | Notes |
 |---|---|---|---|
@@ -238,6 +244,16 @@ Flags exist for **ablations**, not accumulated indecision. Each maps to a row in
 `EXPLAIN_ONLY_MODE` doubles as the degraded mode when `execute_sql` is unavailable.
 
 ## 9. MCP
+
+### Implemented
+
+The four servers are launched over **stdio** by an MCP host and read no `MCP_*` variables at all. They read the database, dataset and profiling settings above, exactly as any other component does. Host configuration — the `claude_desktop_config.json` block and the four mistakes that produce confusing failures — is in [../architecture/MCP.md](../architecture/MCP.md) §9.
+
+They do **not** need an LLM key: they are called *by* a model and never call one, so `LLM_PROVIDER=fake` is a valid configuration for running them under a host.
+
+### Planned — HTTP transport
+
+> None of these exist yet. They land with the Streamable HTTP transport, which lands with the API layer — a network-reachable `execute_sql` needs authentication before it needs configuration.
 
 | Variable | Type | Default | Notes |
 |---|---|---|---|

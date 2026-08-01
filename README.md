@@ -51,6 +51,8 @@ The agent is an **MCP client** that discovers these tools at runtime. It decompo
 
 A fine-tuned schema-linking retriever (contrastive training on question→table/column pairs) sits inside the retrieval step, with Recall@k measured against the off-the-shelf embedding baseline.
 
+> Those two paragraphs describe the finished system. **Today**: the four servers and runtime discovery are built and tested; decomposition, session memory, self-correction, SSE and the fine-tune are not. The status block at the top of this file is the authority on what exists.
+
 Why validation and execution are separate capabilities, how blast radius is bounded on the read-only role, and why the linker was fine-tuned rather than over-retrieved are all recorded in [DECISIONS.md](docs/architecture/DECISIONS.md).
 
 ## Demo

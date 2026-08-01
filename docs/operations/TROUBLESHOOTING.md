@@ -114,22 +114,31 @@ HNSW index missing or not used. `EXPLAIN` the retrieval query — a sequential s
 ### Claude Desktop does not list the tools
 
 1. Config file JSON is valid (a trailing comma silently breaks the whole file).
-2. Absolute paths — Claude Desktop does not inherit your shell's working directory or `PATH`.
-3. The server runs standalone: launch it manually and check it starts without traceback.
-4. Claude Desktop fully restarted, not just the window closed.
-5. Check Claude Desktop's own MCP logs.
+2. **Absolute path to the virtualenv's interpreter.** A host does not inherit an activated environment, so a bare `python` resolves to whatever is first on the system `PATH` and dies on the first import.
+3. **`PYTHONPATH` points at `src/`.** The packages live there, not at the repo root.
+4. **Both `DATABASE_URL` and `DATABASE_RO_URL` are set**, and they are different roles.
+5. **The catalog is indexed for the configured `DATASET`.** A server with an empty catalog refuses to start rather than answering "no such table" to a schema that plainly has one — the error names the dataset.
+6. The server runs standalone: launch it manually and check it starts without traceback.
+7. Claude Desktop fully restarted, not just the window closed.
+8. Check Claude Desktop's own MCP logs — startup failures go to stderr, which most hosts surface in a log pane rather than in the conversation.
+
+Copy-pasteable config: [../architecture/MCP.md](../architecture/MCP.md) §9.
 
 ### Server starts then immediately exits
 
-**Almost always: something wrote to stdout.**
+**Historically: something wrote to stdout.** Under stdio transport, stdout *is* the JSON-RPC channel, and a stray `print()`, a library banner or a progress bar corrupts the stream.
 
-Under stdio transport, stdout *is* the JSON-RPC channel. A stray `print()`, a library banner, or a progress bar corrupts the protocol stream and the connection dies.
+**This is now guarded.** Each server calls `claim_stdout()` at startup, which hands the real stream to the transport and repoints `sys.stdout` at stderr — so a stray write becomes a log line rather than a dead session. Logging is forced onto stderr with `force=True`, so an earlier `basicConfig` by a library cannot redirect it.
 
-**Fix:** all logging goes to **stderr**. Verify no dependency prints to stdout on import — `tqdm` and some model loaders do this by default.
+**So if a server still exits immediately, look elsewhere first:** a startup failure. Bad `DATABASE_URL`, unreachable database (fails after `DB_CONNECT_TIMEOUT_MS` rather than hanging), or an empty catalog. All three write a named error to **stderr** and exit non-zero.
+
+The residual stdout case is anything that writes to file descriptor 1 *before* `claim_stdout()` runs — an import-time banner in a dependency. Reproduce by launching the server manually and checking whether stdout carries anything that is not JSON-RPC.
 
 ### `tools/call` times out
 
-`MCP_CALL_TIMEOUT_MS` must exceed `STATEMENT_TIMEOUT_CEILING_MS`. Otherwise the MCP call gives up before the database does, and a normal query timeout is misreported as an MCP fault. Validated at startup — see [CONFIG.md](CONFIG.md) §9.
+The host's own call timeout must exceed `STATEMENT_TIMEOUT_CEILING_MS` (60 s by default). Otherwise the MCP call gives up before the database does, and a normal query timeout is misreported as an MCP fault.
+
+> **`MCP_CALL_TIMEOUT_MS` does not exist.** It is documented in [CONFIG.md](CONFIG.md) §9 as planned, for the HTTP transport that is not built. Under stdio the timeout is the host's, not this project's, so there is nothing here to validate at startup — set it in the host's configuration.
 
 ### The agent never calls a tool it should
 

@@ -1,6 +1,6 @@
 # System Architecture
 
-> **Status: design intent — Stage 1 will confirm or correct it.** The component boundaries and data flow below are decided; the diagram image, measured latencies, and any structure that changes once code exists are marked `TBD`.
+> **Status: mostly built.** §2.3–§2.6 (MCP servers, retrieval, database, profiling) describe code that exists. §2.1 (the API layer) and §2.2 (the agent loop) are still design intent — the agent's *client* half exists, the loop that drives it does not. The diagram image and every measured latency remain `TBD`.
 
 ---
 
@@ -67,7 +67,7 @@ Model: whatever `LLM_PROVIDER` selects, behind the `LLMClient` port — the agen
 
 ### 2.3 MCP servers
 
-Four processes, each a real capability boundary rather than a wrapper around a function. Full contracts in [MCP.md](MCP.md).
+Four processes, each a real capability boundary rather than a wrapper around a function. **Implemented** — `python -m mcp_servers.<name>`, over stdio. Full contracts in [MCP.md](MCP.md).
 
 | Server | Reads DB | Writes DB | Retryable | Notes |
 |---|---|---|---|---|
@@ -75,6 +75,10 @@ Four processes, each a real capability boundary rather than a wrapper around a f
 | `validate_sql` | Yes (`EXPLAIN` only) | No | **Yes, freely** | Never executes the statement |
 | `execute_sql` | Yes | **No** — read-only role | No | Row limits, statement timeout, cost cap |
 | `profile_table` | Yes | No | Yes | Column stats for disambiguation. **The only server whose output is row-derived by design** — see §2.6 |
+
+Each is a **thin adapter** over a component that was built and tested without any knowledge of MCP, and that ordering is the design. Every bound — `k` clamped, `LIMIT` injected into the AST, identifiers resolved against the catalog — lives in the component, because another MCP host can connect to one server alone and a limit enforced in the server would apply over one transport and nowhere else. The published schemas import their ceilings from the code that enforces them, so the number a caller is told and the number enforced cannot drift.
+
+The client half is `ToolRegistry` in `src/agent/discovery.py`: it connects, calls `tools/list`, and builds its capability set from the answers. A server that fails to start is recorded and skipped, which is how §7 of [MCP.md](MCP.md) becomes behaviour rather than a table. Nothing drives it yet — the agent loop is Stage 4 — but it exists now because a contract tested only from the side that implements it is tested against itself.
 
 ### 2.4 Retrieval subsystem
 

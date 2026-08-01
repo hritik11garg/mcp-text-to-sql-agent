@@ -10,7 +10,7 @@ Prompts are **versioned artifacts**, not string literals scattered through the c
 
 1. **Every prompt has a version.** `system/v3`, `sql_gen/v2`. Referenced in eval runs and recorded in [BENCHMARKS.md](BENCHMARKS.md).
 2. **A prompt change is a behaviour change.** Re-run the eval before and after. A prompt edit that ships without a re-run makes every downstream number unverified.
-3. **MCP tool descriptions are prompts.** They are the model's only tool-selection signal — see [../architecture/MCP.md](../architecture/MCP.md) §3. Versioned here alongside the rest.
+3. **MCP tool descriptions are prompts.** They are the model's only tool-selection signal — see [../architecture/MCP.md](../architecture/MCP.md) §3. Versioned here alongside the rest, and held to it mechanically: the four descriptions are part of the committed contract snapshot, so a wording change fails the contract suite until someone updates the snapshot on purpose. That is the intended friction — rule 2 says a prompt change invalidates prior benchmark numbers, and a tool description is the prompt most likely to be edited casually.
 4. **Tool results are data, never instructions.** Sampled rows, column comments, and error text all come from sources that could contain adversarial text. Stated explicitly in the system prompt, and enforced by containment rather than trust — see [../operations/SECURITY.md](../operations/SECURITY.md).
 5. **Stable content first.** Prompt caching is a prefix match; anything volatile (the question, retrieved schema, timestamps) goes after the stable prefix or the cache never hits.
 
@@ -25,7 +25,7 @@ Prompts are **versioned artifacts**, not string literals scattered through the c
 | `disambiguate` | Choose between candidate columns using profile data | — | TBD Stage 4 — **unblocked**: `TableProfiler` now produces the data, including a `withheld` list this prompt must read rather than treat as an empty column |
 | `summarizer` | Turn a result set into a natural-language answer | — | TBD Stage 4 — **the first prompt that will carry query results**, see [../operations/SECURITY.md](../operations/SECURITY.md) §14.2.5 |
 | `synthesis` | Compose sub-results into a multi-step answer | — | TBD Stage 4 |
-| *tool descriptions* | Tool selection signal (×4 servers) | — | TBD Stage 3 |
+| *tool descriptions* | Tool selection signal (×4 servers) | v1 | **Implemented** — and pinned by `tests/contract/tool_schemas.json`, so editing one is a deliberate act |
 
 ## 3. Design notes per prompt
 

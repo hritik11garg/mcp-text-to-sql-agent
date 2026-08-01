@@ -11,6 +11,10 @@ Two deployment shapes, with different security postures:
 
 The MCP-host shape is the one that makes this project runnable by other people, so it gets the more polished setup path.
 
+**The first shape works today.** The four servers run over stdio and the host configuration is in [../architecture/MCP.md](../architecture/MCP.md) §9 — no Docker image and no HTTP endpoint required, because the host launches them as subprocesses with the environment it is given. The rest of this page is about the second shape, which needs the Streamable HTTP transport and the API layer, neither of which is built.
+
+There is a reason that ordering is not accidental: an HTTP-reachable `execute_sql` is a different risk class from a subprocess a host launched, and it needs authentication before it needs a Dockerfile.
+
 ---
 
 ## 1. Docker

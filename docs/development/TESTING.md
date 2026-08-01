@@ -102,13 +102,16 @@ A third kind appears here and nowhere else: **source-level assertions**. That no
 
 ## 6. Contract tests (MCP)
 
-Against real servers over the real transport.
+Against real servers over the real transport — `python -m mcp_servers.<name>` launched as an actual subprocess, speaking actual JSON-RPC over stdio, against an actual Postgres. Nothing is mocked, because every interesting failure in an MCP integration lives in the parts a mock replaces: process launch, message framing, and whether stdout stayed clean.
 
-- `tools/list` returns valid JSON Schema for every tool.
-- Every declared input constraint is enforced server-side — `maximum`, `enum`, `required`. **Not just declared: enforced.** A schema constraint the server does not check is documentation, not a limit.
-- Errors return `isError: true` with structured content, never a protocol-level exception.
-- Malformed arguments produce a clean error, not a crash.
-- **Schema snapshot test** — tool schemas are captured and diffed, so a breaking change to a contract fails CI rather than silently shipping. See [../architecture/MCP.md](../architecture/MCP.md) §8.
+- `tools/list` returns valid JSON Schema for every tool, and the schema the *client* receives is byte-identical to the one the server published.
+- Every declared input constraint is enforced server-side — `maximum`, `enum`, `required`, `additionalProperties`. **Not just declared: enforced.** A schema constraint the server does not check is documentation, not a limit.
+- Errors return `isError: true` with structured content, never a protocol-level exception — **and the session survives**. If a bad argument killed the session, one malformed call would end the conversation, and a model will produce malformed calls.
+- Published ceilings equal the enforced ones. Asserted as `schema["maximum"] == MAX_K`, not against a literal, so the two cannot drift apart.
+- Degradation: a server that fails to start is recorded and skipped, and the others still work.
+- **Schema snapshot test** — tool schemas are captured and diffed, so a breaking change to a contract fails CI rather than silently shipping. It never regenerates itself: a test that writes its own expectation passes forever. See [../architecture/MCP.md](../architecture/MCP.md) §8.
+
+**One structural constraint worth knowing before writing more of these.** The stdio transport is built on anyio task groups, whose cancel scopes must be exited by the task that entered them — and a pytest async *fixture* runs setup and teardown in different tasks. A `yield`-based registry fixture therefore passes every assertion and then raises at teardown. Each test opens its own registry inside the test body instead, naming only the servers it needs, which also keeps the subprocess count down.
 
 ## 7. End-to-end tests
 
