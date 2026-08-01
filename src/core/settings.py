@@ -14,6 +14,7 @@ import ipaddress
 import socket
 from dataclasses import dataclass
 from enum import StrEnum
+from pathlib import Path
 from typing import Annotated
 from urllib.parse import urlparse
 
@@ -129,6 +130,17 @@ class DatabaseSettings(BaseSettings):
     db_pool_max_size: int = Field(default=10, ge=1, le=100)
     db_connect_timeout_ms: int = Field(default=5_000, ge=100, le=60_000)
     db_target_schema: str = "public"
+
+    db_readonly_role: str = "sql_agent_ro"
+    """The group role migration 002 creates and grants the SELECT-only privileges to.
+
+    Configurable because a deployment may already have a role by another name,
+    and needed as a *setting* because the benchmark loader creates schemas that
+    did not exist when the migration ran -- migration 002 grants on ``public``
+    only, so a converted database is invisible to the read-only role until the
+    loader grants on it explicitly. The loader validates this as an identifier
+    before it reaches a GRANT.
+    """
 
     @model_validator(mode="after")
     def _check_pool_and_roles(self) -> DatabaseSettings:
@@ -355,6 +367,46 @@ class AgentSettings(BaseSettings):
     agent_timeout_ms: int = Field(default=120_000, ge=1_000)
 
 
+class BenchmarkSettings(BaseSettings):
+    """Bounds on the offline benchmark loader.
+
+    None of these are reachable from a request -- the loader is a CLI that an
+    operator runs. They are settings rather than constants because the two
+    benchmarks differ by an order of magnitude in size, and because every one
+    of them is a limit on how much damage a hostile archive or a pathological
+    source database can do before the loader gives up.
+    """
+
+    model_config = _ENV_FILE
+
+    benchmark_data_dir: Path = Path("data")
+
+    benchmark_max_archive_bytes: int = Field(default=8 * 1024**3, ge=1024)
+    """Cap on total *decompressed* bytes from one archive.
+
+    Enforced against bytes actually written, not against the sizes declared in
+    the archive's own directory -- those are attacker-controlled and a zip bomb
+    declares whatever it likes.
+    """
+
+    benchmark_max_archive_members: int = Field(default=200_000, ge=1)
+    benchmark_max_member_bytes: int = Field(default=4 * 1024**3, ge=1024)
+
+    benchmark_copy_batch_rows: int = Field(default=5_000, ge=1, le=1_000_000)
+    """Rows buffered per COPY batch. Bounds loader memory on a wide table."""
+
+    benchmark_type_scan_rows: int = Field(default=200_000, ge=1)
+    """Rows read per column when inferring a PostgreSQL type.
+
+    SQLite columns are dynamically typed, so the declared type is a hint and
+    the data is the evidence. A cap exists so a huge table cannot make planning
+    unbounded; when it truncates, the plan records that the inference was
+    partial rather than presenting it as complete.
+    """
+
+    benchmark_verify_timeout_ms: int = Field(default=30_000, ge=100, le=600_000)
+
+
 @dataclass(frozen=True, slots=True)
 class Settings:
     """Composed application settings, constructed once at startup and injected.
@@ -368,6 +420,7 @@ class Settings:
     retrieval: RetrievalSettings
     profiling: ProfilingSettings
     agent: AgentSettings
+    benchmark: BenchmarkSettings
 
     @classmethod
     def load(cls) -> Settings:
@@ -379,6 +432,7 @@ class Settings:
             retrieval=RetrievalSettings(),
             profiling=ProfilingSettings(),
             agent=AgentSettings(),
+            benchmark=BenchmarkSettings(),
         )
 
 

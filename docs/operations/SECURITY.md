@@ -20,6 +20,7 @@ The core security claim of this project: **an LLM writes SQL that runs against a
 | **User questions** | **No** | Arbitrary attacker-controlled text |
 | **Database values** | **No** | A row value can contain instruction-shaped text |
 | **Schema comments** | **No** | Same — they are ingested into prompts |
+| **Benchmark archives** | **No** | Third-party files, extracted and parsed locally. See §14.2.9 |
 
 The unusual entry is database *values*. Retrieved sample rows and column comments end up in the prompt. If an attacker can write a row into the target database, they can attempt to inject through it.
 
@@ -30,6 +31,7 @@ The unusual entry is database *values*. Retrieved sample rows and column comment
 3. `agent_meta` — sessions, audit log, embeddings.
 4. Credentials — database password, LLM API key (whichever provider is configured; none at all when running against a local model).
 5. LLM spend.
+6. **The machine the loader runs on** (integrity). Unlike everything above it, this asset is not reachable through a request — it is exposed by an offline tool handling third-party archives, and no database privilege contains it. See §14.2.9.
 
 ### Adversaries
 
@@ -440,6 +442,47 @@ The four servers add no new capability. They add a *transport*, and a transport 
 **Not solved.** Nothing expires or deletes a results directory, and nothing warns when the harness runs against a non-benchmark database. Both are operator responsibilities today, and naming them here is the whole mitigation.
 
 **CIA impact.** Confidentiality only.
+
+### 14.2.9 The benchmark loader — untrusted files handled with local privilege — **Medium**
+
+**Vulnerability.** The loader downloads a third-party archive, extracts it onto the machine, parses the resulting SQLite files with a C library, and loads the contents into PostgreSQL as the **owner** role. That is the widest privilege anything in this project runs with, applied to the least trustworthy input it handles. *(OWASP A08 software and data integrity failures, A01 broken access control via path traversal, A03 injection; Confidentiality, Integrity and Availability.)*
+
+**Why it's dangerous.** Every other untrusted input in this system arrives as *text* and is contained by the read-only role. This one arrives as a *file*, and containment by database privilege is irrelevant to it — the damage happens before any SQL is composed. Concretely: `ZipFile.extractall` writes a member named `../../../.ssh/authorized_keys` without complaint, and CVE-2007-4559 is the identical bug in `tarfile`, unpatched for fifteen years because it was filed as documentation.
+
+**Attack scenarios.**
+
+1. **Path traversal.** A benchmark mirror, or a machine-in-the-middle on an unauthenticated download, serves an archive containing `../../.bashrc`. Extraction overwrites it; the next shell runs attacker code with the operator's privileges.
+2. **Symlink write-through.** Member one is a symlink `data → /etc`; member two is `data/cron.d/x`, whose own path is perfectly safe. A name-only check passes both.
+3. **Decompression bomb.** A few kilobytes expand to fill the disk, taking PostgreSQL down with it.
+4. **Silent substitution.** No traversal, no exploit — a re-released `dev.json` with different questions. Every recorded benchmark number becomes incomparable to every other, and nothing anywhere reports it. **This is the likeliest of the five and needs no attacker at all.**
+5. **Composed DDL from third-party names.** Table and column names out of the archive go into `CREATE TABLE` and `GRANT`.
+
+**Secure implementation.**
+
+| Control | What it does |
+|---|---|
+| **Digest before extraction** | The archive is hashed and checked against a committed lockfile *before* the zip parser sees it (ADR-020). Covers 1–4 |
+| **Whole-archive validation before any write** | Every member path is resolved and checked first; a rejection leaves nothing on disk for a later run to adopt as complete |
+| **Path checks plus a realpath containment check** | Absolute paths, drive letters, `..`, and backslash separators all refused, then the resolved target must still be under the destination. Covers 1 |
+| **Symlinks and special files refused** | Mode bits are inspected, with the file-type field isolated. Covers 2 |
+| **Caps on bytes written, member count, and per-member size** | Enforced against bytes actually written, never against the archive's own declarations. Covers 3 |
+| **No `--url` flag** | Sources are an allowlist in source code, so the download target cannot be redirected by an argument |
+| **Source allowlist is https-only** | The default fetcher refuses any other scheme |
+| **Identifiers folded and refused, never sanitised** | ADR-019. Then composed with `sql.Identifier` at every site. Covers 5 |
+| **SQLite opened `mode=ro` with `trusted_schema=OFF`** | The source file cannot be written, and expressions stored in its own schema are not evaluated |
+| **Views and virtual tables skipped** | A view is a stored query; a virtual table's backing module can read the filesystem (`csv`, `zipfile`, `fts`) |
+| **Identifiers reach SQLite through bind parameters where possible** | `SELECT * FROM pragma_table_info(?)` rather than formatting a name into `PRAGMA table_info(x)`, which cannot be parameterised |
+| **Grants are USAGE + SELECT and nothing else** | Asserted by integration tests that check the read-only role can read a converted schema and still cannot write to it or create in it |
+
+**Why the fixes are secure.** The ordering is the argument. Hashing first means an archive that fails integrity never reaches a parser; validating the whole archive before writing means a refusal is total rather than partial; enforcing caps on written bytes means the archive's own claims about itself are never load-bearing. Each control is asserted by a test that builds the malicious archive and checks the file is genuinely absent afterwards — a refusal that happened to land somewhere harmless is not evidence.
+
+**Residual risk, stated plainly.**
+
+- **The first acquisition is trusted.** Neither benchmark publishes a stable digest, so there is nothing to check the first download against. Made visible rather than eliminated: it requires a flag, logs a warning, and what it records is committed and reviewable. Trust-on-first-use is only dangerous when it is invisible.
+- **SQLite parses the file.** `mode=ro` and `trusted_schema=OFF` reduce the surface; a memory-safety bug in SQLite itself is not defended against. The mitigation is the digest check, which is why it runs before anything opens a file.
+- **The loader runs as the owner role.** It has to — conversion writes. This is an operator running an offline tool, not a request path, and the boundary is *re-asserted* at the end of every conversion rather than relaxed.
+
+**CIA impact.** Integrity primarily (the extraction and substitution cases), availability (bombs), confidentiality if traversal reaches a credential file.
 
 ### 14.3 Related: prompt injection reaches further with weaker models
 

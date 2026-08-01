@@ -109,10 +109,10 @@ Convention: `[ ]` open · `[x]` done · `[~]` in progress · `[!]` blocked
 - [x] Failure taxonomy with counts; gold errors counted separately and excluded from the denominator
 - [x] **Resumable runs** — not on the original list, and the requirement that shaped the design. A spent daily token cap costs the questions still outstanding, not the run
 - [x] `python -m evals.run` CLI — complete except the pipeline seam, which it refuses at rather than reporting 0%
-- [ ] Dataset download script with checksum verification
-- [ ] SQLite → Postgres conversion
-- [ ] **Verify conversion: gold queries return identical results on both**
-- [ ] Database-level splits (train / dev / held-out / smoke), committed as a file
+- [x] Dataset download script with checksum verification — a committed lockfile recorded on first use, because a hardcoded digest nobody has compared to a real download is a fabrication (ADR-020); the archive is hashed *before* extraction, and extraction refuses traversal, symlinks and bombs
+- [x] SQLite → Postgres conversion — one schema per database, types inferred from the **data** rather than the declaration, constraints added after the load and skipped-with-a-reason where the data cannot satisfy them
+- [x] **Verify conversion: gold queries return identical results on both** — using the eval harness's own comparator, not a stricter one (ADR-022); exits 3 when a database fails, so CI cannot pass while reporting the data is wrong
+- [x] Database-level splits (train / dev / held-out / smoke), committed as a file — assigned by hashing the database name, after a test caught that the first implementation's smoke set moved when the corpus grew (ADR-021)
 - [ ] Wire the pipeline into the answerer seam — *the one line `evals.run` refuses at*
 - [ ] Baseline runs: no-retrieval, retrieval-only, +validation
 - [ ] BENCHMARKS rows + DATASETS/EVALUATION filled in

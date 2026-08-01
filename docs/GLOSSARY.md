@@ -159,6 +159,21 @@ The fraction of generated queries that fail to parse or fail `EXPLAIN`. The numb
 **Held-out set**
 Data never seen during training or prompt tuning, used for the final reported numbers. Kept separate from the development set used for iteration.
 
+**Gold error**
+A benchmark reference query that is itself wrong, ambiguous, or does not run on the database it shipped with. Counted and reported rather than discarded — dropping them quietly inflates every score computed afterwards, because they cap what is achievable.
+
+**Type affinity**
+SQLite's rule for what a declared column type *suggests*, given that SQLite does not enforce types: a column declared `INTEGER` can hold `'unknown'`. The conversion treats the declaration as a hint and the data as the evidence, which is why a benchmark column can arrive in PostgreSQL as `text`.
+
+**Conversion verification**
+Executing every gold query against both the original SQLite database and the converted PostgreSQL copy and comparing the results, using the eval harness's own comparator. A conversion defect never raises; it lowers an accuracy number, and the investigation that follows looks at the model.
+
+**Trust on first use**
+Recording an artifact's digest the first time it is seen, then requiring every later copy to match. Used for benchmark archives because neither Spider nor BIRD publishes a stable checksum. Safe only when it is *visible* — it requires a flag, logs a warning, and what it records is committed.
+
+**Split stability**
+The property that adding databases to a corpus does not move the ones already assigned to a split. Distinct from "deterministic given a seed", which a shuffle also satisfies while silently rearranging everything when the input list changes.
+
 ---
 
 ## Observability

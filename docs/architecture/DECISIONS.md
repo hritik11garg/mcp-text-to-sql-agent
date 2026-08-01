@@ -362,3 +362,115 @@ A benchmark whose verdict depends on row arrival order is not a benchmark.
 **Generalises to:** when a specification says "equal within ε", check what the code needs to *do* with equality. If it sorts, groups, or hashes, ε is not available and the specification means something it did not say.
 
 **Revisit:** if a benchmark appears whose correct answers genuinely differ below 1e-6, which would make the whole rule wrong rather than its implementation.
+
+---
+
+## ADR-019 — Benchmark identifiers are folded to lower case, and ambiguity is refused
+
+**Status:** accepted · **Date:** 2026-08-01 · **Stage:** 2
+
+**Context.** Spider and BIRD ship SQLite databases whose table and column names are mixed case — `Stadium`, `Singer_ID`, `Order Details`. Their gold SQL is written for SQLite, where identifiers are **case-insensitive**: `SELECT Name FROM Stadium` and `SELECT name FROM stadium` are the same query.
+
+PostgreSQL folds *unquoted* identifiers to lower case and then matches case-sensitively. So a converted schema that preserves `Stadium` can only be reached by a query that writes `"Stadium"` — and no gold query quotes anything.
+
+**Decision.** Fold every source identifier to lower case, quote it with `sql.Identifier` at every composition site, and **refuse** any name that cannot be represented unambiguously rather than rewriting it.
+
+Refused: names containing quotes, backslashes, semicolons, dots, or control characters; empty names; and anything over PostgreSQL's 63-byte limit.
+
+**Alternatives.**
+- *Preserve case and quote both sides* — correct only if every gold query quotes every identifier. None do, so this fails every question.
+- *Rewrite the gold SQL to quote identifiers* — moves the problem into a SQL rewriter that has to resolve every bare name against a schema, and gets the ambiguous cases wrong silently.
+- *Sanitise unusable names into something safe* — the tempting one. `Order#1` and `Order.1` both become `order_1`, two tables merge, the load succeeds, and every question about either is scored against the wrong data. **Rejected on the grounds that the failure is invisible.**
+- *Truncate names over 63 bytes* — this is what PostgreSQL itself does, which is exactly the problem: two long names sharing a prefix truncate to the same identifier and the server does not warn.
+
+**Tradeoff.** A database with an unrepresentable name is refused entirely rather than partially converted. That costs coverage — one database out of two hundred — and buys the guarantee that a converted database means what the benchmark meant. The loader names which database and which identifier, so the cost is legible rather than mysterious.
+
+**Consequences worth recording.** The collision guard this was designed around turned out to be unreachable from SQLite: SQLite compares table and column names case-insensitively too, so a source database holding both `Song` and `song` cannot exist. The guard stays — it is cheap, and it still covers a set of `db_id`s assembled from directory names on a case-sensitive filesystem — but it is defence *behind* the source engine rather than the only thing standing there. A test asserts the SQLite behaviour rather than a docstring asserting it.
+
+The length case, by contrast, *is* reachable: SQLite has no identifier length limit at all.
+
+**Generalises to:** when two systems disagree about identity, pick the stricter one and refuse the difference. Mapping the difference away produces a system that works until the day two things map to one.
+
+**Revisit:** if a benchmark arrives whose schemas are genuinely non-ASCII, which would make refusal too expensive and force a documented transliteration with a collision check.
+
+---
+
+## ADR-020 — Benchmark archives are pinned by a committed lockfile, recorded on first use
+
+**Status:** accepted · **Date:** 2026-08-01 · **Stage:** 2
+
+**Context.** Every number this project reports is computed from a benchmark archive. Two ways that goes wrong, and they are unrelated.
+
+A **silently different version**: Spider and BIRD have both been re-released with corrections. A run against March's `dev.json` and a run against September's are not comparable, and neither run records which one it used. No attacker required.
+
+A **tampered archive**: the download is a zip that gets extracted onto the machine and a set of SQLite files that get parsed by a C library.
+
+**Decision.** A `data/artifacts.lock.json` of observed SHA-256 digests, committed to the repository. The first acquisition records what it saw — explicitly, behind `--trust-on-first-use` — and every later one must match. Verification happens on the bytes on disk, *before* extraction, so a tampered archive never reaches the zip parser. The check runs even immediately after recording, which is what proves the recorded digest describes the file about to be extracted.
+
+**Why the digests are not hardcoded in source.** They would be a fabrication. Nobody who wrote that file has downloaded these archives, and a constant claiming to be the SHA-256 of Spider without ever having been compared to one is *worse* than no constant: it fails every honest download and gets "fixed" by pasting in whatever the failing run reported — trust-on-first-use with extra steps and a false claim in the source tree.
+
+**Alternatives.**
+- *No verification* — the status quo almost everywhere. Rejected: this is A08, and the non-adversarial case is the common one.
+- *Verify against a published checksum* — better, where one exists. Spider is distributed through Google Drive and BIRD through a project page; neither publishes a stable digest next to the file.
+- *Re-download and compare* — costs gigabytes to detect a change the lockfile detects for free.
+- *Update the lockfile automatically when it does not match* — this is the failure mode dressed as a feature. `record()` does not overwrite an existing entry, and the error message says explicitly not to edit it by hand to make a check pass.
+
+**Tradeoff.** The first acquisition is trusted. That is unavoidable without a published digest, and it is made *visible*: it needs a flag, it logs a warning, and what it records is committed and reviewable in a diff. Trust-on-first-use is only dangerous when it is invisible.
+
+**Also decided here.** There is no `--url` flag. Sources live in an allowlist in source code, so the thing being downloaded, extracted and parsed cannot be redirected by an argument an operator can be talked into.
+
+**Generalises to:** pinning is a reproducibility control first and a security control second. The security framing gets it built; the reproducibility framing is why it earns its keep.
+
+**Revisit:** if either benchmark starts publishing signed releases, in which case signature verification replaces first-use recording.
+
+---
+
+## ADR-021 — Splits are a hash of the database name, not a seeded shuffle
+
+**Status:** accepted · **Date:** 2026-08-01 · **Stage:** 2
+
+**Context.** [DATASETS.md](../ml/DATASETS.md) §5 requires splitting **by database, never by question** — a question-level split puts the same tables in train and eval, and the resulting Recall@k is high and meaningless. It also requires the assignment to be committed as a file.
+
+The natural implementation is `random.Random(seed).shuffle(db_ids)` and slice.
+
+**Decision.** Assign by hashing the database name: `blake2b(f"{seed}:{db_id}")` into a bucket, with fixed band boundaries deciding the split.
+
+**The reason.** A seeded shuffle is reproducible only while the *input list* is unchanged. Add one database, load Spider and BIRD in the other order, or change how the list is sorted, and every database after the insertion point can move to a different split. Held-out databases become training databases; the split file looks exactly as deterministic as it did before; nothing downstream can detect it.
+
+Hashing each name independently makes membership a property of the name alone. Adding databases never moves the ones already assigned.
+
+`blake2b` rather than `hash()`, which is randomised per process by `PYTHONHASHSEED` — the exact failure this is meant to prevent, arriving through the one function that looks like it cannot fail.
+
+**Tradeoff.** Proportions are approximate at small corpus sizes. A 68/12/20 split is a fine split; a held-out set that quietly absorbed three training databases is not a split at all.
+
+**Consequences worth recording.** The first implementation had `SMOKE` as "the five lowest-bucket dev databases" — a count, and therefore a rank *within a set*, which is precisely what the rest of the design rejects. Adding a database with a lower bucket displaces one that was already in smoke, and the per-commit regression check silently starts measuring different databases. A test written for the general stability property caught it. Smoke is now a sub-band of dev expressed as a fraction, so every split boundary is a constant.
+
+**Generalises to:** "deterministic given a seed" and "stable under change" are different properties, and the first is usually the only one that gets tested.
+
+**Revisit:** if a benchmark ships an official split, which should be used instead — comparability with published numbers beats internal consistency.
+
+---
+
+## ADR-022 — The conversion is verified by the eval harness's own comparator
+
+**Status:** accepted · **Date:** 2026-08-01 · **Stage:** 2
+
+**Context.** [DATASETS.md](../ml/DATASETS.md) §3 requires that the SQLite→PostgreSQL conversion be *verified, not assumed*: every gold query run on both engines, results compared. The open question was which notion of "the same" to use.
+
+A conversion defect does not raise. A column that silently became `text`, a foreign key that changed a join's row count, a date format that reorders a `MAX` — each lowers an accuracy number weeks later, and the investigation that follows looks at the model.
+
+**Decision.** Compare with `evals.comparison.compare` — the same function that will score the eval — rather than a stricter equality written for this purpose.
+
+**The reason.** The question is not "are these two databases identical". They are not; one is SQLite. The question is "will the eval score a correct answer as correct on the converted copy", and only the thing that will do the scoring can answer it. A stricter comparison here fails conversions the eval would have been perfectly happy with; a looser one passes conversions the eval will mark wrong.
+
+**Decided alongside it.**
+- A gold query that fails on its *own* SQLite database is a `gold_error` — a benchmark defect — and is excluded from the denominator rather than counted against the conversion. Same rule EVALUATION.md §5 already applies to scoring.
+- A transpile failure is its own outcome, distinct from a mismatch. One says the benchmark holds a query this project cannot parse; the other says the data moved. Collapsing them sends the investigation to the wrong component.
+- `verified` requires **every** comparable query to agree, not most of them. One disagreement is a class of data that moved, and which questions it affects is unknown until someone looks.
+- The CLI exits **3** when a database fails verification, distinct from exit 1 for a tool failure. A verification failure that exited 0 would let a CI step pass while reporting that the data is wrong.
+
+**Tradeoff.** Verification costs a full execution of every gold query on both engines — the most expensive thing the loader does, and it has to be re-run after any conversion change. `--per-database` caps it for a fast check; the full run is what licenses a published number.
+
+**Generalises to:** verify a transformation against the *consumer's* definition of equality, not the strictest one available. The strictest one reports differences nobody would ever have noticed and hides the fact that you never checked the ones that matter.
+
+**Revisit:** never, while the comparator and the verifier share a definition. If they diverge, this ADR is the thing that broke.

@@ -173,6 +173,56 @@ Date functions are the usual tell (`strftime` instead of `date_trunc`). The dial
 
 ---
 
+## Benchmark loading
+
+### `no digest is recorded for 'spider'`
+
+Expected on a first acquisition. Nothing is checked against the archive you have, so the loader will not extract it silently. Re-run with `--trust-on-first-use` and **commit `data/artifacts.lock.json`** — until it is committed, nothing checks that later runs use the same data.
+
+### `'spider' does not match the recorded digest`
+
+The archive is not the one every recorded number came from. Two causes, and they need different responses:
+
+- **The benchmark was re-released.** Decide which archive the project is measuring against and re-run the affected benchmarks. Then update the lockfile in a commit that says so.
+- **The download is not what it claims to be.** Do not extract it.
+
+The one response that is always wrong is editing the lockfile to make the check pass. `record()` will not overwrite an existing entry for exactly this reason, so `--trust-on-first-use` cannot be used to launder a second archive.
+
+### `archive member '...' escapes the destination`
+
+Working as intended, and worth reading before assuming a bug. `ZipFile.extractall` would have written that file. If the archive came from the official source and the digest matched, report it upstream; if the digest did not match, that is the more interesting finding.
+
+### `table 'X' contains characters that cannot be used safely`
+
+A source identifier that cannot be represented in PostgreSQL unambiguously — a quote, a dot, a control character — or one over 63 bytes. The database is refused rather than converted with the name rewritten, because a rewrite that collides with another name merges two tables and every question about either is then scored against the wrong data ([ADR-019](../architecture/DECISIONS.md#adr-019--benchmark-identifiers-are-folded-to-lower-case-and-ambiguity-is-refused)).
+
+Use `--keep-going` to convert the rest of the corpus and record which databases were skipped.
+
+### `schema 'X' already exists`
+
+A previous load left it there. `--replace` drops and reloads it. The loader will not load *into* an existing schema, because the result would be a mix of two databases returning plausible, wrong answers.
+
+### `verify` exits 3
+
+At least one database did not reproduce every gold result. The report names them and the failing queries. Read the outcome before the query:
+
+- `mismatch` — the data moved. This is the one that matters.
+- `gold_error` — the reference query fails on its own SQLite database. A benchmark defect; excluded from the denominator and not your problem.
+- `transpile_error` — sqlglot could not render the query for PostgreSQL. A parser gap, not a conversion defect.
+- `postgres_error` — ran on SQLite, errored on PostgreSQL. Usually a real type difference the conversion produced; check whether the column was coerced to `text` in the conversion report.
+
+Do not "fix" this by relaxing the comparison. The comparator is the one the eval will score with, so a change here changes every number.
+
+### `permission denied for schema spider_x` — from the read-only role
+
+The conversion did not grant, or `DB_READONLY_ROLE` names a role that does not exist. Migration 002 grants on `public` only; converted schemas are granted at conversion time. Re-run the conversion for that database rather than granting by hand — a hand-issued grant is not reproducible and tends to be wider than the loader's.
+
+### `LLM_MODEL is required` from a command that uses no model
+
+Should no longer happen: the loader composes only the settings groups it uses. If it reappears, something has started calling `Settings.load()` — the fix is to take the groups needed, not to set a fake `LLM_MODEL`, because a fake value in the environment outlives the command that needed it.
+
+---
+
 ## Training
 
 ### CUDA out of memory

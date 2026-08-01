@@ -12,9 +12,10 @@ the unit suite stays fast.
 from __future__ import annotations
 
 import os
+import sqlite3
 import subprocess
 import sys
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from pathlib import Path
 from urllib.parse import urlsplit, urlunsplit
 
@@ -24,6 +25,7 @@ import pytest
 from adapters.llm.fake import FakeLLMClient
 from core.settings import (
     AgentSettings,
+    BenchmarkSettings,
     DatabaseSettings,
     ExecutionSettings,
     LLMSettings,
@@ -87,6 +89,7 @@ def _isolate_env(monkeypatch: pytest.MonkeyPatch) -> None:
         RetrievalSettings,
         ProfilingSettings,
         AgentSettings,
+        BenchmarkSettings,
     ):
         monkeypatch.setitem(settings_cls.model_config, "env_file", None)
 
@@ -117,6 +120,35 @@ def profiling_settings() -> ProfilingSettings:
 @pytest.fixture
 def agent_settings() -> AgentSettings:
     return AgentSettings()
+
+
+@pytest.fixture
+def benchmark_settings() -> BenchmarkSettings:
+    return BenchmarkSettings()
+
+
+@pytest.fixture
+def make_sqlite_db(tmp_path: Path) -> Callable[..., Path]:
+    """Build a benchmark-shaped SQLite database: ``<root>/<db_id>/<db_id>.sqlite``.
+
+    The layout matters as much as the contents -- ``find_databases`` matches on
+    the directory name, and a fixture that wrote a bare file would let that
+    logic go untested while every test still passed.
+    """
+
+    def build(db_id: str, script: str, *, root: Path | None = None) -> Path:
+        folder = (root or tmp_path) / db_id
+        folder.mkdir(parents=True, exist_ok=True)
+        path = folder / f"{db_id}.sqlite"
+        connection = sqlite3.connect(path)
+        try:
+            connection.executescript(script)
+            connection.commit()
+        finally:
+            connection.close()
+        return path
+
+    return build
 
 
 # --- PostgreSQL ------------------------------------------------------------

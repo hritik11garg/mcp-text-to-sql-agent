@@ -14,17 +14,17 @@ Percentages are checkbox counts, not confidence. **Stages have not been built in
 |---|---|---|---|
 | 0 | Scaffolding — docs, deps, interpreter pin | ✅ Done | 100% |
 | 1 | **Core loop** — retrieval, generation, validation, execution, profiling, API, demo UI | 🚧 In progress | 58% |
-| 2 | **Eval harness** — comparison, Recall@k, artifacts, resumption | 🚧 In progress | 43% |
+| 2 | **Eval harness** — comparison, Recall@k, artifacts, resumption, benchmark loading | 🚧 In progress | 71% |
 | 3 | **MCP servers + client refactor** | 🚧 In progress | 81% |
 | 4 | **Agent layer** — decomposition, session memory, self-correction | ⬜ Not started | 0% |
 | 5 | **Fine-tuned schema linker** | ⬜ Not started | 0% |
 | 6 | **Hardening** — limits, tracing, tests | ⬜ Not started | 0% |
 
-**What is genuinely blocking, in order:** loading a benchmark dataset (blocks every number in Stages 2, 3 and 5), then the HTTP API and the demo UI it serves (blocks the Stage 1 close-out and any visual demo), then the agent loop.
+**What is genuinely blocking, in order:** wiring the pipeline into the harness's answerer seam (blocks every number in Stages 2, 3 and 5 — the loader now exists, so this is one connection rather than a slice of work), then the HTTP API and the demo UI it serves (blocks the Stage 1 close-out and any visual demo), then the agent loop.
 
 **Stage 1 dropped from ~75% to 58%** when the demo UI was added to its scope. The percentage got worse because the plan got more honest, which is the direction it should move.
 
-**Stage 1 is not "the core loop works end to end".** Every component is built and tested; nothing has been run against a real dataset from a clean checkout, because there is no dataset. That distinction is the difference between the percentage above and a working demo.
+**Stage 1 is not "the core loop works end to end".** Every component is built and tested; nothing has been run against a real dataset from a clean checkout. The loader that would produce one now exists — what is missing is that no benchmark archive has been put through it, and that the pipeline is not yet connected to the harness. That distinction is the difference between the percentage above and a working demo.
 
 ---
 
@@ -72,12 +72,14 @@ Scope: Spider/BIRD acquisition and SQLite→Postgres conversion; database-level 
 
 **Done when:**
 - [~] Reproducible from a clean checkout via one command — the command exists and refuses at the pipeline seam
-- [ ] Conversion verified — gold queries return identical results on SQLite and Postgres
-- [ ] Splits are database-disjoint and committed as a file
+- [x] Conversion verified — gold queries return identical results on SQLite and Postgres, compared with the harness's own comparator, exiting 3 when they do not
+- [x] Splits are database-disjoint and committed as a file — and stable when the corpus grows, which a seeded shuffle is not
 - [ ] Baseline rows in [../ml/BENCHMARKS.md](../ml/BENCHMARKS.md)
 - [~] Failure taxonomy populated with counts — the taxonomy and its counting exist; there is nothing to count yet
 
 **The measurement machinery landed before the data, deliberately.** Comparison, Recall@k, the failure taxonomy, artifacts and resumption are built and tested against synthetic cases — 84 tests, no model and no database. The order matters: the logic that decides what a number *means* is the part a benchmark cannot check, because a wrong comparison produces a plausible score rather than an error. Building it against a dataset would have meant debugging two unknowns at once.
+
+**The loader is built; no benchmark has been loaded through it.** Acquisition, conversion, verification and splits all exist and are tested — against synthetic SQLite databases for the logic, and against a real PostgreSQL for the conversion. What has not happened is a Spider or BIRD archive actually being downloaded, which is why DATASETS.md still says TBD for every count and digest. Those are properties of a download, and writing them in before one would make the file lie about what the project has been measured against.
 
 **Resumability was added to this stage's scope.** It was not in the original plan and it is what makes the harness usable at all here: free-tier models cap tokens per model per day, so a full run spans most of a budget and being stopped partway is routine rather than exceptional.
 

@@ -24,6 +24,11 @@ All configuration comes from environment variables, loaded and validated by `pyd
 | `DB_POOL_MAX_SIZE` | int | `10` | **This is what bounds concurrent load on the database** |
 | `DB_CONNECT_TIMEOUT_MS` | int | `5000` | |
 | `DB_TARGET_SCHEMA` | str | `public` | Schema questions are asked about |
+| `DB_READONLY_ROLE` | str | `sql_agent_ro` | The group role migration 002 creates. Used by the benchmark loader to grant `SELECT` on the schemas it creates |
+
+**`DB_TARGET_SCHEMA` is one schema, and the benchmark loader creates many.** Each benchmark database becomes its own schema (`spider_concert_singer`), so evaluating a question means pointing the servers at its database — `DB_TARGET_SCHEMA=spider_concert_singer`. Wiring that per question is Stage 2's remaining work; today it is set per run.
+
+**`DB_READONLY_ROLE` exists because migration 002 grants on `public` only.** A schema created afterwards is invisible to the read-only role until granted, so the loader has to name the role. It is validated as an identifier before it reaches a `GRANT` — quoting answers "how is this written", not "may this be named" ([ADR-017](../architecture/DECISIONS.md#adr-017--servers-claim-stdout-and-validate-arguments-themselves)).
 
 **Two URLs, and they must be different roles.** If `DATABASE_RO_URL` resolves to a role with write privileges, every containment guarantee in [SECURITY.md](SECURITY.md) is void. Startup validation asserts the read-only role cannot write — a real check against the database, not a naming convention.
 
@@ -192,6 +197,26 @@ Profiling is the one component whose **output is row data by design** — it exi
 **`PROFILE_ALLOW_VALUE_SAMPLING` should stay off unless every column being profiled has been audited by name.** Turning it on does not disable the denylist or the frequency threshold — those still apply. What it adds is verbatim cells, truncated and capped, for the cases where the *format* of a value matters and a summary cannot convey it.
 
 **There is no setting that widens which tables may be profiled.** The catalog is the allowlist, and a name not in it is rejected before any statement is composed. That is a containment boundary, not a convenience — see [SECURITY.md](SECURITY.md) §14.2.6, control 1.
+
+## 5b. Benchmark loader — implemented
+
+Read only by `python -m benchmark.load`. Nothing here is reachable from a request; every one of them is a limit on how much damage a hostile archive or a pathological source database can do before the loader gives up.
+
+| Variable | Type | Default | Notes |
+|---|---|---|---|
+| `BENCHMARK_DATA_DIR` | Path | `data` | Where archives are extracted. Gitignored except the lockfile and the splits |
+| `BENCHMARK_MAX_ARCHIVE_BYTES` | int | 8 GiB | Total **decompressed** bytes from one archive |
+| `BENCHMARK_MAX_ARCHIVE_MEMBERS` | int | `200000` | Member count ceiling |
+| `BENCHMARK_MAX_MEMBER_BYTES` | int | 4 GiB | Per-member ceiling |
+| `BENCHMARK_COPY_BATCH_ROWS` | int | `5000` | Bounds loader memory during `COPY` |
+| `BENCHMARK_TYPE_SCAN_ROWS` | int | `200000` | Rows read per column when inferring a PostgreSQL type |
+| `BENCHMARK_VERIFY_TIMEOUT_MS` | int | `30000` | `statement_timeout` for each gold query during verification |
+
+**The byte caps are enforced against bytes written, never against the sizes the archive declares.** A zip's directory is attacker-controlled: a 42-byte bomb declares whatever it likes. Raising them to accommodate a large benchmark is fine; the point is that the limit is a real one.
+
+**`BENCHMARK_TYPE_SCAN_ROWS` truncating is recorded, not silent.** SQLite columns are dynamically typed, so the declared type is a hint and the data is the evidence. A partial scan can be wrong in one direction only — too narrow — which surfaces as a load failure rather than a wrong answer, but only if someone knows to look. The conversion report names every table whose scan was truncated.
+
+**There is no variable that points the loader at a URL.** Sources are an allowlist in `benchmark/sources.py`; see [DATASETS.md](../ml/DATASETS.md) §8.
 
 ## 6. API — planned (Stage 1 close-out)
 

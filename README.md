@@ -124,7 +124,7 @@ That creates the `agent_meta` schema, the pgvector extension and the HNSW index,
 Verify the install — the security suite is the one that matters, and it passes by being **refused**:
 
 ```powershell
-pytest                    # 658 tests; integration, security and contract need Docker
+pytest                    # 782 tests; integration, security and contract need Docker
 pytest -m security        # the read-only containment suite, on its own
 ruff check . ; mypy
 ```
@@ -190,6 +190,7 @@ Directories marked *(stub)* exist with a docstring stating which stage fills the
 │   ├── profiling/              # column statistics under a disclosure budget
 │   ├── mcp_servers/            # four servers + the shared error contract
 │   ├── evals/                  # comparison, Recall@k, artifacts, resumable runs
+│   ├── benchmark/              # acquire, SQLite→Postgres, verify the conversion, splits
 │   ├── agent/                  # tools/list discovery; planner and memory — Stage 4
 │   └── api/                    # (stub) FastAPI + SSE
 ├── web/                        # (stub) React + TypeScript demo UI — Stage 1
@@ -198,6 +199,8 @@ Directories marked *(stub)* exist with a docstring stating which stage fills the
 │   ├── integration/            # real Postgres via testcontainers
 │   ├── contract/               # servers as subprocesses over real stdio
 │   └── security/               # negative tests — the role MUST be denied
+├── data/                       # benchmark data, gitignored — except artifacts.lock.json
+│                               # and splits/, which are the reproducibility record
 ├── results/                    # eval artifacts, gitignored — real rows, see SECURITY §14.2.8
 └── docs/
     ├── GLOSSARY.md

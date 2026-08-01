@@ -132,6 +132,50 @@ class UnknownTableError(ProfilingError):
         self.suggestion = suggestion
 
 
+# --- benchmark data --------------------------------------------------------
+
+
+class BenchmarkError(TextToSQLError):
+    """Base for failures acquiring, converting or verifying benchmark data.
+
+    Separate from :class:`ConfigurationError` even though both are fatal for
+    the tool that raises them: this hierarchy is raised by an offline loader,
+    never by a serving path, and nothing in the request loop should be able to
+    catch these by accident.
+    """
+
+
+class ArtifactIntegrityError(BenchmarkError):
+    """A downloaded archive does not match the digest recorded for it.
+
+    Always fatal, and the file is deleted rather than kept. A benchmark loaded
+    from an artifact nobody verified makes every number derived from it
+    incomparable to every other run, and the failure is silent.
+    """
+
+
+class UnsafeArchiveError(BenchmarkError):
+    """An archive member would escape the extraction directory, or is too large.
+
+    Covers path traversal, absolute paths, symlinks, and decompression bombs.
+    Raised *before* anything is written, so a rejected archive leaves no
+    partial extraction behind.
+    """
+
+
+class UnsafeIdentifierError(BenchmarkError):
+    """A benchmark identifier cannot be represented in PostgreSQL unambiguously.
+
+    Refusing rather than sanitising is deliberate: two distinct source names
+    mapped onto one safe name silently merge two tables, and every number
+    computed afterwards is wrong with nothing to indicate it.
+    """
+
+
+class ConversionError(BenchmarkError):
+    """A source database could not be converted, or the conversion is unverified."""
+
+
 # --- agent -----------------------------------------------------------------
 
 

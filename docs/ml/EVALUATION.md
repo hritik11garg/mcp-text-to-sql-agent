@@ -78,6 +78,10 @@ Three splits, with strictly different jobs:
 
 **The held-out split is not an iteration surface.** Tuning against it converts it into a dev split and the reported number becomes optimistic. If it gets used for iteration, that is recorded and a fresh held-out split is carved.
 
+**Splits are files, and the assignment is a property of the database name.** `python -m benchmark.load splits` writes one JSONL per split plus a committed assignment map. Membership is `blake2b(seed:db_id)` into a fixed band rather than a seeded shuffle, so adding databases never moves the ones already assigned — a shuffle would silently move held-out databases into train, and the split file would look exactly as deterministic as before ([ADR-021](../architecture/DECISIONS.md#adr-021--splits-are-a-hash-of-the-database-name-not-a-seeded-shuffle)).
+
+**The questions must come from a *verified* conversion.** Every gold query is executed on both the original SQLite and the converted PostgreSQL copy before a database is eligible to be scored against, using this document's own comparator ([DATASETS.md](DATASETS.md) §3.1). A conversion defect does not raise — it lowers an accuracy number, and the investigation that follows looks at the model.
+
 ## 3. Harness design
 
 Requirements, and where each stands:
