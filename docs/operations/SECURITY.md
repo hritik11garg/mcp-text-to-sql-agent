@@ -429,6 +429,18 @@ The four servers add no new capability. They add a *transport*, and a transport 
 
 **CIA impact.** Availability (stream corruption), Confidentiality (failure messages), Integrity is unaffected — the read-only role is unchanged by any of this.
 
+### 14.2.8 Eval artifacts are a second store of real rows — **Low** (Medium on production data)
+
+**Vulnerability.** Per-question artifacts persist both result sets to disk so a wrong verdict can be debugged. Those are real rows, in a store with different retention and access controls from the database they came from. *(OWASP LLM06 / A09; Confidentiality.)*
+
+**Why it's dangerous, and why it is only Low here.** It is the same argument that keeps result values out of the audit log (migration 001) and out of the logs (`LOG_RESULT_VALUES`): a copy nobody is tracking is a copy nobody will remember to delete. It rates Low because the intended data is a public benchmark — Spider and BIRD are downloadable by anyone. It rates **Medium** the moment the harness is pointed at a real database to measure something, which is a reasonable thing to want to do and is not prevented.
+
+**Secure implementation.** Rows are bounded at `MAX_PERSISTED_ROWS` (50) per result set, with `rows_truncated` recorded so a reader knows the artifact is partial rather than the query. `results/` is gitignored, which guards against publishing them but not against having them. Artifacts also carry the question text and generated SQL, both of which are the point.
+
+**Not solved.** Nothing expires or deletes a results directory, and nothing warns when the harness runs against a non-benchmark database. Both are operator responsibilities today, and naming them here is the whole mitigation.
+
+**CIA impact.** Confidentiality only.
+
 ### 14.3 Related: prompt injection reaches further with weaker models
 
 A free-tier model is generally more susceptible to injected instructions than a frontier model. This does **not** change the containment argument in §7 — a fully successful injection still only yields SQL, which is still parsed, still `SELECT`-only, and still runs under a role that cannot write. It does mean injection attempts will *succeed more often at the model layer*, so §7's position (contain, don't filter) matters more, not less. It also raises the value of the `MAX_TOOL_CALLS_PER_REQUEST` cap, since a manipulated weak model is likelier to loop.

@@ -2,23 +2,27 @@
 
 Six stages over 5–6 weeks. **Every stage produces something demoable**, so a bad week costs a stage rather than the project.
 
-Overall completion: **0%** (Stage 0 scaffolding done; no code yet)
-
 Working checklist: [TASKS.md](TASKS.md).
 
 ---
 
 ## Progress
 
-| Stage | Output | Weeks | Status | % |
-|---|---|---|---|---|
-| 0 | Scaffolding — docs, deps, interpreter pin | — | ✅ Done | 100% |
-| 1 | **Core loop** — retrieval, generation, validation, sandboxed execution | 1.5–2 | 🚧 In progress | ~50% |
-| 2 | **Eval harness** — Spider/BIRD subset, execution accuracy | 0.5 | ⬜ Not started | 0% |
-| 3 | **MCP servers + client refactor** | 0.5–1 | ⬜ Not started | 0% |
-| 4 | **Agent layer** — decomposition, session memory, self-correction | 1 | ⬜ Not started | 0% |
-| 5 | **Fine-tuned schema linker** | 1 | ⬜ Not started | 0% |
-| 6 | **Hardening** — limits, tracing, tests | 0.5 | ⬜ Not started | 0% |
+Percentages are checkbox counts, not confidence. **Stages have not been built in order**, and the two that jumped the queue each carry an explicit cost recorded in their section below.
+
+| Stage | Output | Status | % |
+|---|---|---|---|
+| 0 | Scaffolding — docs, deps, interpreter pin | ✅ Done | 100% |
+| 1 | **Core loop** — retrieval, generation, validation, execution, profiling | 🚧 In progress | ~75% |
+| 2 | **Eval harness** — comparison, Recall@k, artifacts, resumption | 🚧 In progress | ~50% |
+| 3 | **MCP servers + client refactor** | 🚧 In progress | ~85% |
+| 4 | **Agent layer** — decomposition, session memory, self-correction | ⬜ Not started | 0% |
+| 5 | **Fine-tuned schema linker** | ⬜ Not started | 0% |
+| 6 | **Hardening** — limits, tracing, tests | ⬜ Not started | 0% |
+
+**What is genuinely blocking, in order:** loading a benchmark dataset (blocks every number in Stages 2, 3 and 5), then the HTTP API (blocks the Stage 1 close-out), then the agent loop.
+
+**Stage 1 is not "the core loop works end to end".** Every component is built and tested; nothing has been run against a real dataset from a clean checkout, because there is no dataset. That distinction is the difference between the percentage above and a working demo.
 
 ---
 
@@ -64,11 +68,15 @@ Scope: Spider/BIRD acquisition and SQLite→Postgres conversion; database-level 
 **Demo:** one command produces a scored report over the held-out split.
 
 **Done when:**
-- [ ] Reproducible from a clean checkout via one command
+- [~] Reproducible from a clean checkout via one command — the command exists and refuses at the pipeline seam
 - [ ] Conversion verified — gold queries return identical results on SQLite and Postgres
 - [ ] Splits are database-disjoint and committed as a file
 - [ ] Baseline rows in [../ml/BENCHMARKS.md](../ml/BENCHMARKS.md)
-- [ ] Failure taxonomy populated with counts
+- [~] Failure taxonomy populated with counts — the taxonomy and its counting exist; there is nothing to count yet
+
+**The measurement machinery landed before the data, deliberately.** Comparison, Recall@k, the failure taxonomy, artifacts and resumption are built and tested against synthetic cases — 84 tests, no model and no database. The order matters: the logic that decides what a number *means* is the part a benchmark cannot check, because a wrong comparison produces a plausible score rather than an error. Building it against a dataset would have meant debugging two unknowns at once.
+
+**Resumability was added to this stage's scope.** It was not in the original plan and it is what makes the harness usable at all here: free-tier models cap tokens per model per day, so a full run spans most of a budget and being stopped partway is routine rather than exceptional.
 
 ## Stage 3 — MCP servers + client refactor
 

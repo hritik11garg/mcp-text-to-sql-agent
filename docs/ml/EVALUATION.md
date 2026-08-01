@@ -1,6 +1,6 @@
 # Evaluation
 
-> **Status: TBD — Stage 2.** Metric definitions and harness design below are decided. **No results appear here until the harness is committed and reproducible.** Results live in [BENCHMARKS.md](BENCHMARKS.md); this page defines what the numbers mean.
+> **Status: the harness is built; no benchmark is loaded yet.** Result comparison, Recall@k, the failure taxonomy, per-question artifacts and resumable runs ship in `src/evals/` and are covered by 84 tests. What is missing is a dataset to point them at, and a pipeline wired into the answerer seam — `python -m evals.run` refuses with that message rather than reporting 0%. **No results appear here until both exist.** Results live in [BENCHMARKS.md](BENCHMARKS.md); this page defines what the numbers mean.
 
 The eval harness is Stage 2 — deliberately before the MCP refactor, the agent layer, and the fine-tune. Without a baseline, every later change is an unfalsifiable claim of improvement.
 
@@ -20,9 +20,16 @@ Comparison rules — each is a judgement call that changes the number, so each i
 | Row order | Ignored unless gold has `ORDER BY` | Ordering is only meaningful when requested |
 | Column names | Ignored | Aliasing is stylistic |
 | Duplicate rows | Significant | `DISTINCT` changes meaning |
-| Float comparison | Tolerance 1e-6 | Aggregation ordering causes drift |
+| Float comparison | Equal to 6 decimal places | Aggregation ordering causes drift well below that. Implemented as rounding, not a tolerance — see below |
 | NULL vs empty string | Distinct | They mean different things |
 | Empty result | Matches only an empty gold result | Otherwise a broken query scores on every empty-result question |
+| Numeric types | `int`, `float`, `Decimal` unified | `SUM(x)` returns `Decimal` where `x` returns `int`; no meaningful difference is being hidden |
+| A number vs its string | **Distinct** | A query returning `'1'` where the reference returns `1` has a real defect |
+| Booleans vs numbers | **Distinct** | Added when the harness was built — the table above did not cover it. Consistent with the row above, and strict, which understates accuracy rather than inflating it |
+
+**Column order and column names are both ignored, which leaves nothing to match columns by except their contents.** So comparison searches for a bijection between predicted and gold columns rather than zipping them positionally. The search is bounded at 8 columns; above that, columns are matched positionally and the result records that it did — scoring under a *stricter* rule than this table documents, which an aggregate must not hide.
+
+**Float equality is implemented as rounding to 6 decimal places, not as `|a-b| < 1e-6`.** A tolerance-based equality is not transitive: with a=1.0000000, b=1.0000005, c=1.0000010, a≈b and b≈c but a≉c. Sorting and multiset comparison both require transitivity, so a non-transitive equality would make the verdict depend on the order rows happened to arrive in — which is the one property a benchmark cannot have. See [ADR-018](../architecture/DECISIONS.md).
 
 **Why execution accuracy, not exact match.** Exact match penalizes correct SQL written differently — a join reordered, a subquery written as a CTE. That measures stylistic conformity, not correctness. Exact match is recorded as a secondary signal only.
 
@@ -73,14 +80,21 @@ Three splits, with strictly different jobs:
 
 ## 3. Harness design
 
-> **TBD — Stage 2** for implementation. Requirements:
+Requirements, and where each stands:
 
-- **Deterministic and re-runnable** from a clean checkout via one command.
-- **Records everything** needed to reproduce: commit, model, prompt version, retriever `model_version`, split, seed, hardware, timestamp.
-- **Persists per-question artifacts** — generated SQL, gold SQL, both result sets, every validation attempt, timings. Aggregate scores without artifacts cannot be debugged.
-- **Isolated database per question** where the benchmark requires it, so cross-question contamination is impossible.
-- **Parallelism-safe** and bounded, so a full run finishes in reasonable wall-clock without overwhelming the database.
-- **Emits both** a human-readable summary and machine-readable JSON for BENCHMARKS.md rows.
+- [x] **Deterministic and re-runnable** from a clean checkout via one command.
+- [x] **Records everything** needed to reproduce: commit, model, prompt version, retriever `model_version`, split, seed, timestamp — written as a manifest *before* the first question, so an interrupted run still records what it was trying to do. Hardware is not captured yet.
+- [x] **Persists per-question artifacts** — generated SQL, gold SQL, both result sets, attempts, timings, and which model actually answered. Aggregate scores without artifacts cannot be debugged.
+- [x] **Resumable.** Not in the original list, and it turned out to be the requirement that shaped the design — see below.
+- [ ] **Isolated database per question** where the benchmark requires it. Lands with dataset loading, which is what creates several databases to isolate.
+- [ ] **Parallelism-safe** and bounded. Sequential today; on a free tier the binding constraint is tokens per minute, not wall-clock.
+- [x] **Emits both** a human-readable progress stream (stderr) and machine-readable JSON (stdout), so the command composes.
+
+**Resumability is not a convenience here.** Free-tier models cap tokens per model per day, so a 200-question run spans most of a budget and being stopped at question 140 is an ordinary operating condition. Every question is written as it completes and a re-run skips what is already on disk.
+
+The corollary is a refusal: a resumed run must have the **same configuration fingerprint** — dataset, split, model, retriever version, prompt version, commit and seed. Resuming after any of those change would produce a results directory that is half one configuration and half another, and every number computed from it would be a weighted average of two things nobody meant to average. The commit is in the fingerprint deliberately: fixing a bug and re-running is the easiest way to do this by accident.
+
+**The pipeline is injected, not built in.** The runner takes an *answerer* — anything that turns a question into candidate SQL — so the five baselines in §4 are five answerers over one orchestration, and the whole harness is testable with a scripted one. It also means gold and predicted SQL go through the *same* query runner: different connections or type adapters would return `Decimal('1')` on one side and `1.0` on the other, and a correct answer would be reported as a value mismatch.
 
 ```powershell
 python -m evals.run --split held-out --retriever fine-tuned --model $env:LLM_MODEL --out results/

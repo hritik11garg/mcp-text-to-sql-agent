@@ -30,6 +30,8 @@ Testing effort follows that ordering. Claim 1 gets **negative tests that must fa
 
 Eval is deliberately outside the test suite — it costs money, it is non-deterministic, and it produces measurements rather than pass/fail. It runs on demand and per release, not per commit.
 
+**The eval *harness*, however, is ordinary code and is tested like it.** The machinery that decides what a number means — result comparison, Recall@k, the failure taxonomy, resumption — has no model and no database anywhere near it, which is the point of the injected answerer seam. That logic has to be trustworthy *before* tokens are spent producing numbers with it, because a wrong comparison produces a plausible score rather than a failure.
+
 ## 3. Unit tests
 
 Fast, isolated, no I/O. The bulk of the suite.
@@ -42,6 +44,8 @@ High-value targets:
 - **Retry budget** — exhaustion raises rather than looping.
 - **Settings validation** — out-of-range values fail at startup, client values clamp to ceilings.
 - **Prompt assembly** — stable prefix is byte-identical across requests (the prompt-cache precondition).
+- **Result comparison** — every rule in [../ml/EVALUATION.md](../ml/EVALUATION.md) §1.1, one test each, written as an executable copy of that table. This is the highest-value unit test in the project: a bug in `compare` does not raise, it returns a *number*, and the number looks exactly like a correct one.
+- **Eval resumption** — a finished question is not asked again, the summary covers the whole run rather than the last invocation, and a resume with a different model or commit is refused.
 - **Profiling bounds** — identifier resolution happens *before* any statement is composed (asserted with a connection that raises on any access, so the ordering is tested rather than the outcome); type eligibility for extremes; sample-size clamping.
 
 The LLM is a fake that returns scripted responses, so retry, decomposition, and self-correction logic is fully testable without a live model.

@@ -94,16 +94,18 @@ Convention: `[ ]` open · `[x]` done · `[~]` in progress · `[!]` blocked
 
 ## Stage 2 — Eval harness
 
+- [x] Result-set comparison with the rules in EVALUATION.md §1.1 — plus three the rules did not cover (numeric-type unification, number-vs-string, boolean-vs-number), and rounding rather than a tolerance because equality has to be transitive (ADR-018)
+- [x] Recall@k computation — gold elements extracted from the reference SQL with alias resolution; unresolvable references counted and reported rather than dropped
+- [x] Per-question artifact persistence — including which model actually answered, since a fallback chain can switch mid-run
+- [x] Failure taxonomy with counts; gold errors counted separately and excluded from the denominator
+- [x] **Resumable runs** — not on the original list, and the requirement that shaped the design. A spent daily token cap costs the questions still outstanding, not the run
+- [x] `python -m evals.run` CLI — complete except the pipeline seam, which it refuses at rather than reporting 0%
 - [ ] Dataset download script with checksum verification
 - [ ] SQLite → Postgres conversion
 - [ ] **Verify conversion: gold queries return identical results on both**
 - [ ] Database-level splits (train / dev / held-out / smoke), committed as a file
-- [ ] Result-set comparison with the rules in EVALUATION.md §1.1
-- [ ] Recall@k computation
-- [ ] Per-question artifact persistence
-- [ ] `python -m evals.run` CLI
+- [ ] Wire the pipeline into the answerer seam — *the one line `evals.run` refuses at*
 - [ ] Baseline runs: no-retrieval, retrieval-only, +validation
-- [ ] Failure taxonomy with counts; gold errors counted separately
 - [ ] BENCHMARKS rows + DATASETS/EVALUATION filled in
 - [ ] CHANGELOG v0.2
 

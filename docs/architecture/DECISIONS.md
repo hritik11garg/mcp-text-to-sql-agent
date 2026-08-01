@@ -330,3 +330,35 @@ Claiming stdout also means a genuinely useful `print` during development goes to
 **Generalises to:** when a library's default error path is *more* informative than your own, that is usually a leak, not a feature.
 
 **Revisit:** when the Streamable HTTP transport lands. The stdout guard is stdio-specific and becomes inert there; the error contract is not, and must apply identically.
+
+---
+
+## ADR-018 — Result comparison rounds floats rather than applying a tolerance
+
+**Status:** accepted · **Date:** 2026-08-01 · **Stage:** 2
+
+**Context.** [EVALUATION.md](../ml/EVALUATION.md) §1.1 specifies float equality "within 1e-6", to absorb the drift that aggregation ordering produces. The obvious implementation is `abs(a - b) < 1e-6`.
+
+It does not work, for a reason that has nothing to do with floats: **a tolerance-based equality is not transitive.** With a=1.0000000, b=1.0000005 and c=1.0000010, a≈b and b≈c but a≉c.
+
+Two of the comparison rules require transitivity. Row order is ignored unless the gold query is ordered, so rows are compared as a **multiset** — which means hashing them. Column order and column *names* are both ignored, so columns can only be matched by content, which means sorting and grouping them. Neither operation is well-defined over a relation that is not an equivalence relation: the answer would depend on the order the rows happened to arrive in.
+
+A benchmark whose verdict depends on row arrival order is not a benchmark.
+
+**Decision.** Canonicalise every numeric value by rounding to 6 decimal places, then compare canonical forms with `==`. Transitive by construction, hashable, and sortable.
+
+`int`, `float` and `Decimal` are unified in the same step, because `SUM(x)` returns a `Decimal` where `x` returns an `int` and no meaningful difference is being hidden. Strings are **not** unified with numbers: a query returning `'1'` where the reference returns `1` has a real defect, and the strict reading catches it.
+
+**Alternatives.**
+- *`math.isclose` / `abs(a-b) < tol`* — the specification's literal reading. Rejected above. Worth naming precisely because it is what anyone would write first, and the failure is silent: it produces slightly wrong scores on some runs and correct ones on others.
+- *Sort, then compare adjacent pairs with a tolerance* — restores a usable ordering but not equality; two multisets that should match can still disagree depending on which representative each ended up next to.
+- *Compare as strings with fixed formatting* — equivalent to rounding, and loses the ability to unify `Decimal('1.0')` with `1`.
+- *Round to more places than the tolerance implies* — rejected as false precision. The two numbers should say the same thing, and 6 is what §1.1 already committed to.
+
+**Tradeoff.** Rounding and a tolerance disagree for pairs straddling a rounding boundary: 1.0000004 and 1.0000006 differ by 2e-7 and are "equal" under a tolerance but not under rounding. Rounding is therefore the **stricter** of the two at the margin, which understates accuracy rather than inflating it — the safe direction for a correctness metric, and the direction a portfolio project should err in.
+
+**Consequences worth recording.** Implementing this surfaced two rules §1.1 did not cover, both now added there: numeric-vs-string is distinct, and **boolean-vs-number is distinct**. The second needed real care — `bool` is a subclass of `int` *and* `True == 1.0` is true in Python, so skipping the numeric branch is not sufficient; the value has to be tagged or a boolean column silently matches a numeric one.
+
+**Generalises to:** when a specification says "equal within ε", check what the code needs to *do* with equality. If it sorts, groups, or hashes, ε is not available and the specification means something it did not say.
+
+**Revisit:** if a benchmark appears whose correct answers genuinely differ below 1e-6, which would make the whole rule wrong rather than its implementation.

@@ -4,15 +4,16 @@
 >
 > | Landed | Next |
 > |---|---|
-> | **Four MCP servers over stdio, with runtime `tools/list` discovery** | The eval harness — every accuracy number waits on it |
+> | **Four MCP servers over stdio, with runtime `tools/list` discovery** | **Loading a benchmark dataset — every accuracy number waits on it** |
 > | Postgres 16 + pgvector, Alembic migrations | FastAPI + SSE, and the `/health` · `/ready` pair |
-> | `SELECT`-only role, proven by 30 negative tests | Streamable HTTP transport, which is where auth first matters |
+> | `SELECT`-only role, proven by 30 negative tests | Wiring the pipeline into the eval harness's answerer seam |
 > | Schema catalog — introspection, serialization, embedding | The agent loop that drives the discovered tools |
 > | Retrieval — pgvector ANN, join-path expansion, clamped limits | |
 > | Validation — sqlglot AST + `EXPLAIN`, refused at both layers | |
 > | Execution — row limits, timeouts, audit trail | |
 > | Generation — provider-agnostic, with a model fallback chain | |
 > | Profiling — column stats under a documented disclosure budget | |
+> | Eval harness — comparison, Recall@k, resumable runs | |
 
 An agent that answers analytical questions in plain English against a real PostgreSQL database. Capabilities are exposed as **four MCP servers** rather than hardcoded functions, so any MCP host — Claude Desktop, or your own client — can point at them and query its own database.
 
@@ -119,7 +120,7 @@ That creates the `agent_meta` schema, the pgvector extension and the HNSW index,
 Verify the install — the security suite is the one that matters, and it passes by being **refused**:
 
 ```powershell
-pytest                    # 574 tests; integration, security and contract need Docker
+pytest                    # 658 tests; integration, security and contract need Docker
 pytest -m security        # the read-only containment suite, on its own
 ruff check . ; mypy
 ```
