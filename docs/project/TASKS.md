@@ -16,8 +16,8 @@ Convention: `[ ]` open · `[x]` done · `[~]` in progress · `[!]` blocked
 - [x] Record the decisions knowable now in DECISIONS.md
 - [x] `pyproject.toml` — `requires-python`, ruff, mypy, pytest, coverage config
 - [x] `.gitignore` (`.venv`, `.env`, `data/`, `checkpoints/`, `results/`, caches)
-- [ ] `git init` + initial commit
-- [ ] Source tree skeleton
+- [x] `git init` + initial commit
+- [x] Source tree skeleton
 
 ## Stage 1 — Core loop
 
