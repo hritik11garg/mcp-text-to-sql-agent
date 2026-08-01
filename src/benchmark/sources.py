@@ -66,8 +66,11 @@ KNOWN_ARTIFACTS: dict[str, Artifact] = {
         homepage="https://yale-lily.github.io/spider",
         url=None,
         note=(
-            "Spider 1.0 -- NOT Spider 2.0, which is a different task on paid "
-            "BigQuery/Snowflake warehouses and ships no SQLite databases. "
+            "Spider 1.0 -- NOT Spider 2.0, which is a different task: enterprise "
+            "workflows whose expected output is CSV files, and which releases "
+            "only a small amount of gold SQL. This harness computes execution "
+            "accuracy and Recall@k *from* a reference query, so it has nothing "
+            "to work with there. See DATASETS.md section 1. "
             "Distributed via Google Drive, which serves an interstitial rather "
             "than the file for automated clients. Download it in a browser and "
             "pass --archive."

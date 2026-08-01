@@ -118,6 +118,11 @@ Cut reasons: `scope` (good, doesn't fit 6 weeks) · `unproven` (needs a measurem
 
 **Why not v1.** Needs validation against human grading before it can be trusted, and v1's multi-step eval set is small enough to grade by hand. An unvalidated automatic grader produces numbers that look rigorous and are not.
 
+### Spider 2.0-DBT as a multi-step benchmark
+`scope` · 68 repository-level tasks over DuckDB, run locally with no account and no cost.
+
+**Why not v1.** Spider 2.0's expected output is CSV files rather than SQL, and it releases only a small amount of gold SQL — so neither execution accuracy nor Recall@k, both computed from a reference query, can be produced from it as the harness stands. It also needs the agent layer to exist: solutions are multi-query workflows over 1,000+ column schemas. Worth revisiting at Stage 4 as an alternative to the hand-authored compound set in [DATASETS.md](../ml/DATASETS.md) §6, which has a real self-authorship bias problem that an external benchmark would not.
+
 ### Test Suite Accuracy
 `scope` · Score against several randomly generated databases per question rather than one, which is Spider's official metric.
 

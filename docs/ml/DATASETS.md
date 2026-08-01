@@ -10,7 +10,19 @@
 
 **Why it is here.** It is the standard reference point, and schemas are small and clean, which makes it the right benchmark for getting the core loop correct.
 
-> **Spider 1.0, not Spider 2.0 — and this needs saying now that both exist.** Spider 2.0 is a different task, not a newer version of this one: it targets real enterprise warehouses on **BigQuery and Snowflake**, which are paid cloud services, and it is agentic multi-step work over project codebases rather than single-query text-to-SQL. It fails this project's constraint that everything required to run, evaluate and demo it is free and open source ([PROJECT.md](../../PROJECT.md)), and it does not ship the SQLite databases this loader converts. Spider 2.0 is the more interesting target for the Stage 4 agent layer, and it is not a substitute here.
+> **Spider 1.0, not Spider 2.0 — and this needs saying now that both exist.** Spider 2.0 is a *different task*, not a newer version of this one: 632 enterprise workflow problems over databases with 1,000–3,000+ columns, where a solution is multiple queries often exceeding 100 lines, and **the expected output is CSV files rather than SQL**.
+>
+> | Setting | Examples | Databases | Cost |
+> |---|---|---|---|
+> | Spider 2.0-Snow | 547 | Snowflake | Free of charge (sponsored quota; queries queued) |
+> | Spider 2.0-DBT | 68 | DuckDB via dbt | Free, and fully local |
+> | Spider 2.0-Lite | 547 | BigQuery 214 · Snowflake 198 · **SQLite 135** | Some cost |
+>
+> **Cost is not the disqualifier, and an earlier version of this note wrongly said it was.** Two of the three settings are free, and one runs on DuckDB with nothing hosted. The disqualifier is that **Spider 2.0 does not ship the gold SQL this harness needs** — the project states only a small amount of gold SQL is released, and explicitly discourages using it for fine-tuning. Execution accuracy and Recall@k are both computed *from* a reference query here; without one there is nothing to compare against and nothing to extract gold schema elements from.
+>
+> The practical argument is just as strong: GPT-4o scores **10.1%** on Spider 2.0 against 86.6% on Spider 1.0. Bringing up a pipeline that has never produced a number, on a benchmark where a frontier model scores 10%, means being unable to tell "my retrieval is broken" from "the benchmark is hard."
+>
+> **Spider 2.0-DBT is a genuine Stage 4 target** — 68 tasks, DuckDB, local, no account. Worth revisiting once the agent layer exists and there is a Spider 1.0 baseline to reason from. It is not a substitute here.
 >
 > Spider 1.0's leaderboard closed to new submissions in February 2024 and its test set is public. That costs nothing this project needs — the goal is a number in a published range, not a leaderboard row.
 
