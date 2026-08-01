@@ -58,7 +58,9 @@ Why validation and execution are separate capabilities, how blast radius is boun
 
 ## Demo
 
-> **TBD — Stage 1.** Demo GIF, screenshots, and the Claude Desktop walkthrough land once the core loop is demoable. Exact commands and expected output: [DEMO_SCRIPT.md](docs/project/DEMO_SCRIPT.md).
+> **TBD — Stage 1.** A React UI over the SSE stream, plus a GIF and screenshots, land with the API. Exact commands and expected output: [DEMO_SCRIPT.md](docs/project/DEMO_SCRIPT.md).
+>
+> The MCP servers run today and any MCP host can drive them ([MCP.md](docs/architecture/MCP.md) §9) — but that needs a host installed and configured, so it is how the project is *used*, not how it is *seen*.
 
 ## Architecture
 

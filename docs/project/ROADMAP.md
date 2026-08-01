@@ -38,7 +38,7 @@ Documentation structure, dependency set verified against PyPI for Python 3.12, i
 
 The first demoable thing. Ask a question in English, get an answer from Postgres.
 
-Scope: Postgres + pgvector up with roles and migrations; schema ingestion and embedding; baseline retrieval; SQL generation; sqlglot AST validation + `EXPLAIN`; sandboxed execution under limits; FastAPI + SSE.
+Scope: Postgres + pgvector up with roles and migrations; schema ingestion and embedding; baseline retrieval; SQL generation; sqlglot AST validation + `EXPLAIN`; sandboxed execution under limits; FastAPI + SSE; **a React demo UI that consumes the stream**.
 
 **Demo:** a question over a loaded schema returns a correct answer, with progress streaming.
 
@@ -48,6 +48,7 @@ Scope: Postgres + pgvector up with roles and migrations; schema ingestion and em
 - [x] Row limits and statement timeouts are enforced and tested — at the role level *and* per request, the latter injected into the AST rather than requested in the prompt
 - [~] `.env.example` and [CONFIG.md](../operations/CONFIG.md) match the implementation — CONFIG.md tracks every shipped setting; `.env.example` is still outstanding
 - [ ] Span boundaries are in place (instrumentation added later, structure now)
+- [ ] **A browser can ask a question and watch it being answered.** Added after noticing the project had no surface a reader could see — the MCP servers are a capability, not a demo, and until this exists there is nothing to put in a README GIF either
 
 **Landed so far:** Postgres + pgvector with migrations and the read-only role (30 negative tests, green); the `LLMClient` and `Embedder` ports; typed settings with an SSRF guard; the schema catalog — introspection, serialization, embedding, and an idempotent indexer; retrieval — ANN over pgvector with `table_filter`, join-path expansion and clamped limits; five-stage SQL validation with structured rejections and nearest-match suggestions; sandboxed execution with AST-level row limits, per-statement timeouts and an audit trail on a separate owner connection; SQL generation behind one OpenAI-compatible adapter with a model fallback chain; and table profiling under an explicit disclosure budget.
 
@@ -84,7 +85,9 @@ Scope: Spider/BIRD acquisition and SQLite→Postgres conversion; database-level 
 
 Scope: four MCP servers; agent becomes an MCP client with runtime discovery; stdio and HTTP transports; contract tests; Claude Desktop config.
 
-**Demo:** point Claude Desktop at the servers and query a database from it.
+**Demo:** any MCP host — Claude Desktop, or the project's own `ToolRegistry` — connects, discovers the four tools, and queries a database with none of them hardcoded.
+
+> **This is a capability claim, not the project's demo.** Seeing it requires installing a host, editing a JSON config with absolute paths, a running Postgres and an indexed catalog. Nobody evaluating this repo will do that, and an earlier version of this line said "point Claude Desktop at the servers" as though they would. The thing a reader actually sees is the web UI in Stage 1's close-out.
 
 **Done when:**
 - [x] All four servers pass contract tests

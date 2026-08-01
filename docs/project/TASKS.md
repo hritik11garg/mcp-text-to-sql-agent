@@ -85,6 +85,15 @@ Convention: `[ ]` open · `[x]` done · `[~]` in progress · `[!]` blocked
 - [ ] Sanitized error envelope
 - [ ] `.env.example`
 
+### Demo UI
+- [ ] Vite + React + TypeScript app under `web/`, no server-side rendering
+- [ ] `POST /v1/query` over SSE — render each agent step as it arrives
+- [ ] Show the **generated SQL**, not just the answer — it is the thing worth seeing
+- [ ] Surface validation attempts and retries, since the self-correction loop is the point
+- [ ] Surface `truncated` explicitly — never present a cut result as complete
+- [ ] Served by FastAPI as static files in production; Vite dev server locally
+- [ ] Screenshots + GIF for the README
+
 ### Stage 1 close-out
 - [ ] End-to-end from clean checkout
 - [ ] Fill in SYSTEM_ARCHITECTURE, API, CONFIG, PROMPTS with real content
