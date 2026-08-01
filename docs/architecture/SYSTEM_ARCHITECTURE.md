@@ -74,13 +74,13 @@ Four processes, each a real capability boundary rather than a wrapper around a f
 | `schema_search` | Yes (embeddings) | No | Yes | Vector search over serialized schema elements |
 | `validate_sql` | Yes (`EXPLAIN` only) | No | **Yes, freely** | Never executes the statement |
 | `execute_sql` | Yes | **No** — read-only role | No | Row limits, statement timeout, cost cap |
-| `profile_table` | Yes | No | Yes | Column stats and sampled rows for disambiguation |
+| `profile_table` | Yes | No | Yes | Column stats for disambiguation. **The only server whose output is row-derived by design** — see §2.6 |
 
 ### 2.4 Retrieval subsystem
 
 Schema elements (tables and columns, serialized with names, types and comments) are embedded and stored in pgvector. At query time the question is embedded by the *same* embedder and the top-k elements retrieved, along with the foreign-key edges joining the tables that matched — retrieval that returns two tables without the path between them leaves the model to invent the join condition.
 
-Representative column values can also be included, but sampling is **off by default**: it copies real rows into the catalog, and the catalog is quoted into prompts sent to a third-party model. See [../operations/SECURITY.md](../operations/SECURITY.md) §14.2.
+Representative column values can also be included, but sampling is **off by default**: it copies real rows into the catalog, where they persist until the next re-index and appear in no audit trail. Those values improve *retrieval* and are never rendered into a prompt — the prompt is built from name, type and comment. See [../operations/SECURITY.md](../operations/SECURITY.md) §14.2.1 and §14.2.5.
 
 Two properties are enforced rather than assumed:
 
@@ -96,6 +96,25 @@ Both are exercised by the same eval harness so the Recall@k delta is a clean abl
 ### 2.5 Database
 
 PostgreSQL 16 with pgvector. Two roles: an owner role used by migrations and the embedding indexer, and a `SELECT`-only role used by `execute_sql`. Details in [DATABASE.md](DATABASE.md).
+
+### 2.6 Profiling subsystem
+
+Retrieval answers *which columns might be relevant*. It cannot answer the question that actually blocks a correct query: given two plausible columns, or a column storing `'FI'` rather than `'Finland'`, what is really in there? `TableProfiler` answers that, and it is the one component in the system whose **output is row data by design** — everywhere else, values either stay in the database or stay in a store the operator controls.
+
+That makes it the component with the strictest bounds, and they are worth listing because each one closes a different failure:
+
+| Bound | Closes |
+|---|---|
+| Identifiers resolved against the catalog **before** a statement is composed | A model-authored `table: "pg_authid"`. Quoting would escape it correctly and then read it |
+| Runs on the `SELECT`-only role | A table the agent was never granted — degrades with a reason instead |
+| Sensitive-column denylist, applied before the read | Values never enter the process, the driver's buffers, or an exception |
+| A value must occur ≥ `PROFILE_MIN_VALUE_FREQUENCY` times to be reported | A value that identifies a record rather than a category — including in a column whose name reveals nothing |
+| `min`/`max` for numeric and temporal types only | `min(customer_name)` returning a person's name labelled as a statistic |
+| Raw cells behind `PROFILE_ALLOW_VALUE_SAMPLING`, off, uncloseable by a caller | A model asking for 10,000 sample rows |
+
+Every number a profile reports is computed over at most `PROFILE_SCAN_LIMIT` rows in physical order — not a random sample, because `ORDER BY random()` reads the whole table and `TABLESAMPLE` does not work on views. The bound is reported alongside the numbers so a reader cannot over-trust them, and anything suppressed is reported *as* suppressed with the reason, so an empty column and a refused one are distinguishable.
+
+See [ADR-016](DECISIONS.md#adr-016--a-frequency-threshold-not-a-pii-regex-decides-which-values-a-profile-may-reveal) for why a frequency threshold rather than a PII regex, and [../operations/SECURITY.md](../operations/SECURITY.md) §14.2.6 for the full analysis including what it does **not** solve.
 
 ## 3. Data flow
 

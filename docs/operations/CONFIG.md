@@ -168,6 +168,29 @@ Nearly all of the 120b's output is internal reasoning. Two consequences: budget 
 |---|---|---|---|
 | `EMBEDDING_DEVICE` | enum | `auto` | `auto` / `cpu` / `cuda` |
 
+## 5a. Table profiling — implemented
+
+Profiling is the one component whose **output is row data by design** — it exists to be shown to a model so it can write a correct `WHERE` clause. Read [SECURITY.md](SECURITY.md) §14.2.6 before changing any default here.
+
+| Variable | Type | Default | Notes |
+|---|---|---|---|
+| `PROFILE_ALLOW_VALUE_SAMPLING` | bool | **`false`** | Whether raw cells may be returned at all. **The one that matters** |
+| `PROFILE_SAMPLE_ROWS` | int | `5` | Rows returned when sampling is allowed. Range 0–20, matching the tool schema. Ignored when it is not |
+| `PROFILE_MIN_VALUE_FREQUENCY` | int | `5` | A value must occur this often before it may be reported. **Floor of 2 in the type** |
+| `PROFILE_TOP_K` | int | `5` | Frequent values per column, range 0–20. `0` disables them |
+| `PROFILE_SCAN_LIMIT` | int | `5000` | Rows read per column. Bounds cost, and bounds disclosure with it |
+| `PROFILE_MAX_COLUMNS` | int | `30` | Columns per call, range 1–200. A wide table is truncated and told so, not refused |
+| `PROFILE_MAX_VALUE_CHARS` | int | `40` | Applied in SQL (`left(col::text, n)`), so a wide cell is never held in full |
+| `PROFILE_TIMEOUT_MS` | int | `10000` | Deliberately shorter than `STATEMENT_TIMEOUT_MS` |
+
+**`PROFILE_MIN_VALUE_FREQUENCY` is the control doing the real work, and it is the one to raise on sensitive data.** Frequent values are on by default and raw sampling is off, which sounds inconsistent until you look at what each returns: a value occurring 500 times is a category label, a value occurring once is a record. The threshold is the standard small-cell rule from statistical disclosure control, and it is the only gate that catches a secret sitting in an innocuously-named column — the case the name-based denylist is openly admitted to miss.
+
+**Raising it costs disambiguation quality, not correctness.** A column whose values all fall below the threshold reports *why* they were withheld, so the agent picks a different strategy rather than concluding the column is empty.
+
+**`PROFILE_ALLOW_VALUE_SAMPLING` should stay off unless every column being profiled has been audited by name.** Turning it on does not disable the denylist or the frequency threshold — those still apply. What it adds is verbatim cells, truncated and capped, for the cases where the *format* of a value matters and a summary cannot convey it.
+
+**There is no setting that widens which tables may be profiled.** The catalog is the allowlist, and a name not in it is rejected before any statement is composed. That is a containment boundary, not a convenience — see [SECURITY.md](SECURITY.md) §14.2.6, control 1.
+
 ## 6. API
 
 | Variable | Type | Default | Notes |

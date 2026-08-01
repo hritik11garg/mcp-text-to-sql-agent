@@ -1,4 +1,18 @@
 """Column statistics and sampled rows, for disambiguation.
 
-TBD -- Stage 1. See docs/project/TASKS.md.
+See :mod:`profiling.profiler` for the disclosure budget this operates under.
 """
+
+from profiling.profiler import (
+    ColumnProfile,
+    FrequentValue,
+    TableProfile,
+    TableProfiler,
+)
+
+__all__ = [
+    "ColumnProfile",
+    "FrequentValue",
+    "TableProfile",
+    "TableProfiler",
+]

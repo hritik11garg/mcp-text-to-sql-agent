@@ -27,6 +27,7 @@ from core.settings import (
     DatabaseSettings,
     ExecutionSettings,
     LLMSettings,
+    ProfilingSettings,
     RetrievalSettings,
 )
 
@@ -71,6 +72,11 @@ def _isolate_env(monkeypatch: pytest.MonkeyPatch) -> None:
         "LLM_MODEL_FALLBACKS",
         "RETRIEVAL_TOP_K",
         "HNSW_EF_SEARCH",
+        "PROFILE_ALLOW_VALUE_SAMPLING",
+        "PROFILE_TOP_K",
+        "PROFILE_MIN_VALUE_FREQUENCY",
+        "PROFILE_SCAN_LIMIT",
+        "PROFILE_MAX_COLUMNS",
     ):
         monkeypatch.delenv(var, raising=False)
 
@@ -79,6 +85,7 @@ def _isolate_env(monkeypatch: pytest.MonkeyPatch) -> None:
         DatabaseSettings,
         ExecutionSettings,
         RetrievalSettings,
+        ProfilingSettings,
         AgentSettings,
     ):
         monkeypatch.setitem(settings_cls.model_config, "env_file", None)
@@ -100,6 +107,11 @@ def execution_settings() -> ExecutionSettings:
 @pytest.fixture
 def retrieval_settings() -> RetrievalSettings:
     return RetrievalSettings()
+
+
+@pytest.fixture
+def profiling_settings() -> ProfilingSettings:
+    return ProfilingSettings()
 
 
 @pytest.fixture

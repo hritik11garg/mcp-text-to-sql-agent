@@ -265,3 +265,36 @@ That predicate reads like a pre-filter. It is not. `EXPLAIN` shows it as a `Filt
 **Generalises to:** a knob whose wrong setting fails silently should not be a knob.
 
 **Revisit:** if the cost of `relaxed_order` at a realistic corpus size proves material under the Stage 6 performance work.
+
+---
+
+## ADR-016 — A frequency threshold, not a PII regex, decides which values a profile may reveal
+
+**Status:** accepted · **Date:** 2026-08-01 · **Stage:** 1
+
+**Context.** `profile_table` is the only component in this system whose output is row data *by design*. Everywhere else, real values either stay in the database (execution results, the audit log) or stay in a store the operator controls (the catalog's sampled values, which are persisted but never rendered into a prompt — [SECURITY.md](../operations/SECURITY.md) §14.2.5). A profile is made in order to be shown to a language model, which sends it to a third-party provider.
+
+So the risk cannot be designed away. An agent cannot write `WHERE country = 'FI'` without learning that the column stores `'FI'` rather than `'Finland'`, and refusing all values pushes the model into guessing — which produces confidently wrong SQL rather than a visible failure. The question is not *whether* to send values but **which values carry the disambiguation signal without carrying a record with them.**
+
+[SECURITY.md](../operations/SECURITY.md) §14.2 had proposed the obvious answer: detect and redact PII patterns before values enter a prompt.
+
+**Decision.** Reject regex redaction. A value may be reported only if it occurs at least `PROFILE_MIN_VALUE_FREQUENCY` times (default 5) in the scanned rows — the small-cell rule from statistical disclosure control. A value seen once identifies whoever it belongs to; a value seen five hundred times is a category label. The floor of 2 is enforced in the type, so no deployment can configure a unique value into being reportable.
+
+Two consequences follow, and both are the point:
+
+- **Frequent values are on by default** while raw sampling stays off. Those look inconsistent until you notice they return different *kinds* of thing.
+- **The threshold is the only gate that covers the residual case** — a secret in an innocuously-named column like `notes`, which the name-based denylist is openly admitted to miss.
+
+**Alternatives.**
+- *Regex PII redaction* — rejected, and this is the substance of the ADR. A pattern list catches `123-45-6789` and misses a customer name, an internal project codename, or a free-text complaint. Worse, **the appearance of a filter invites relying on it**: an operator who sees "PII is redacted" reasonably stops auditing columns, and the control is weakest exactly where they have stopped looking. A frequency threshold is a property of the data rather than of a pattern list, so it does not depend on having anticipated the format of the secret.
+- *Return no values at all, only derived statistics* — rejected. It is the safest option and it removes the tool's reason to exist. Null fraction and distinct count answer "is this column populated?"; they do not answer "is the value `FI` or `Finland`?", which is the question that blocks a correct query.
+- *Name-based denylist alone* — rejected as sufficient, kept as a layer. It is a heuristic over names and the risk is in values. Retained because it is the only control that stops the read from happening at all, which matters for columns where even one value in process memory is too many.
+- *`k`-anonymity over the whole row rather than per column* — rejected as premature. It is the more rigorous framing, it requires deciding what a quasi-identifier is per schema, and there is no configuration surface for that yet. Named here so the gap is deliberate.
+
+**Tradeoff.** The threshold does not catch a value that is both sensitive and common — a diagnosis code appearing 400 times in a column called `code` passes every gate and will be reported. Redaction would have caught a *frequent* SSN-shaped value; the threshold does not. That residual is real, is documented in [SECURITY.md](../operations/SECURITY.md) §14.2.6, and its honest mitigation is local inference rather than a better filter.
+
+A second, smaller trade: `min`/`max` were described as statistics in the original threat model and are returned only for numeric and temporal types here. The lexicographic minimum of a `name` column is a verbatim cell, and calling it a statistic would have let real values out under a heading saying they were safe.
+
+**Generalises to:** a control that is easy to describe and hard to bound ("we filter PII") is worse than a control that is narrow and provable ("a value under this frequency is never emitted") — because the first one changes operator behaviour and the second one does not.
+
+**Revisit:** when Stage 4 sends query *results* to a model for synthesis. That path has no frequency to threshold on, so it needs a different answer rather than this one stretched.

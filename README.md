@@ -1,16 +1,17 @@
 # Text-to-SQL Analytics Agent (MCP-native)
 
-> **Status: Stage 1 — core loop, in progress.** Database, read-only role, the schema catalog, retrieval, validation, sandboxed execution, and SQL generation are in and tested; the API and the MCP servers are not yet. Nothing below claims a benchmark number until the eval harness exists. See [ROADMAP](docs/project/ROADMAP.md) for stage status and [TASKS](docs/project/TASKS.md) for the working checklist.
+> **Status: Stage 1 — core loop, in progress.** Database, read-only role, the schema catalog, retrieval, validation, sandboxed execution, SQL generation and table profiling are in and tested; the API and the MCP servers are not yet. Nothing below claims a benchmark number until the eval harness exists. See [ROADMAP](docs/project/ROADMAP.md) for stage status and [TASKS](docs/project/TASKS.md) for the working checklist.
 >
 > | Landed | Next |
 > |---|---|
-> | Postgres 16 + pgvector, Alembic migrations | Table profiling for disambiguation |
-> | `SELECT`-only role, proven by 30 negative tests | FastAPI + SSE |
+> | Postgres 16 + pgvector, Alembic migrations | FastAPI + SSE, and the `/health` · `/ready` pair |
+> | `SELECT`-only role, proven by 30 negative tests | The eval harness — every accuracy number waits on it |
 > | Schema catalog — introspection, serialization, embedding | MCP servers wrap all of the above in Stage 3 |
 > | Retrieval — pgvector ANN, join-path expansion, clamped limits | |
 > | Validation — sqlglot AST + `EXPLAIN`, refused at both layers | |
 > | Execution — row limits, timeouts, audit trail | |
 > | Generation — provider-agnostic, with a model fallback chain | |
+> | Profiling — column stats under a documented disclosure budget | |
 > | Provider-agnostic `LLMClient` and `Embedder` ports | |
 
 An agent that answers analytical questions in plain English against a real PostgreSQL database. Capabilities are exposed as **four MCP servers** rather than hardcoded functions, so any MCP host — Claude Desktop, or your own client — can point at them and query its own database.
@@ -116,7 +117,7 @@ That creates the `agent_meta` schema, the pgvector extension and the HNSW index,
 Verify the install — the security suite is the one that matters, and it passes by being **refused**:
 
 ```powershell
-pytest                    # 351 tests; integration and security need Docker
+pytest                    # 452 tests; integration and security need Docker
 pytest -m security        # the read-only containment suite, on its own
 ruff check . ; mypy
 ```
@@ -161,7 +162,7 @@ Directories marked *(stub)* exist with a docstring stating which stage fills the
 │   ├── generation/             # sql_gen prompt + generator (pure prompt building)
 │   ├── validation/             # sqlglot AST stages + EXPLAIN, no I/O below stage 5
 │   ├── execution/              # row limits, timeouts, audit trail
-│   ├── profiling/              # (stub) column statistics
+│   ├── profiling/              # column statistics under a disclosure budget
 │   ├── mcp_servers/            # (stub) four servers — Stage 3
 │   ├── agent/                  # (stub) planner, executor, memory — Stage 4
 │   └── api/                    # (stub) FastAPI + SSE

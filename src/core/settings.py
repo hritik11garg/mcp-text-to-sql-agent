@@ -193,9 +193,12 @@ class RetrievalSettings(BaseSettings):
     """Schema catalog and retrieval configuration.
 
     Security: ``schema_sample_values`` defaults to ``False`` because sampling
-    copies real rows into the catalog, and the catalog is quoted into prompts
-    sent to a third-party model. Turning it on is a deliberate, documented
-    decision about data leaving the building -- never a default.
+    copies real rows out of the target tables and **persists** them in
+    ``agent_meta.schema_elements``, where they stay until re-indexed. Prompt
+    construction reads the structured fields and never the serialized string,
+    so those values do not themselves leave the network (section 14.2.5) --
+    but a store of real rows that no audit trail mentions is worth an explicit
+    decision rather than a default.
 
     See docs/operations/SECURITY.md section 14.2.
     """
@@ -253,6 +256,89 @@ class RetrievalSettings(BaseSettings):
     """
 
 
+class ProfilingSettings(BaseSettings):
+    """Bounds on what a table profile may read and what it may reveal.
+
+    Profiling is the one component whose *output is row data by design*. The
+    catalog indexer samples values to improve retrieval and never shows them to
+    a model; a profile exists to be shown to a model, so every default here is
+    set for the case where the target database holds real customer records and
+    the operator has not read this file.
+
+    Three independent gates, deliberately not one:
+
+    1. ``profile_allow_value_sampling`` (off) governs raw rows.
+    2. ``profile_min_value_frequency`` governs frequent values -- a value seen
+       fewer than this many times identifies a record rather than a category,
+       and is withheld even when sampling is on.
+    3. The sensitive-column denylist governs which columns are read at all.
+
+    See docs/operations/SECURITY.md section 14.2.6.
+    """
+
+    model_config = _ENV_FILE
+
+    profile_scan_limit: int = Field(default=5_000, ge=1, le=1_000_000)
+    """Rows read per column. Bounds cost, and bounds disclosure with it.
+
+    The scan is ``LIMIT``ed without ``ORDER BY``, so it reads the first rows in
+    physical order rather than a random sample. That is a deliberate accuracy
+    trade -- see :class:`profiling.profiler.TableProfile`.
+    """
+
+    profile_max_columns: int = Field(default=30, ge=1, le=200)
+    """Columns profiled per call. A wide table is truncated, not refused.
+
+    Unbounded, one profile of a 300-column table would consume the agent's
+    entire context budget in a single tool result.
+    """
+
+    profile_max_value_chars: int = Field(default=40, ge=1, le=200)
+    profile_top_k: int = Field(default=5, ge=0, le=20)
+    """Frequent values returned per eligible column. ``0`` disables them."""
+
+    profile_min_value_frequency: int = Field(default=5, ge=2, le=100_000)
+    """How often a value must occur before it may be reported.
+
+    A small-cell threshold, the standard control in statistical disclosure:
+    a value occurring once is a record, a value occurring many times is a
+    category. ``ge=2`` is a floor in the type -- this setting can be relaxed,
+    but never to the point where a unique value becomes reportable.
+    """
+
+    profile_allow_value_sampling: bool = False
+    """Whether raw sampled rows may be returned at all. Off is the safe default.
+
+    Statistics answer "is this column the one I want?". Raw rows answer "what
+    do the values look like?", which is occasionally necessary and always a
+    disclosure.
+    """
+
+    profile_sample_rows: int = Field(default=5, ge=0, le=20)
+    """Rows returned when sampling is allowed. Ignored when it is not."""
+
+    profile_timeout_ms: int = Field(default=10_000, ge=100, le=120_000)
+    """Its own budget rather than the executor's: profiling is a side quest
+    during answering, and it should give up long before the real query would."""
+
+    def clamp_sample_rows(self, requested: int | None) -> int:
+        """Clamp a caller-supplied sample size. Zero unless explicitly allowed.
+
+        The caller here is a language model reading user-supplied text, so
+        ``sample_rows: 10000`` is an input to bound, not a request to honour.
+        """
+        if not self.profile_allow_value_sampling:
+            return 0
+        if requested is None:
+            return self.profile_sample_rows
+        return max(0, min(requested, self.profile_sample_rows))
+
+    def clamp_columns(self, requested: int | None) -> int:
+        if requested is None:
+            return self.profile_max_columns
+        return max(1, min(requested, self.profile_max_columns))
+
+
 class AgentSettings(BaseSettings):
     """Bounds on the agent loop.
 
@@ -280,6 +366,7 @@ class Settings:
     database: DatabaseSettings
     execution: ExecutionSettings
     retrieval: RetrievalSettings
+    profiling: ProfilingSettings
     agent: AgentSettings
 
     @classmethod
@@ -290,6 +377,7 @@ class Settings:
             database=DatabaseSettings(),
             execution=ExecutionSettings(),
             retrieval=RetrievalSettings(),
+            profiling=ProfilingSettings(),
             agent=AgentSettings(),
         )
 

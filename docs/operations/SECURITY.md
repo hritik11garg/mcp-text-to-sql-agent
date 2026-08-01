@@ -240,13 +240,19 @@ Introduced by [ADR-014](../architecture/DECISIONS.md#adr-014--provider-agnostic-
 **Attack scenario.** Not an attacker action — a configuration mistake. The agent is pointed at a production database containing customer PII; `profile_table` samples five rows to disambiguate a column; those rows contain real names, emails, and account numbers; the free-tier provider retains them under terms nobody read. Later, a well-crafted prompt to that provider's public model surfaces fragments.
 
 **Secure implementation.**
-- **`profile_table` returns statistics by default, not values.** Null fraction, distinct count, min/max, and type are usually sufficient to disambiguate; raw sample rows are the exception, not the default.
-- Gate sample rows behind an explicit `ALLOW_VALUE_SAMPLING` flag, defaulting to `false`.
-- Detect and redact obvious PII patterns in sampled values before they enter a prompt (defence in depth — pattern matching is not a guarantee).
+- **`profile_table` returns statistics by default, not values.** Null fraction, distinct count and type are usually sufficient to disambiguate; raw sample rows are the exception, not the default.
+- Gate sample rows behind an explicit `PROFILE_ALLOW_VALUE_SAMPLING` flag, defaulting to `false`.
+- Report a value only when it is frequent enough to be a category rather than a record (§14.2.6, control 4).
 - **Document the provider's retention terms in the deployment record**, and treat "provider trains on submitted data" as disqualifying for any non-public dataset.
 - For sensitive data, the supported configuration is **local inference** (Ollama / LM Studio), where nothing leaves the machine. This is the reason a local option is a first-class row in [CONFIG.md](CONFIG.md) §4 rather than a footnote.
 
 **Why the fix is secure.** Statistics are derived, non-reversible summaries — they carry the disambiguation signal without the underlying records. Defaulting sampling to off makes the risky path an explicit, auditable choice rather than a silent default.
+
+> **Two amendments made when profiling was actually built**, both worth stating rather than quietly editing above.
+>
+> **`min`/`max` were listed here as statistics. They are not, for text columns** — the lexicographic extreme of a `name` column is a verbatim cell. The implementation returns extremes only for numeric and temporal types. The original wording would have let real values out under a heading that said they were safe.
+>
+> **Regex PII redaction was proposed here and was not built.** A pattern list catches `123-45-6789` and misses a customer name, an internal project codename, or a free-text complaint — and the appearance of a filter invites relying on it. What was built instead is a frequency threshold (§14.2.6, control 4), which is a property of the data rather than of a pattern list and therefore does not depend on having anticipated the format of the secret. The trade: redaction would have caught a *frequent* SSN-shaped value, which the threshold does not. That residual is named in §14.2.6.
 
 **CIA impact.** Confidentiality, with compliance exposure (GDPR Art. 44 cross-border transfer, CCPA) that is not undone by deleting anything on your side.
 
@@ -352,9 +358,11 @@ The prompt is the **only** place data leaves for a third party. The catalog, the
 
 **Never sent to the model:**
 
-- **Sampled row values.** Pinned by test, and commented at the point of construction.
+- **The catalog's sampled row values.** Pinned by test, and commented at the point of construction.
 - **Query results.** No component sends result rows to a model today. **This changes in Stage 4**, where the synthesis step turns rows into a natural-language answer — that is the single largest upcoming change to this section, and it needs its own analysis before it is built.
 - **The API key**, connection strings, role names, or driver output.
+
+> **Amended when profiling landed.** The table above described a system with no `profile_table`. A profile is *made in order to be shown to a model*, so it adds a row: **derived column values** — frequency-thresholded common values, and extremes on numeric and temporal columns only. Raw cells still require `PROFILE_ALLOW_VALUE_SAMPLING`, which is off. The full analysis of what that admits and what bounds it is §14.2.6; the one-line version is that this section can no longer be read as "no row-derived value ever leaves".
 
 **Operator responsibilities this creates**, since none of them can be enforced in code:
 
@@ -363,6 +371,37 @@ The prompt is the **only** place data leaves for a third party. The catalog, the
 3. **Check the provider's data-retention and training terms.** A free tier that trains on submitted data means schema names and comments become training data. For sensitive schemas the supported configuration is local inference (`LLM_BASE_URL=http://localhost:11434/v1`), which the SSRF guard permits for exactly this reason.
 
 **CIA impact.** Confidentiality. The residual is bounded by what a schema *describes* rather than what it contains — which is a genuinely smaller surface than row data, and is not zero.
+
+### 14.2.6 Table profiling — the component whose output *is* row data — **Medium** (High on regulated data)
+
+Every other section here can end with "and the values stay in the database". This one cannot, so it is written at length.
+
+**Vulnerability.** `profile_table` reads real rows and returns a summary of them to a language model, which sends it to a third-party provider. Statistics are derived and non-reversible; frequent values, extremes and sampled rows are not — they are cells, quoted. A profile of the wrong column is a disclosure that no downstream control undoes. *(OWASP LLM06 — Sensitive Information Disclosure; A01 Broken Access Control for the identifier path below; GDPR/CCPA implications.)*
+
+**Why it's dangerous.** It is the one place where the honest answer to "can we avoid sending values?" is *no, not and still be useful*. An agent cannot write `WHERE country = 'FI'` without learning that the column stores `'FI'`. Refusing all values would push the model into guessing, which produces confidently wrong SQL — so the risk cannot be designed away, only bounded. And the disclosure is irreversible in a way an accidental `SELECT` is not: it leaves the operator's control entirely.
+
+**Attack scenario.** Two, with different shapes.
+
+*Configuration.* The agent is pointed at production. A user asks a vague question, the model finds two plausible columns and profiles both. One is `notes`, holding free-text support conversations. Five sampled rows containing names and account numbers reach a free-tier provider that retains submissions for training.
+
+*Injection.* A user asks a question crafted so the model chooses `table: "pg_authid"`, or `columns: ["password_hash"]`. The tool arguments are model-authored text derived from user input, and profiling exists to read values — so unlike `execute_sql`, there is no "it's only a SELECT" fallback to lean on. The identifier is the whole attack surface.
+
+**Secure implementation.** Six controls, in the order they are relied on.
+
+1. **The catalog is an allowlist, checked before any statement is composed.** `table` and `columns` are resolved against `SchemaCatalog` and an unknown name raises. `sql.Identifier` would quote `pg_authid` perfectly correctly and then read it — quoting answers *"is this escaped?"*, and only the allowlist answers *"may this be named at all?"*. This is the control that closes the injection scenario, and it is why `UnknownTableError` is a security type and not a usability one.
+2. **The read-only role.** Profiling runs on the same `SELECT`-only connection as execution, so a table the agent was never granted degrades with a reason instead of being read. Asserted against a real grant denial, not assumed.
+3. **The sensitive-column denylist, applied before the read.** Same list as the indexer (`email`, `ssn`, `salary`, ~40 more). Refusing up front rather than filtering after means the values never enter the process, the driver's buffers, or an exception message. It is **not** overridden by the sampling flag: turning on sampling accepts disclosure of the columns an operator reviewed, not of the ones the tool was already refusing.
+4. **The small-cell rule — the control doing the real work.** A value is reportable only if it occurs at least `PROFILE_MIN_VALUE_FREQUENCY` times (default 5) in the scanned rows. This is the standard threshold from statistical disclosure control, and it is what makes frequent values safe enough to be on by default: a value seen once identifies whoever it belongs to, a value seen five hundred times is a category label. `ge=2` is a floor in the type, so no deployment can configure a unique value into being reportable. **This is also the only control that catches the residual case** — a secret in an innocuously-named column like `notes`, which the denylist is admitted to miss.
+5. **Extremes only where they are bounds.** `min`/`max` are returned for numeric and temporal types and never for text, `uuid`, `bytea`, `json`, arrays or anything unrecognised. `max(order_date)` is a fact about the table; `min(customer_name)` is a person's name wearing the word "statistic". The type list is an allowlist so an extension type added after it was written fails closed.
+6. **Raw sampling is off, and a caller cannot turn it on.** `PROFILE_ALLOW_VALUE_SAMPLING` defaults to `false`. The published `sample_rows` parameter is clamped by it, so a model asking for 10,000 rows gets zero. When it is on, values are truncated in SQL (`left(col::text, n)`) and capped in count.
+
+Plus two bounds that are availability controls rather than disclosure ones: `PROFILE_SCAN_LIMIT` rows per column, `PROFILE_MAX_COLUMNS` columns per call, and a `profile_timeout_ms` shorter than the executor's — a profile is a side quest during answering and should give up long before the real query would.
+
+**Why the fix is secure.** Controls 1 and 2 are structural: one bounds which relations can be named, the other bounds which can be read, and neither depends on the model behaving. Controls 3 and 4 are independent gates on the same risk at different layers — 3 is a name heuristic and is treated as one, 4 is a property of the data itself and holds for columns whose names reveal nothing. Control 6 is a default rather than a runtime check, so it protects deployments whose operator never read this document.
+
+**What is *not* solved.** A value that is both sensitive and common — a diagnosis code appearing 400 times in a column called `code` — passes every gate here and will be reported. That is a real residual, it is not fixable by any of these mechanisms, and the honest mitigation remains local inference (§14.2). Anything withheld is reported as withheld with the reason, which is a usability decision with a security consequence worth naming: it tells a reader of a profile that suppression happened, so a column that looks empty can be told from one that was refused.
+
+**CIA impact.** Confidentiality, primarily, with the same compliance exposure as §14.2 that deleting anything on your side does not undo. Availability secondarily — an unbounded profile of a wide table seq-scans it once per column and can fill the agent's entire context budget in one tool result.
 
 ### 14.3 Related: prompt injection reaches further with weaker models
 

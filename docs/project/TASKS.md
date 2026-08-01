@@ -65,6 +65,17 @@ Convention: `[ ]` open · `[x]` done · `[~]` in progress · `[!]` blocked
 - [x] `truncated` flag returned — distinguishes a server-imposed cut from a caller's own `LIMIT`
 - [x] Audit-log write — as the owner, on a separate connection, result values never stored
 
+### Profiling
+- [x] `TableProfiler` — null fraction, distinct count, extremes, frequent values
+- [x] Identifiers resolved against the catalog **before** any statement is composed
+- [x] Small-cell threshold on reported values (ADR-016) — the control that covers a secret in an innocuously-named column
+- [x] Extremes restricted to numeric and temporal types — `min(name)` is a cell, not a statistic
+- [x] Raw sampling behind `PROFILE_ALLOW_VALUE_SAMPLING`, off by default and not openable by a caller
+- [x] Mandatory truncation: value chars in SQL, column count per call, rows scanned per column
+- [x] Suppression is reported with a reason, so silence and refusal are distinguishable
+- [x] Per-column degradation — one unprofileable column does not fail the profile
+- [ ] Wire the profiler into the self-correction loop — *lands with the agent layer, which is what will actually decide a column is ambiguous*
+
 ### API
 - [ ] `Settings` via pydantic-settings; startup validation
 - [ ] Startup assertion: the read-only role genuinely cannot write
@@ -101,7 +112,7 @@ Convention: `[ ]` open · `[x]` done · `[~]` in progress · `[!]` blocked
 - [ ] `schema_search` server
 - [ ] `validate_sql` server
 - [ ] `execute_sql` server
-- [ ] `profile_table` server (with mandatory truncation)
+- [ ] `profile_table` server (with mandatory truncation) — *the profiler and its bounds are built; this is the MCP wrapper over them*
 - [ ] Tool descriptions that state **when** to call, not just what
 - [ ] Schema-enforced limits (`maximum`, `enum`, `required`) — enforced server-side, not just declared
 - [ ] Structured `isError: true` responses, never protocol exceptions

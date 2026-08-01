@@ -108,6 +108,30 @@ class PermissionDeniedError(ExecutionError):
     """
 
 
+# --- profiling -------------------------------------------------------------
+
+
+class ProfilingError(TextToSQLError):
+    """Base for failures profiling a table."""
+
+
+class UnknownTableError(ProfilingError):
+    """The requested table is not in the catalog.
+
+    Raised *before* any SQL is composed, which makes it a containment control
+    and not only a usability one: the catalog is the allowlist that decides
+    which identifiers may reach a composed statement at all. Carries a
+    suggestion for the same reason ``SQLValidationError`` does -- an agent told
+    only "no" retries with the same name.
+    """
+
+    def __init__(self, table: str, suggestion: str | None = None) -> None:
+        hint = f"; did you mean {suggestion!r}?" if suggestion else ""
+        super().__init__(f"table {table!r} is not in the catalog{hint}")
+        self.table = table
+        self.suggestion = suggestion
+
+
 # --- agent -----------------------------------------------------------------
 
 
