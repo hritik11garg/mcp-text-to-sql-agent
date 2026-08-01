@@ -1,6 +1,6 @@
 # Configuration
 
-> **Status: TBD — Stage 1** for the authoritative list. The variables below are the design intent; this page becomes canonical once `settings.py` exists.
+> **Status: canonical for everything marked *implemented*.** `src/core/settings.py` exists and every section headed *implemented* below tracks it exactly, including ranges and defaults. Sections headed *planned* are still design intent and carry the stage that fills them.
 
 All configuration comes from environment variables, loaded and validated by `pydantic-settings`. Invalid configuration fails at **startup**, not on the first request — a service that boots with a bad row limit and discovers it under load has no useful failure mode.
 
@@ -53,6 +53,8 @@ The agent depends on the `LLMClient` protocol, never on a vendor SDK ([ADR-014](
 | `LLM_MAX_TOKENS` | int | `16000` | |
 | `LLM_TEMPERATURE` | float | `0.0` | Omitted for providers that reject it |
 | `LLM_TIMEOUT_MS` | int | `60000` | |
+| `LLM_ALLOWED_HOSTS` | list[str] | `[]` | Optional host allowlist for `LLM_BASE_URL`. Empty means "any host that passes the IP checks". Comma-separated |
+| `LLM_MODEL_FALLBACKS` | list[str] | `[]` | Models tried in order on a 429. Same provider, same key — see §4.2. Comma-separated |
 | `LLM_SUPPORTS_TOOL_CALLING` | bool | `auto` | `auto` probes at startup; falls back to prompt-based structured output |
 | `LLM_EFFORT` | enum | — | Anthropic adapter only; ignored elsewhere |
 | `MAX_TOOL_CALLS_PER_REQUEST` | int | `20` | **Hard stop on agent loops** |

@@ -48,7 +48,7 @@ Scored `likelihood × impact`, both low/medium/high. Reviewed at each stage boun
 ### R-08 · Large schemas overwhelm the context budget
 **Medium × Medium.** BIRD schemas are large; naive retrieval plus profiling can fill the context window.
 
-**Mitigation.** `k` is bounded server-side. `profile_table` truncation is mandatory, not best-effort. An unbounded profile of a wide table is the single most likely way to blow the budget in one tool result.
+**Mitigation — implemented.** `k` is clamped to 50 at the retriever. `profile_table` truncation is mandatory rather than best-effort: `PROFILE_MAX_COLUMNS` caps a profile at 30 columns and reports how many it dropped, values are truncated in SQL at `PROFILE_MAX_VALUE_CHARS`, and frequent values are capped at `PROFILE_TOP_K`. An unbounded profile of a wide table remains the single most likely way to blow the budget in one tool result — which is why the cap truncates and *says so* rather than refusing, so the agent asks for the columns it actually needs instead of concluding the rest do not exist.
 
 ### R-09 · torch/CUDA install friction on Windows
 **High × Low.** Near-certain, cheap to fix, expensive if hit during a demo.

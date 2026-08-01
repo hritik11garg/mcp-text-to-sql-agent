@@ -41,13 +41,15 @@ Scope: Postgres + pgvector up with roles and migrations; schema ingestion and em
 **Done when:**
 - [ ] Runs end to end from a clean checkout per the README
 - [x] **The read-only negative test suite is green** — this gates the stage, not Stage 6
-- [ ] Row limits and statement timeouts are enforced and tested
-- [ ] `.env.example` and [CONFIG.md](../operations/CONFIG.md) match the implementation
+- [x] Row limits and statement timeouts are enforced and tested — at the role level *and* per request, the latter injected into the AST rather than requested in the prompt
+- [~] `.env.example` and [CONFIG.md](../operations/CONFIG.md) match the implementation — CONFIG.md tracks every shipped setting; `.env.example` is still outstanding
 - [ ] Span boundaries are in place (instrumentation added later, structure now)
 
-**Landed so far:** Postgres + pgvector with migrations and the read-only role (30 negative tests, green); the `LLMClient` and `Embedder` ports; typed settings with an SSRF guard; the schema catalog — introspection, serialization, embedding, and an idempotent indexer; and retrieval — ANN over pgvector with `table_filter`, join-path expansion, and clamped limits.
+**Landed so far:** Postgres + pgvector with migrations and the read-only role (30 negative tests, green); the `LLMClient` and `Embedder` ports; typed settings with an SSRF guard; the schema catalog — introspection, serialization, embedding, and an idempotent indexer; retrieval — ANN over pgvector with `table_filter`, join-path expansion and clamped limits; five-stage SQL validation with structured rejections and nearest-match suggestions; sandboxed execution with AST-level row limits, per-statement timeouts and an audit trail on a separate owner connection; SQL generation behind one OpenAI-compatible adapter with a model fallback chain; and table profiling under an explicit disclosure budget.
 
-**Still open:** SQL generation, sqlglot validation, sandboxed execution, and FastAPI + SSE. Row limits and timeouts exist at the *role* level and are tested; the per-request clamps are written but not yet exercised end to end. Retrieval latency is guarded against a regression but not yet measured against the p95 budget, which needs a realistic corpus (Stage 6).
+**Still open:** FastAPI + SSE, `.env.example`, and loading a target dataset — which is what "runs end to end from a clean checkout" is waiting on. Two smaller items are deliberately deferred with the seam already in place: the read-only connection *pool* (`ConnectionSource` exists; a pool with one client is machinery without a job until the API layer creates a second caller), and prompt-cache verification (`cache_read_tokens` is plumbed through but has never been observed non-zero against a real provider). Retrieval latency is guarded against an accidental full scan but not yet measured against the p95 budget, which needs a realistic corpus (Stage 6).
+
+**What the last four versions changed about the stage's shape:** validation, execution, generation and profiling all landed as plain components with constructor injection rather than as MCP servers. That is deliberate — Stage 3 wraps them, and the refactor can then be proven behaviour-preserving against a Stage 2 baseline instead of being asserted. It also means every capability is unit-testable without a transport.
 
 Security and limits belong here, not in Stage 6. Retrofitting containment into a working system means restructuring it; adding *tracing* to correct span boundaries is easy.
 

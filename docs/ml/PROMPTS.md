@@ -1,6 +1,6 @@
 # Prompts
 
-> **Status: TBD — Stage 1.** Structure and principles below are decided; the actual prompt text is written and versioned as the agent lands.
+> **Status: partially implemented.** `system` and `sql_gen` ship in `src/generation/prompts.py` and are described below as built. The rest are still design intent — each row in §2 says which is which.
 
 Prompts are **versioned artifacts**, not string literals scattered through the codebase. Every prompt lives in one place, carries a version, and a change to any of them invalidates prior benchmark numbers.
 
@@ -18,12 +18,12 @@ Prompts are **versioned artifacts**, not string literals scattered through the c
 
 | Prompt | Role | Version | Status |
 |---|---|---|---|
-| `system` | Agent identity, safety framing, tool-use policy | — | TBD Stage 1 |
+| `system` | Agent identity, safety framing, tool-use policy | v1 | **Implemented** — `SQL_SYSTEM_PROMPT`, the cacheable prefix |
 | `planner` | Decide single-step vs decompose; produce sub-questions | — | TBD Stage 4 |
-| `sql_gen` | Generate SQL from question + retrieved schema | — | TBD Stage 1 |
-| `retry` | Revise SQL given a structured validation/execution error | — | TBD Stage 1 |
-| `disambiguate` | Choose between candidate columns using profile data | — | TBD Stage 1 |
-| `summarizer` | Turn a result set into a natural-language answer | — | TBD Stage 1 |
+| `sql_gen` | Generate SQL from question + retrieved schema | v1 | **Implemented** — `build_messages` / `render_context` |
+| `retry` | Revise SQL given a structured validation/execution error | — | TBD Stage 4 — the error *types* it branches on exist (`SQLValidationError.error_type`); the loop that consumes them does not |
+| `disambiguate` | Choose between candidate columns using profile data | — | TBD Stage 4 — **unblocked**: `TableProfiler` now produces the data, including a `withheld` list this prompt must read rather than treat as an empty column |
+| `summarizer` | Turn a result set into a natural-language answer | — | TBD Stage 4 — **the first prompt that will carry query results**, see [../operations/SECURITY.md](../operations/SECURITY.md) §14.2.5 |
 | `synthesis` | Compose sub-results into a multi-step answer | — | TBD Stage 4 |
 | *tool descriptions* | Tool selection signal (×4 servers) | — | TBD Stage 3 |
 

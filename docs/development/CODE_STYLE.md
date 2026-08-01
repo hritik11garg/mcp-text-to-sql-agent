@@ -37,7 +37,7 @@ Domain vocabulary matches [../GLOSSARY.md](../GLOSSARY.md) exactly. Something ca
 
 ## 3. Folder organization
 
-> **TBD — Stage 1** for the real tree. Principles:
+The tree as built — `README.md` carries the annotated version. Principles it follows:
 
 - **Organize by capability, not by layer.** `retrieval/` containing its model, queries, and service beats `models/` + `services/` + `repositories/` each holding one file per capability. Related code changes together.
 - **Each MCP server is its own package** with its own entrypoint — they are separate processes.

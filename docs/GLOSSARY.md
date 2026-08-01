@@ -110,6 +110,18 @@ Executing attacker-controlled SQL by string-concatenating untrusted input into a
 **Prompt injection**
 Text that manipulates the model into taking unintended actions. Relevant here because a question, and even schema comments or column *values*, can carry instructions. Mitigation is containment (read-only role, validation tier), not filtering — see [SECURITY.md](operations/SECURITY.md).
 
+**Disclosure budget**
+The bounds governing what a component may *reveal* about the data it reads, as distinct from what it is permitted to read. `profile_table` is the only component needing one, because it is the only one whose output is row-derived by design.
+
+**Small-cell rule**
+A statistical disclosure control: suppress any value whose count falls below a threshold. A value occurring once identifies whoever it belongs to; a value occurring five hundred times is a category label. Configured as `PROFILE_MIN_VALUE_FREQUENCY`, floored at 2 in the type. See [SECURITY.md](operations/SECURITY.md) §14.2.6 and ADR-016.
+
+**Fail closed**
+An unrecognised input gets the restrictive treatment, not the permissive one. Profiling applies it to type eligibility: a type absent from the ordered-types allowlist gets no `min`/`max`, so an extension type added after that list was written cannot leak a verbatim cell labelled as a statistic.
+
+**Allowlist (identifiers)**
+The set of names a caller may reference at all, as opposed to whether a name is correctly *escaped*. `sql.Identifier("pg_authid")` quotes that name perfectly and then reads it — quoting answers "is this escaped?", only an allowlist answers "may this be named?". The schema catalog serves as both here.
+
 ---
 
 ## Evaluation

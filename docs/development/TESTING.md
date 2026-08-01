@@ -42,6 +42,7 @@ High-value targets:
 - **Retry budget** — exhaustion raises rather than looping.
 - **Settings validation** — out-of-range values fail at startup, client values clamp to ceilings.
 - **Prompt assembly** — stable prefix is byte-identical across requests (the prompt-cache precondition).
+- **Profiling bounds** — identifier resolution happens *before* any statement is composed (asserted with a connection that raises on any access, so the ordering is tested rather than the outcome); type eligibility for extremes; sample-size clamping.
 
 The LLM is a fake that returns scripted responses, so retry, decomposition, and self-correction logic is fully testable without a live model.
 
@@ -51,7 +52,7 @@ Real PostgreSQL via `testcontainers`, with pgvector.
 
 **Not SQLite, not a mock.** The security model *is* Postgres role enforcement; testing it against anything else tests nothing. The container is created per session, and per-test isolation comes from transaction rollback.
 
-Covers: migrations up and down; role and grant creation; vector round-trip and ANN retrieval; statement timeout actually firing; connection pool exhaustion behaviour; audit-log writes.
+Covers: migrations up and down; role and grant creation; vector round-trip and ANN retrieval; statement timeout actually firing; connection pool exhaustion behaviour; audit-log writes; and profiling behaviour that has no useful fake — what `count(DISTINCT)` does to a `json` column, what `reltuples` reports before an `ANALYZE`, and whether a statement composed from a catalog name actually runs.
 
 ## 5. Security tests — the ones that must fail
 
@@ -91,6 +92,13 @@ Additional cases:
 - Every AST rejection path is re-tested end-to-end through `execute_sql` — it must reject independently, not rely on the caller having validated first.
 - Stacked queries (`SELECT 1; DROP TABLE x`).
 - Prompt-injection fixtures: sampled values and column comments containing instruction-shaped text. The assertion is not "the model ignored it" (unassertable) but "whatever SQL results is still `SELECT`-only, still row-limited, still runs under the read-only role."
+
+**Disclosure tests** are the other half of the negative suite, and they invert the question: the role tests assert the database *refuses*, these assert the system *withholds*. Two files carry them.
+
+- **What may reach a prompt.** A planted secret in a catalog element's serialized text is absent from the rendered prompt, plus an assertion that the *whole* serialized string is absent — so a value the test never considered is excluded with it — and an allowlist assertion writing out exactly what the model receives, line by line. Deliberately brittle: that assertion *is* the network boundary, and changing what crosses it should require editing a list.
+- **What a profile may reveal.** A sensitively-named column yields nothing even with sampling on; a value occurring once is withheld while a common one is not; a caller cannot request raw samples into existence. One test turns sampling *on* and asserts values do appear — without it, every negative test above would also pass if the feature were simply broken.
+
+A third kind appears here and nowhere else: **source-level assertions**. That no identifier is interpolated into SQL, that raw values are read in exactly one function, that the sensitivity check precedes the statistics call. They check the shape of a module rather than its behaviour, which is unusual and deliberate — the property being protected is that someone changing the file can *see* what they are changing.
 
 ## 6. Contract tests (MCP)
 

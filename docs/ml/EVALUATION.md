@@ -95,9 +95,12 @@ Every improvement is measured against something. Baselines to establish in Stage
 | No retrieval (full schema in prompt) | Is retrieval helping at all, or just saving tokens? |
 | Baseline retriever + generation, no validation | What does the validation tier contribute? |
 | Baseline retriever + validation, no self-correction | What does error feedback contribute? |
+| Full pipeline, `ENABLE_PROFILE_TABLE=false` | What does profiling contribute? Expected to move **filter errors** specifically, not accuracy uniformly — a profile tells the model a column stores `'FI'` rather than `'Finland'`, which nothing else in the pipeline can |
 | Full pipeline, baseline retriever | The number the fine-tune must beat |
 
 Attributing a gain to the fine-tuned retriever requires knowing what the rest of the pipeline was already worth.
+
+**The profiling ablation needs its failure category read, not just its total.** If it improves execution accuracy by a point while halving filter errors, the total is hiding the effect — and if it improves the total without moving filter errors, the gain came from somewhere else and the attribution is wrong.
 
 ## 5. Failure analysis
 
@@ -109,7 +112,7 @@ Attributing a gain to the fine-tuned retriever requires knowing what the rest of
 | Wrong column, right table | Retrieved correctly, linked incorrectly |
 | Join error | Wrong join path or missing condition |
 | Aggregation error | Wrong function, wrong grouping |
-| Filter error | Wrong predicate, wrong literal format |
+| Filter error | Wrong predicate, wrong literal format. **Split these two**: a wrong predicate is a reasoning failure, a wrong literal format (`'Finland'` for a column holding `'FI'`) is an information failure and is the one profiling is supposed to fix. Reported together, the ablation above is unreadable |
 | Ambiguity | Question genuinely underspecified — arguably not a model failure |
 | Gold error | The benchmark's reference query is wrong (this happens, especially in BIRD) |
 | Timeout | Query correct but too expensive |

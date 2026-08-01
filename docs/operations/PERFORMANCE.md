@@ -10,6 +10,7 @@
 |---|---|---|---|
 | Schema retrieval | **< 100 ms** p95 | `retrieval_duration_seconds` | ANN over a few thousand vectors; more than this means an index problem |
 | SQL validation | **< 50 ms** p95 | `mcp.call validate_sql` | Parse + `EXPLAIN`, no execution. Called repeatedly, so it must stay cheap |
+| Table profiling | **< 1 s** p95 | `mcp.call profile_table` | One bounded scan per column, so cost is `PROFILE_MAX_COLUMNS` × `PROFILE_SCAN_LIMIT`. Its own `PROFILE_TIMEOUT_MS` (10 s) is deliberately shorter than the executor's — profiling is a side quest during answering and should give up long before the real query would |
 | Query execution | **< 2 s** p95 | `db_query_duration_seconds` | Analytical aggregates on benchmark-sized data |
 | SSE first token | **< 500 ms** | Time to first event | Perceived responsiveness |
 | End-to-end (single query) | **< 8 s** p95 | `request_duration_seconds` | Dominated by LLM generation |
@@ -46,6 +47,8 @@ Ordered by expected payoff. **None applied before measurement** — that is how 
 | **HNSW `iterative_scan`** | Retrieval **correctness**, not just speed | Already on (`relaxed_order`). Turning it off is faster and silently returns fewer than `k` rows — see [../architecture/DATABASE.md](../architecture/DATABASE.md) §5.1 |
 | **Connection pool sizing** | Execution queueing | Database load |
 | **`MAX_ESTIMATED_COST`** | Tail latency | Rejects expensive queries pre-execution |
+| **`PROFILE_SCAN_LIMIT` / `PROFILE_MAX_COLUMNS`** | Profiling, and context budget | Statistics get less accurate. Both are also disclosure bounds — lowering them is safe in both directions, raising them is a security change ([../operations/SECURITY.md](SECURITY.md) §14.2.6) |
+| **Batching profiling into one statement per table** | Profiling round trips | Not done: types vary per column and frequent values need their own `GROUP BY`, so one composed statement over 30 columns is fragile. The first thing to revisit if profiling ever moves onto a hot path |
 | **Cross-encoder reranking** | Retrieval quality | *Adds* latency — [FUTURE.md](../project/FUTURE.md), not v1 |
 
 The second-order effect of better retrieval is worth naming: each avoided retry removes a full generation round trip. A fine-tune that reduces mean attempts from 1.8 to 1.3 improves p95 latency more than most direct latency work would.
