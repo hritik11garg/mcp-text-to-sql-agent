@@ -6,7 +6,7 @@ Two deployment shapes, with different security postures:
 
 | Shape | Transport | Auth | Audience |
 |---|---|---|---|
-| **MCP host** (Claude Desktop) | stdio subprocesses | Host-managed, user privileges | The "point it at your own database" story |
+| **MCP host** (any stdio host) | stdio subprocesses | Host-managed, user privileges | The "point it at your own database" story |
 | **HTTP service** | Streamable HTTP + SSE | API key required | Demo / production-style deployment |
 
 The MCP-host shape is the one that makes this project runnable by other people, so it gets the more polished setup path.

@@ -15,7 +15,7 @@
 > | Profiling — column stats under a documented disclosure budget | |
 > | Eval harness — comparison, Recall@k, resumable runs | |
 
-An agent that answers analytical questions in plain English against a real PostgreSQL database. Capabilities are exposed as **four MCP servers** rather than hardcoded functions, so any MCP host — Claude Desktop, or your own client — can point at them and query its own database.
+An agent that answers analytical questions in plain English against a real PostgreSQL database. Capabilities are exposed as **four MCP servers** rather than hardcoded functions, so any MCP host can point at them and query its own database — including the client this project ships.
 
 ---
 
@@ -36,6 +36,8 @@ An agent that answers analytical questions in plain English against a real Postg
 ---
 
 ## Overview
+
+> **Everything required to run, evaluate and demo this project is free and open source.** No paid tier, no proprietary application and no vendor account is a requirement at any point — the LLM runs against a free tier or a local Ollama, the MCP servers are driven by the client this repo ships, and the demo UI is served by the project's own API.
 
 Natural-language analytics tools usually fail in one of two ways: they hallucinate SQL against schemas they only half-retrieved, or they run that SQL with enough privilege to do damage. This project separates those concerns explicitly.
 
@@ -60,7 +62,7 @@ Why validation and execution are separate capabilities, how blast radius is boun
 
 > **TBD — Stage 1.** A React UI over the SSE stream, plus a GIF and screenshots, land with the API. Exact commands and expected output: [DEMO_SCRIPT.md](docs/project/DEMO_SCRIPT.md).
 >
-> The MCP servers run today and any MCP host can drive them ([MCP.md](docs/architecture/MCP.md) §9) — but that needs a host installed and configured, so it is how the project is *used*, not how it is *seen*.
+> The MCP servers run today and any MCP host can drive them ([MCP.md](docs/architecture/MCP.md) §9) — but that needs a host configured against a live database, so it is how the project is *used*, not how it is *seen*.
 
 ## Architecture
 
@@ -140,7 +142,15 @@ python -m mcp_servers.execute_sql
 python -m mcp_servers.profile_table
 ```
 
-Point Claude Desktop or any stdio-speaking MCP host at them with the config in [MCP.md](docs/architecture/MCP.md) §9. They need both database URLs and an indexed catalog; they do **not** need an LLM key, since they are called by a model rather than calling one.
+Three ways to drive them, **none of which costs anything or needs an account** ([MCP.md](docs/architecture/MCP.md) §9):
+
+| | |
+|---|---|
+| **The project's own client** | `ToolRegistry` — what the contract suite drives, so it is exercised on every test run |
+| **MCP Inspector** | `npx @modelcontextprotocol/inspector` — open-source browser UI, installs nothing permanently |
+| **Any desktop MCP host** | Claude Desktop and others work; one option, not a requirement |
+
+They need both database URLs and an indexed catalog. They do **not** need an LLM key, since they are called by a model rather than calling one.
 
 Still planned:
 

@@ -19,7 +19,7 @@ Run 10 minutes before, not 30 seconds before.
 - [ ] Target dataset loaded
 - [ ] Terminal font large enough to read on a shared screen
 - [ ] Recorded fallback video accessible offline
-- [ ] Claude Desktop configured and restarted (for the MCP segment)
+- [ ] An MCP host configured (MCP Inspector via `npx` is the zero-account option; any stdio host works)
 
 **The demo runs entirely locally** apart from the LLM API. That is a deliberate property — it removes almost every environmental dependency from the room.
 
@@ -77,7 +77,7 @@ Step 3 is the one worth doing deliberately. Blocking `DELETE` is the obvious con
 
 Run the harness on the smoke split live (fast), then show the full held-out results from BENCHMARKS.md. Walk through the failure taxonomy — including gold errors, counted rather than hidden.
 
-## Segment 5 — MCP from Claude Desktop (Stage 3)
+## Segment 5 — MCP from any host (Stage 3)
 
 > **TBD — Stage 3.**
 
@@ -85,7 +85,7 @@ Run the harness on the smoke split live (fast), then show the full held-out resu
 
 | Step | Action | Expected |
 |---|---|---|
-| 1 | Show the Claude Desktop config | Four servers |
+| 1 | Show the host config | Four servers |
 | 2 | Show the tools Claude discovered | Runtime discovery, not hardcoded |
 | 3 | Ask a question in Claude Desktop | Correct answer via the same servers |
 | 4 | Show a tool description | Says **when** to call it, with enforced limits |

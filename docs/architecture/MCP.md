@@ -266,7 +266,38 @@ The mapping is ordered most-specific-first rather than keyed by type, because th
 
 ## 9. Host configuration
 
-Each server is a module launched with `python -m`. Any MCP host that speaks stdio can run them; the block below is the `claude_desktop_config.json` shape, and the same four entries translate directly to other hosts.
+Each server is a module launched with `python -m`. Any host that speaks stdio can run them, and **none of the options below costs anything or requires an account** — see the constraint in [PROJECT.md](../../PROJECT.md).
+
+### 9.1 The project's own client — no third party at all
+
+`ToolRegistry` (`src/agent/discovery.py`) is a complete MCP client. It launches the servers, calls `tools/list`, and dispatches on what it finds. It is what the contract suite drives, so it is exercised on every test run.
+
+```python
+async with ToolRegistry() as registry:
+    print(registry.tools)                                   # discovered, not hardcoded
+    await registry.call("search_schema", {"query": "customer country"})
+```
+
+**This is the reference host.** The servers are proven against it in CI; every other host is a compatibility claim.
+
+### 9.2 MCP Inspector — an open-source UI, no install
+
+The official debugging client from the MCP project, MIT-licensed and run straight through `npx`:
+
+```powershell
+npx @modelcontextprotocol/inspector .venv\Scripts\python.exe -m mcp_servers.schema_search
+```
+
+It opens a browser UI listing the tools, their schemas, and lets you call them by hand. Needs Node available for `npx`; needs no account and installs nothing permanently. **This is the fastest way for someone else to confirm the servers work.**
+
+### 9.3 A desktop MCP host
+
+Claude Desktop, and any other stdio-speaking host, work with the config below. Listed third deliberately:
+
+- It is **one option, not the path.** Depending on a specific vendor's application would make this project's core capability contingent on someone else's product decisions.
+- Whether MCP support sits behind a paid tier has changed over time. That variability is itself the argument — a dependency whose availability can move under you is a poor foundation regardless of what it costs today.
+
+The config shape below is `claude_desktop_config.json`; the same four entries translate directly to any other host.
 
 ```json
 {
