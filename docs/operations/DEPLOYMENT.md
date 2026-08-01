@@ -23,6 +23,8 @@ There is a reason that ordering is not accidental: an HTTP-reachable `execute_sq
 
 Planned: multi-stage build on `python:3.12-slim` ([ADR-010](../architecture/DECISIONS.md#adr-010--python-312)).
 
+**Any OCI-compatible runtime.** The images and Compose file target the standard format, so Podman, Rancher Desktop, colima or Docker Engine all serve. Docker Desktop is free for personal use and requires a paid subscription for larger commercial organisations — convenient on Windows, and deliberately not a requirement, given the constraint in [PROJECT.md](../../PROJECT.md).
+
 Constraints to design for rather than discover:
 
 - **Image size.** `torch` dominates. The CPU-only wheel index cuts the image by well over a gigabyte, and inference does not need CUDA. GPU is a separate build target used for training.

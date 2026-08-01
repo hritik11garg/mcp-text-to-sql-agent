@@ -131,6 +131,8 @@ ruff check . ; mypy
 
 The Postgres-backed tests skip cleanly without a running Docker daemon. In CI that is not good enough: *skipped* and *passed* look alike, so the pipeline must fail if the security suite did not actually run.
 
+**A container runtime is needed for the tests, not to run the project.** `testcontainers` talks to any Docker-compatible socket, so **Podman**, **Rancher Desktop**, **colima** or plain **Docker Engine** all work — worth knowing because Docker Desktop is free for personal use but its licence requires a paid subscription for larger commercial organisations, and it is the one dependency here that is not free for everybody. Running the project itself needs a PostgreSQL 16 with pgvector from anywhere: a system install, a container, or a hosted free tier.
+
 ## Usage
 
 **As MCP servers — available now.** Each is a module launched over stdio:

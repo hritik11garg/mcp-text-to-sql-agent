@@ -40,9 +40,14 @@ sqlglot==30.13.0              # AST parse / validate / dialect-aware rewriting
 # The agent talks to an LLMClient protocol, never to a vendor SDK directly
 # (ADR-014). Most providers expose OpenAI-compatible endpoints, so the `openai`
 # package + a base_url covers Groq, OpenRouter, Cerebras, Gemini, Ollama, and
-# LM Studio with ONE adapter. `anthropic` is a second adapter, not the default.
+# LM Studio with ONE adapter -- including fully local runtimes, which is what
+# keeps the project runnable with no account at all (see PROJECT.md).
+#
+# `anthropic` was pinned here for a second adapter and is NOT installed: nothing
+# imports it, and it serves a provider with no free tier. Pinning an SDK that no
+# code uses makes this file a lie about what the project needs. It comes back
+# when the adapter does.
 openai==2.48.0                # OpenAI-compatible adapter (default provider path)
-anthropic==0.120.0            # native Anthropic adapter (optional, unused without a key)
 
 # --- Retrieval / ML inference ----------------------------------------------
 sentence-transformers==5.6.1  # schema linker (base + fine-tuned checkpoints)
