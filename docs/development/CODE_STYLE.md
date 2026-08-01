@@ -42,6 +42,7 @@ The tree as built — `README.md` carries the annotated version. Principles it f
 - **Organize by capability, not by layer.** `retrieval/` containing its model, queries, and service beats `models/` + `services/` + `repositories/` each holding one file per capability. Related code changes together.
 - **Each MCP server is its own package** with its own entrypoint — they are separate processes.
 - **Shared code goes in a `core/` package** and depends on nothing above it.
+- **The demo UI lives in `web/`, outside `src/`.** A different language and toolchain, built to static files that FastAPI serves — keeping it out of the Python package tree means `pip install` and `pytest` never touch it.
 - **No circular imports.** If two modules need each other, the shared piece belongs in `core/`.
 
 ## 4. Dependency injection
@@ -53,7 +54,7 @@ Dependencies are passed in, not imported at the call site.
 class Agent:
     def __init__(self) -> None:
         self.db = psycopg.connect(os.environ["DATABASE_URL"])
-        self.llm = anthropic.Anthropic()
+        self.llm = OpenAI(api_key=os.environ["LLM_API_KEY"])
 
 
 # Yes

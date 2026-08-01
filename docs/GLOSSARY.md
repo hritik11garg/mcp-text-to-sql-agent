@@ -28,7 +28,7 @@ A tool error is an expected, readable outcome (`isError: true` plus structured c
 A typed payload returned alongside the text block of a tool result. Optional in MCP, so the text block must carry the whole payload on its own.
 
 **MCP host**
-An application that embeds an MCP client — Claude Desktop, an IDE, or this project's own agent. The reason MCP matters for portfolio purposes: any host can point at these servers.
+An application that embeds an MCP client — this project's own `ToolRegistry`, the open-source MCP Inspector, an IDE, or a desktop app such as Claude Desktop. The reason MCP matters here: any host can point at these servers, and none of them is a requirement.
 
 **Tool contract**
 The name, description, and JSON Schema a server publishes for a tool. The contract is the actual interface design work — a tool wrapped in a protocol with a vague description is a wrapper, not a capability.

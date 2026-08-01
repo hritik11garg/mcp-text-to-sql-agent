@@ -111,7 +111,7 @@ HNSW index missing or not used. `EXPLAIN` the retrieval query — a sequential s
 
 ## MCP
 
-### Claude Desktop does not list the tools
+### A host does not list the tools
 
 1. Config file JSON is valid (a trailing comma silently breaks the whole file).
 2. **Absolute path to the virtualenv's interpreter.** A host does not inherit an activated environment, so a bare `python` resolves to whatever is first on the system `PATH` and dies on the first import.
@@ -119,8 +119,10 @@ HNSW index missing or not used. `EXPLAIN` the retrieval query — a sequential s
 4. **Both `DATABASE_URL` and `DATABASE_RO_URL` are set**, and they are different roles.
 5. **The catalog is indexed for the configured `DATASET`.** A server with an empty catalog refuses to start rather than answering "no such table" to a schema that plainly has one — the error names the dataset.
 6. The server runs standalone: launch it manually and check it starts without traceback.
-7. Claude Desktop fully restarted, not just the window closed.
-8. Check Claude Desktop's own MCP logs — startup failures go to stderr, which most hosts surface in a log pane rather than in the conversation.
+7. The host fully restarted, not just the window closed — desktop apps commonly cache the server list.
+8. Check the host's own MCP logs — startup failures go to stderr, which most hosts surface in a log pane rather than in the conversation.
+
+**Fastest way to isolate whether it is the server or the host:** run the server under the open-source MCP Inspector (`npx @modelcontextprotocol/inspector ...`, [MCP.md](../architecture/MCP.md) §9.2). If the tools list there, the server is fine and the problem is the host config.
 
 Copy-pasteable config: [../architecture/MCP.md](../architecture/MCP.md) §9.
 
@@ -194,7 +196,9 @@ If all four are ruled out and it is still worse, record it in [../ml/BENCHMARKS.
 
 ---
 
-## Docker
+## Container runtime
+
+> Any Docker-compatible runtime works — Podman, Rancher Desktop, colima, or Docker Engine. `testcontainers` talks to whichever socket is present. Docker Desktop is convenient on Windows and is not required; see [DEPLOYMENT.md](DEPLOYMENT.md) §1.
 
 ### `exec format error` / `no matching manifest`
 

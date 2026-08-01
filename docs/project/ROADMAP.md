@@ -13,14 +13,16 @@ Percentages are checkbox counts, not confidence. **Stages have not been built in
 | Stage | Output | Status | % |
 |---|---|---|---|
 | 0 | Scaffolding — docs, deps, interpreter pin | ✅ Done | 100% |
-| 1 | **Core loop** — retrieval, generation, validation, execution, profiling | 🚧 In progress | ~75% |
-| 2 | **Eval harness** — comparison, Recall@k, artifacts, resumption | 🚧 In progress | ~50% |
-| 3 | **MCP servers + client refactor** | 🚧 In progress | ~85% |
+| 1 | **Core loop** — retrieval, generation, validation, execution, profiling, API, demo UI | 🚧 In progress | 58% |
+| 2 | **Eval harness** — comparison, Recall@k, artifacts, resumption | 🚧 In progress | 43% |
+| 3 | **MCP servers + client refactor** | 🚧 In progress | 81% |
 | 4 | **Agent layer** — decomposition, session memory, self-correction | ⬜ Not started | 0% |
 | 5 | **Fine-tuned schema linker** | ⬜ Not started | 0% |
 | 6 | **Hardening** — limits, tracing, tests | ⬜ Not started | 0% |
 
-**What is genuinely blocking, in order:** loading a benchmark dataset (blocks every number in Stages 2, 3 and 5), then the HTTP API (blocks the Stage 1 close-out), then the agent loop.
+**What is genuinely blocking, in order:** loading a benchmark dataset (blocks every number in Stages 2, 3 and 5), then the HTTP API and the demo UI it serves (blocks the Stage 1 close-out and any visual demo), then the agent loop.
+
+**Stage 1 dropped from ~75% to 58%** when the demo UI was added to its scope. The percentage got worse because the plan got more honest, which is the direction it should move.
 
 **Stage 1 is not "the core loop works end to end".** Every component is built and tested; nothing has been run against a real dataset from a clean checkout, because there is no dataset. That distinction is the difference between the percentage above and a working demo.
 
@@ -83,7 +85,7 @@ Scope: Spider/BIRD acquisition and SQLite→Postgres conversion; database-level 
 
 **Output: runnable from any MCP host.**
 
-Scope: four MCP servers; agent becomes an MCP client with runtime discovery; stdio and HTTP transports; contract tests; Claude Desktop config.
+Scope: four MCP servers; agent becomes an MCP client with runtime discovery; stdio and HTTP transports; contract tests; host configuration for any stdio-speaking client.
 
 **Demo:** any MCP host — Claude Desktop, or the project's own `ToolRegistry` — connects, discovers the four tools, and queries a database with none of them hardcoded.
 

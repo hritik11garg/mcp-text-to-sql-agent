@@ -87,7 +87,7 @@ Run the harness on the smoke split live (fast), then show the full held-out resu
 |---|---|---|
 | 1 | Show the host config | Four servers |
 | 2 | Show the tools Claude discovered | Runtime discovery, not hardcoded |
-| 3 | Ask a question in Claude Desktop | Correct answer via the same servers |
+| 3 | Ask a question through the host | Correct answer via the same servers |
 | 4 | Show a tool description | Says **when** to call it, with enforced limits |
 
 **The strongest segment for a portfolio.** Someone can point their own host at these servers and query their own database — rare enough that people actually try it.

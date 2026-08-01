@@ -28,7 +28,7 @@ The unusual entry is database *values*. Retrieved sample rows and column comment
 1. Data in the target database (confidentiality, integrity).
 2. Database availability.
 3. `agent_meta` — sessions, audit log, embeddings.
-4. Credentials — database password, Anthropic API key.
+4. Credentials — database password, LLM API key (whichever provider is configured; none at all when running against a local model).
 5. LLM spend.
 
 ### Adversaries

@@ -46,7 +46,7 @@ The agent depends on the `LLMClient` protocol, never on a vendor SDK ([ADR-014](
 
 | Variable | Type | Default | Notes |
 |---|---|---|---|
-| `LLM_PROVIDER` | enum | `openai_compatible` | `openai_compatible` / `anthropic` / `fake` |
+| `LLM_PROVIDER` | enum | `openai_compatible` | `openai_compatible` / `fake`. `anthropic` is accepted by the enum and **raises at startup** — the adapter is unbuilt and its SDK is not installed |
 | `LLM_BASE_URL` | str | — | Required for `openai_compatible`. **Operator-only — never client-controlled** (SSRF; see [SECURITY.md](SECURITY.md) §14.1) |
 | `LLM_MODEL` | str | — | **Required.** Provider-specific model id |
 | `LLM_API_KEY` | SecretStr | — | Required unless the endpoint is local (Ollama / LM Studio) |

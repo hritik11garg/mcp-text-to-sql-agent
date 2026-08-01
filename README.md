@@ -189,13 +189,16 @@ Directories marked *(stub)* exist with a docstring stating which stage fills the
 │   ├── execution/              # row limits, timeouts, audit trail
 │   ├── profiling/              # column statistics under a disclosure budget
 │   ├── mcp_servers/            # four servers + the shared error contract
+│   ├── evals/                  # comparison, Recall@k, artifacts, resumable runs
 │   ├── agent/                  # tools/list discovery; planner and memory — Stage 4
 │   └── api/                    # (stub) FastAPI + SSE
+├── web/                        # (stub) React + TypeScript demo UI — Stage 1
 ├── tests/
 │   ├── unit/                   # no I/O, fakes throughout
 │   ├── integration/            # real Postgres via testcontainers
 │   ├── contract/               # servers as subprocesses over real stdio
 │   └── security/               # negative tests — the role MUST be denied
+├── results/                    # eval artifacts, gitignored — real rows, see SECURITY §14.2.8
 └── docs/
     ├── GLOSSARY.md
     ├── architecture/           # SYSTEM_ARCHITECTURE, API, MCP, DATABASE, DECISIONS

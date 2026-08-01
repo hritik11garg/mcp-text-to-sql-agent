@@ -55,7 +55,7 @@ Status values: `accepted` · `superseded by ADR-NNN` · `revisit at Stage N`
 - *Direct function calls* — simpler, faster, no IPC. Rejected: nobody else can run the capabilities, and the tool boundary stops being a designed contract.
 - *REST endpoints per capability* — usable by others, but no discovery. The agent would need a hardcoded client per endpoint, which is the thing being avoided.
 
-**Tradeoff.** Process management, IPC latency, and a protocol dependency. Bought: anyone can point Claude Desktop at these servers and query their own database, and the tool contracts become real interface-design work rather than function signatures.
+**Tradeoff.** Process management, IPC latency, and a protocol dependency. Bought: anyone can point *any* stdio-speaking MCP host at these servers — including the client this project ships — and query their own database, and the tool contracts become real interface-design work rather than function signatures.
 
 **Note.** The risk here is shipping "three functions in a protocol wrapper." The mitigation is contract quality — descriptions that say *when* to call, schema-enforced limits, structured errors the agent can act on. See [MCP.md](MCP.md) §3.
 
@@ -136,7 +136,7 @@ Status values: `accepted` · `superseded by ADR-NNN` · `revisit at Stage N`
 
 **Status:** ~~accepted~~ **superseded by [ADR-014](#adr-014--provider-agnostic-llm-behind-an-llmclient-port)** · **Date:** 2026-07-26 · **Stage:** 0
 
-> Superseded the same day: no Anthropic API key is available, so pinning a single vendor SDK made the Stage 1 core loop undemoable. The reasoning below about *model capability* still holds and is why Anthropic remains a supported adapter — what changed is that the provider is now a runtime choice rather than a hardcoded dependency.
+> Superseded the same day: no Anthropic API key is available, so pinning a single vendor SDK made the Stage 1 core loop undemoable. The reasoning below about *model capability* still holds; what changed is that the provider became a runtime choice rather than a hardcoded dependency. **A native Anthropic adapter is designed and unbuilt**, and its SDK is no longer pinned — see [ADR-014](#adr-014--provider-agnostic-llm-behind-an-llmclient-port) and the free-and-open-source constraint in [PROJECT.md](../../PROJECT.md).
 
 **Decision.** The official `anthropic` Python SDK, default model `claude-opus-5`, adaptive thinking enabled.
 
@@ -228,7 +228,7 @@ Status values: `accepted` · `superseded by ADR-NNN` · `revisit at Stage N`
                         Gemini · Ollama · LM Studio
 ```
 
-**Two adapters, not seven.** Nearly every provider now exposes an OpenAI-compatible `/chat/completions` endpoint, so one adapter parameterized by `base_url` covers Groq, OpenRouter, Cerebras, Gemini's compatibility endpoint, and local Ollama / LM Studio. Writing one class per vendor would violate DRY for no gain — the differences are configuration, not behaviour. A second native adapter exists for Anthropic because its tool-use and thinking surface is genuinely different, and it is the target if a key becomes available.
+**Two adapters, not seven.** Nearly every provider now exposes an OpenAI-compatible `/chat/completions` endpoint, so one adapter parameterized by `base_url` covers Groq, OpenRouter, Cerebras, Gemini's compatibility endpoint, and local Ollama / LM Studio. Writing one class per vendor would violate DRY for no gain — the differences are configuration, not behaviour. A second native adapter is *designed* for Anthropic, whose tool-use and thinking surface is genuinely different, and remains unbuilt: its SDK is no longer pinned either, because a dependency nothing imports, for a provider with no free tier, is the wrong default under the constraint in [PROJECT.md](../../PROJECT.md).
 
 **Alternatives.**
 - *LangChain / LiteLLM as the abstraction* — rejected. Both are large dependencies that would own the agent loop, and the tool-boundary design is the substance of this project ([ADR-003](#adr-003--mcp-for-the-tool-boundary)). Delegating it to a framework hides exactly the work worth showing. A protocol plus two adapters is ~150 lines and fully under test.
