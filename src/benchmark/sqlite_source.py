@@ -228,6 +228,40 @@ class SqliteDatabase:
         finally:
             cursor.close()
 
+    def storage_classes(self, table: str, columns: Sequence[str]) -> dict[str, set[str]]:
+        """The exact set of SQLite storage classes present in each column.
+
+        ``typeof()`` reports what a value *is* -- ``'integer'``, ``'real'``,
+        ``'text'``, ``'blob'``, ``'null'`` -- which is precisely the question
+        type inference needs to answer, and SQLite can answer it over the whole
+        column without materialising a single row in Python.
+
+        **This replaced sampling rows into Python, and the reason is worth
+        keeping.** Sampling was capped at ``BENCHMARK_TYPE_SCAN_ROWS``, and
+        Spider's ``wta_1.rankings`` has 510,437 rows with exactly one
+        empty-string ``player_id`` sitting at rowid 1,593,272 -- far past a
+        200,000-row cap. The column was inferred ``bigint``, the load ran, and
+        it died on that one value with ``invalid literal for int()``. A partial
+        scan can only ever be wrong in one direction, and being wrong in that
+        direction costs a whole database.
+
+        One query per table rather than one per column: ``group_concat`` with
+        ``DISTINCT`` aggregates each column's classes in a single pass, so this
+        is one full scan regardless of width.
+        """
+        projection = ", ".join(
+            f"group_concat(DISTINCT typeof({quote_sqlite_identifier(column)}))"
+            for column in columns
+        )
+        statement = f"SELECT {projection} FROM {quote_sqlite_identifier(table)}"  # noqa: S608
+        row = self.connection.execute(statement).fetchone()
+
+        found: dict[str, set[str]] = {}
+        for index, column in enumerate(columns):
+            raw = row[index] if row else None
+            found[column] = set(str(raw).split(",")) if raw else set()
+        return found
+
     def execute(self, statement: str) -> list[tuple[Any, ...]]:
         """Run one gold query against the source, for conversion verification.
 

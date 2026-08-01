@@ -30,18 +30,23 @@ docker-compose.override.yaml
 # Benchmark data. Spider and BIRD are CC BY-SA 4.0 and are deliberately NOT
 # vendored — a download script fetches them. See docs/ml/DATASETS.md §7.
 #
-# Two things under data/ ARE committed, and both are reproducibility records
-# rather than data: the digests of the archives every recorded number was
-# computed from, and the database-level split assignment. A split that is
-# regenerated instead of read makes two runs incomparable (EVALUATION.md §2).
-# Note the pattern is `data/*` and not `data/` — git will not descend into an
-# ignored *directory*, so a later negation could never re-include anything.
+# Committed: the digests of the archives every number came from, and the
+# database-to-split assignment. Both are *metadata* -- a list of database names
+# and labels -- and both are the reproducibility record EVALUATION.md §2 needs.
+#
+# NOT committed: the per-split .jsonl files. Those hold the questions and gold
+# SQL themselves, which is the benchmark, which is CC BY-SA, and §7 of
+# DATASETS.md says it is not vendored. They regenerate exactly from the
+# assignment plus the archive the lockfile pins, so committing them would
+# redistribute 2.5 MB of someone else's licensed data to save one command.
+#
+# `data/*` and not `data/` -- git will not descend into an ignored *directory*,
+# so a negation under it could never re-include anything.
 data/*
 !data/artifacts.lock.json
 !data/splits/
 data/splits/*
-!data/splits/*.json
-!data/splits/*.jsonl
+!data/splits/*-assignment.json
 datasets/
 *.sqlite
 *.sqlite3

@@ -23,6 +23,13 @@ conversion succeeds, the load succeeds, and every question about the affected
 table is scored against the wrong data with nothing anywhere to indicate it.
 Refusing costs one database out of two hundred and says which one and why.
 
+**Refusal is for ambiguity, not for punctuation.** The first version of this
+module also refused any character outside ``[a-z0-9_ $-]``, which sounded
+prudent and cost two real Spider databases over a ``%`` and a pair of
+parentheses. Nothing about those characters is dangerous once every composition
+site uses ``sql.Identifier``; the narrow set was usability reasoning wearing a
+security label. See :data:`_FORBIDDEN`.
+
 Everything composed downstream still goes through :class:`psycopg.sql.Identifier`.
 This module decides *whether a name may be used at all*; quoting decides how it
 is written. Escaping is not authorization -- see ADR-017.
@@ -30,7 +37,6 @@ is written. Escaping is not authorization -- see ADR-017.
 
 from __future__ import annotations
 
-import re
 from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
 
@@ -41,16 +47,31 @@ MAX_IDENTIFIER_BYTES = 63
 not rejected, which is precisely the silent-collision case this module exists to
 prevent."""
 
-_ALLOWED = re.compile(r"[a-z0-9_][a-z0-9_ $-]*")
-"""Deliberately narrow.
+_FORBIDDEN = frozenset('"\\')
+"""The only characters that are actually refused, and both for concrete reasons.
 
-Quoting makes almost anything legal as a PostgreSQL identifier, so this is not
-about what the server accepts. It is about what a gold query can reference and
-what a human can read in an error message. Spaces and hyphens are allowed
-because real benchmark schemas contain them; quotes, backslashes, semicolons,
-dots and control characters are not, because a name containing one is either
-unusable from gold SQL or an attempt at something.
+A double quote is what :class:`psycopg.sql.Identifier` and
+:func:`quote_sqlite_identifier` escape by doubling. Excluding it outright means
+a missed doubling anywhere is a bug rather than an injection, which is worth
+keeping even though both quoting paths are correct today. A backslash is an
+escape character in several of the string contexts these names pass through and
+buys nothing.
+
+**This list used to be an allowlist of ``[a-z0-9_ $-]``, and that was wrong.**
+Running the real Spider corpus refused two databases outright: ``aircraft`` for
+a column named ``%_Change_2007`` and ``orchestra`` for
+``Official_ratings_(millions)``. Neither character is dangerous — every
+identifier in this project is composed with ``sql.Identifier``, which quotes
+whatever it is given — so the narrow set was buying no safety and costing
+databases. It was doing *usability* work ("can a gold query name this?")
+dressed as security work, and the two have different right answers.
+
+What still refuses a name: a control character, a non-ASCII character, an empty
+name, and anything over PostgreSQL's 63-byte limit. Those are representability
+and ambiguity limits, which is the category this check actually belongs to.
 """
+
+_ASCII_PRINTABLE = frozenset(chr(c) for c in range(0x20, 0x7F))
 
 
 def to_pg_identifier(raw: str, *, kind: str = "identifier") -> str:
@@ -64,7 +85,8 @@ def to_pg_identifier(raw: str, *, kind: str = "identifier") -> str:
 
     Raises:
         UnsafeIdentifierError: The name is empty, too long once encoded, or
-            contains a character outside :data:`_ALLOWED`.
+            contains a quote, a backslash, a control character, or anything
+            non-ASCII. See :data:`_FORBIDDEN` for why the list is that short.
     """
     stripped = raw.strip()
     if not stripped:
@@ -72,12 +94,13 @@ def to_pg_identifier(raw: str, *, kind: str = "identifier") -> str:
 
     folded = stripped.lower()
 
-    if not _ALLOWED.fullmatch(folded):
-        offending = sorted({ch for ch in folded if not _ALLOWED.fullmatch(f"a{ch}")})
+    offending = sorted({ch for ch in folded if ch in _FORBIDDEN or ch not in _ASCII_PRINTABLE})
+    if offending:
+        shown = ", ".join(repr(ch) if ch.isprintable() else f"U+{ord(ch):04X}" for ch in offending)
         raise UnsafeIdentifierError(
-            f"{kind} {raw!r} contains characters that cannot be used safely: "
-            f"{offending!r}. It is refused rather than rewritten, because a "
-            f"rewrite that collides with another name merges two objects."
+            f"{kind} {raw!r} contains characters that cannot be used safely: {shown}. "
+            f"It is refused rather than rewritten, because a rewrite that collides "
+            f"with another name merges two objects."
         )
 
     encoded = len(folded.encode("utf-8"))

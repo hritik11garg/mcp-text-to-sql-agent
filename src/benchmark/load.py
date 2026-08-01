@@ -31,6 +31,7 @@ from benchmark import acquire, convert, readers, splits
 from benchmark.sources import DEFAULT_LOCK_PATH, ArtifactLock, resolve_artifact
 from benchmark.sqlite_source import open_database
 from benchmark.verify import verify_database
+from core.dsn import libpq_dsn, redact_dsn
 from core.exceptions import BenchmarkError, ConfigurationError
 from core.settings import BenchmarkSettings, DatabaseSettings
 from evals.dataset import Question, Split, write_questions
@@ -120,7 +121,7 @@ def command_acquire(args: argparse.Namespace, settings: LoaderSettings) -> int:
     destination = data_dir / artifact.key
     if args.replace:
         acquire.clear_directory(destination)
-    written = acquire.extract(archive, destination, settings=settings.benchmark)
+    extracted = acquire.extract(archive, destination, settings=settings.benchmark)
 
     print(
         json.dumps(
@@ -129,7 +130,10 @@ def command_acquire(args: argparse.Namespace, settings: LoaderSettings) -> int:
                 "sha256": digest,
                 "size_bytes": size,
                 "extracted_to": str(destination),
-                "files": len(written),
+                "files": len(extracted.written),
+                "skipped": [
+                    {"member": name, "reason": reason} for name, reason in extracted.skipped
+                ],
             },
             indent=2,
         )
@@ -320,11 +324,16 @@ def _connect(settings: LoaderSettings) -> psycopg.Connection[Any]:
     url = settings.database.database_url
     if url is None:
         raise ConfigurationError("DATABASE_URL is required to convert or verify")
-    return psycopg.connect(
-        url.get_secret_value(),
-        autocommit=True,
-        connect_timeout=max(1, settings.database.db_connect_timeout_ms // 1000),
-    )
+    try:
+        return psycopg.connect(
+            libpq_dsn(url),
+            autocommit=True,
+            connect_timeout=max(1, settings.database.db_connect_timeout_ms // 1000),
+        )
+    except psycopg.Error as exc:
+        raise ConfigurationError(
+            f"could not connect using DATABASE_URL: {redact_dsn(str(exc)).strip()}"
+        ) from None
 
 
 def _write_report(path: Path | None, body: dict[str, Any]) -> None:
@@ -413,7 +422,10 @@ def main(argv: list[str] | None = None) -> int:
         logger.error("%s", exc)
         return EXIT_ERROR
     except psycopg.Error as exc:
-        logger.error("database error: %s", str(exc).splitlines()[0])
+        # Redacted, always. psycopg quotes the DSN it was given, so an
+        # unredacted log line here writes a live password to a terminal, a
+        # CI transcript, and whatever collects them.
+        logger.error("database error: %s", redact_dsn(str(exc).splitlines()[0]))
         return EXIT_ERROR
 
 

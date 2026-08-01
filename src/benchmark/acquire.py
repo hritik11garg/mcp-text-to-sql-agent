@@ -20,6 +20,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import os
+import re
 import shutil
 import stat
 import zipfile
@@ -128,18 +129,73 @@ def download(
     return Acquired(path=destination, sha256=digest.hexdigest(), size_bytes=total)
 
 
+_DRIVE = re.compile(r"^[A-Za-z]:")
+_WINDOWS_ILLEGAL = '<>:"|?*'
+DATABASE_SUFFIXES = (".sqlite", ".sqlite3", ".db")
+
+
+def unrepresentable_reason(name: str) -> str | None:
+    """Why the local filesystem cannot hold this member's name, or ``None``.
+
+    **Separate from the escape checks on purpose, and that separation was
+    missing until a real archive hit it.** Spider ships
+    ``receipts (3:11:18, 5:53 PM)_original.csv`` -- a timestamp in a filename.
+    A colon anywhere used to be rejected as "a drive or stream separator",
+    which failed the entire benchmark on a CSV that is not an attack and not
+    even a file this project reads.
+
+    The two categories are genuinely different:
+
+    - **An escape** -- ``..``, an absolute path, a leading drive letter, a
+      symlink -- means the archive is not trustworthy. Refuse all of it.
+    - **An unrepresentable name** means *this filesystem* cannot store it. The
+      same archive extracts cleanly on Linux. Skip the member, record it, and
+      keep going.
+
+    Conflating them turns a portability limitation into an accusation and
+    makes the tool refuse legitimate data.
+
+    Windows-only because these characters are perfectly legal on POSIX, and
+    skipping them everywhere would discard real files to no benefit. That does
+    make extraction platform-dependent, which is acceptable for exactly one
+    reason: :func:`extract` refuses outright if a *database* file is ever the
+    unrepresentable one, so the converted corpus cannot differ between
+    platforms without the loader saying so.
+    """
+    if os.name != "nt":
+        return None
+    for part in name.replace("\\", "/").split("/"):
+        # `.` and `..` are path semantics, not filenames. Excluded so this
+        # function cannot classify a traversal component as merely unwritable
+        # even if it is ever called before the escape check -- which is a
+        # mistake that has already been made once here.
+        if not part or part in (".", ".."):
+            continue
+        illegal = sorted({ch for ch in part if ch in _WINDOWS_ILLEGAL})
+        if illegal:
+            return f"contains {''.join(illegal)!r}, which Windows filenames cannot hold"
+        if part != part.rstrip(" ."):
+            return "ends in a space or dot, which Windows silently strips"
+    return None
+
+
 def resolve_member(name: str, destination: Path) -> Path:
     """Where an archive member is allowed to be written, or an error.
 
     Every check here has a specific archive in mind:
 
-    - an absolute path, or a Windows drive letter, writes wherever it likes;
+    - an absolute path, or a leading Windows drive letter, writes wherever it
+      likes -- and ``Path.joinpath`` on a drive-absolute component *discards*
+      everything to its left, so this is not theoretical;
     - ``..`` anywhere in the path climbs out of the destination;
     - a backslash separator is a path separator on Windows and an ordinary
       character in a zip name, so ``..\\..\\x`` passes a POSIX-only check;
     - a trailing realpath containment check catches whatever the name-level
       checks did not anticipate, including a symlink planted earlier in the
       same archive.
+
+    A colon *inside* a component is not checked here -- that is representability,
+    not escape. See :func:`unrepresentable_reason`.
 
     Raises:
         UnsafeArchiveError: The member does not resolve to a path strictly
@@ -153,8 +209,8 @@ def resolve_member(name: str, destination: Path) -> Path:
 
     if any(part == ".." for part in parts):
         raise UnsafeArchiveError(f"archive member {name!r} escapes the destination with '..'")
-    if any(":" in part for part in parts):
-        raise UnsafeArchiveError(f"archive member {name!r} contains a drive or stream separator")
+    if any(_DRIVE.match(part) for part in parts):
+        raise UnsafeArchiveError(f"archive member {name!r} contains a drive reference")
     if not parts:
         raise UnsafeArchiveError(f"archive member {name!r} has no usable path")
 
@@ -185,7 +241,23 @@ def _is_link(info: zipfile.ZipInfo) -> bool:
     return file_type not in (stat.S_IFREG, stat.S_IFDIR)
 
 
-def extract(archive: Path, destination: Path, *, settings: BenchmarkSettings) -> list[Path]:
+@dataclass(frozen=True, slots=True)
+class Extraction:
+    """What came out of an archive, including what deliberately did not."""
+
+    written: list[Path]
+    skipped: list[tuple[str, str]]
+    """``(member name, reason)`` for members this filesystem cannot hold.
+
+    Returned rather than logged so a caller can surface the count. A file the
+    tool decided not to write is exactly the kind of thing that should not be
+    discoverable only by noticing it missing later.
+    """
+
+    total_bytes: int
+
+
+def extract(archive: Path, destination: Path, *, settings: BenchmarkSettings) -> Extraction:
     """Unpack a zip, refusing anything that could write outside ``destination``.
 
     Every member path is validated before the archive is opened for reading, so
@@ -195,11 +267,16 @@ def extract(archive: Path, destination: Path, *, settings: BenchmarkSettings) ->
     in the archive directory. A declared size is attacker-controlled; a 42-byte
     zip that expands to petabytes declares whatever it needs to.
 
-    Returns:
-        The files written, in archive order.
+    **An escape fails the archive; an unrepresentable name skips the member.**
+    The exception is a *database* file — skipping one of those would silently
+    change which databases the corpus contains, so it fails the archive
+    instead. That is the line between "this filesystem cannot store a CSV with
+    a colon in its name" and "the benchmark you converted is not the benchmark
+    you think it is".
 
     Raises:
-        UnsafeArchiveError: A member is unsafe, or the archive exceeds a cap.
+        UnsafeArchiveError: A member escapes, is a link, exceeds a cap, or is
+            an unrepresentable database file.
     """
     destination.mkdir(parents=True, exist_ok=True)
 
@@ -215,12 +292,37 @@ def extract(archive: Path, destination: Path, *, settings: BenchmarkSettings) ->
         # Whole-archive validation first: a rejection must not leave half an
         # extraction behind for a later run to pick up as if it were complete.
         targets: list[tuple[zipfile.ZipInfo, Path]] = []
+        skipped: list[tuple[str, str]] = []
         for info in infos:
             if _is_link(info):
                 raise UnsafeArchiveError(
                     f"archive member {info.filename!r} is a symlink or special file"
                 )
-            targets.append((info, resolve_member(info.filename, destination)))
+
+            # ORDER IS LOAD-BEARING. The escape check runs first, always.
+            #
+            # Written the other way round for one commit, and the traversal
+            # suite went red immediately: `..` is a path component that ends in
+            # a dot, so the representability rule matched it first and a
+            # traversal attempt was *skipped as a portability issue* rather
+            # than refused. A usability fix had quietly disarmed the primary
+            # control. Nothing may be classified as merely unwritable until it
+            # has been proven not to be an escape.
+            target = resolve_member(info.filename, destination)
+
+            reason = unrepresentable_reason(info.filename)
+            if reason is not None:
+                if info.filename.lower().endswith(DATABASE_SUFFIXES):
+                    raise UnsafeArchiveError(
+                        f"database file {info.filename!r} {reason}. Skipping it would "
+                        f"silently drop a database from the corpus, so the archive is "
+                        f"refused instead. Extract it on a filesystem that can hold "
+                        f"the name."
+                    )
+                skipped.append((info.filename, reason))
+                continue
+
+            targets.append((info, target))
 
         written: list[Path] = []
         total = 0
@@ -237,8 +339,13 @@ def extract(archive: Path, destination: Path, *, settings: BenchmarkSettings) ->
             total += _copy_member(bundle, info, target, budget=budget)
             written.append(target)
 
+        if skipped:
+            logger.warning(
+                "skipped %d member(s) this filesystem cannot name; none were databases",
+                len(skipped),
+            )
         logger.info("extracted %d files (%d bytes) from %s", len(written), total, archive.name)
-        return written
+        return Extraction(written=written, skipped=skipped, total_bytes=total)
 
 
 def _copy_member(
@@ -287,10 +394,13 @@ def clear_directory(path: Path) -> None:
 
 
 __all__ = [
+    "DATABASE_SUFFIXES",
     "Acquired",
+    "Extraction",
     "clear_directory",
     "download",
     "extract",
     "resolve_member",
     "sha256_file",
+    "unrepresentable_reason",
 ]

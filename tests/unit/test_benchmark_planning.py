@@ -194,19 +194,28 @@ class TestPlanning:
         ):
             plan_database(database, settings=benchmark_settings)
 
-    def test_a_truncated_type_scan_is_recorded(self, make_sqlite_db: Callable[..., Path]) -> None:
-        values = ", ".join(f"({n})" for n in range(10))
-        # S608 does not apply: this is fixture DDL built from a range(), going
-        # into a throwaway SQLite file. Nothing here comes from outside.
-        script = f"CREATE TABLE t (a INT); INSERT INTO t VALUES {values};"  # noqa: S608
-        path = make_sqlite_db("wide", script)
+    def test_type_inference_sees_a_value_far_past_any_sample_window(
+        self, make_sqlite_db: Callable[..., Path], benchmark_settings: BenchmarkSettings
+    ) -> None:
+        # The bug this replaced a sampling cap to fix. Spider's `wta_1.rankings`
+        # has 510,437 rows and exactly one empty-string `player_id` at rowid
+        # 1,593,272 -- past a 200,000-row sample. The column was inferred
+        # `bigint`, the load ran, and it died on that single value.
+        #
+        # `group_concat(DISTINCT typeof(col))` is exact over the whole column,
+        # so position in the table cannot change the answer.
+        values = ", ".join(f"({n})" for n in range(500))
+        script = (
+            "CREATE TABLE t (a INT); "  # noqa: S608
+            f"INSERT INTO t VALUES {values}; "
+            "INSERT INTO t VALUES ('');"
+        )
+        path = make_sqlite_db("late_outlier", script)
 
-        with open_database(path, db_id="wide") as database:
-            _, plans = plan_database(
-                database, settings=BenchmarkSettings(benchmark_type_scan_rows=3)
-            )
+        with open_database(path, db_id="late_outlier") as database:
+            _, plans = plan_database(database, settings=benchmark_settings)
 
-        assert plans[0].truncated_scan is True
+        assert plans[0].columns[0].pg_type == TEXT
 
     def test_views_and_virtual_tables_are_not_converted(
         self, make_sqlite_db: Callable[..., Path], benchmark_settings: BenchmarkSettings

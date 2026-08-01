@@ -1,0 +1,12 @@
+{
+  "_comment": "Digests of the benchmark archives this project has been run against. Committed on purpose: a benchmark number is only comparable to another one computed from the same bytes. Recorded by `python -m benchmark.load acquire --trust-on-first-use`; never edit by hand to make a check pass.",
+  "artifacts": {
+    "spider": {
+      "filename": "spider_data.zip",
+      "sha256": "00636695dabed6b5f4b8328a16b13e069a2f16591d5efcce57660669c85b121b",
+      "size_bytes": 205800266,
+      "recorded_at": "2026-08-01T18:23:07+00:00",
+      "source": "local:spider_data.zip"
+    }
+  }
+}

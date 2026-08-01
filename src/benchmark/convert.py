@@ -33,8 +33,8 @@ must not quietly relax to make something work.
 from __future__ import annotations
 
 import logging
-from collections.abc import Iterable, Sequence
-from dataclasses import dataclass, field
+from collections.abc import Callable, Iterable, Sequence
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 import psycopg
@@ -131,6 +131,31 @@ def infer_pg_type(values: Iterable[Any], *, declared: str) -> str:
     return TEXT
 
 
+_CLASS_TO_TYPE = {"integer": BIGINT, "real": DOUBLE, "text": TEXT, "blob": BYTEA}
+
+
+def pg_type_for_storage_classes(classes: set[str], *, declared: str) -> str:
+    """Decide a PostgreSQL type from the storage classes a column actually holds.
+
+    The same widening rules as :func:`infer_pg_type`, applied to an *exact*
+    answer from SQLite rather than to a sample. ``'null'`` carries no
+    information and is discarded; a column with nothing else has no evidence at
+    all, so the declared affinity decides.
+    """
+    present = classes - {"null"}
+    if not present:
+        return _AFFINITY_DEFAULT[sqlite_affinity(declared)]
+    if "text" in present:
+        return TEXT
+    if "blob" in present:
+        return TEXT if present & {"integer", "real"} else BYTEA
+    if "real" in present:
+        return DOUBLE
+    if "integer" in present:
+        return BIGINT
+    return TEXT
+
+
 @dataclass(frozen=True, slots=True)
 class ColumnPlan:
     source_name: str
@@ -159,15 +184,6 @@ class TablePlan:
     foreign_keys: tuple[tuple[tuple[str, ...], str, tuple[str, ...]], ...] = ()
     """``(local columns, referenced table, referenced columns)``, already folded."""
 
-    truncated_scan: bool = False
-    """Whether type inference saw only part of the table.
-
-    Carried into the report rather than dropped: a plan built from a partial
-    scan can be wrong in exactly one direction -- too narrow -- and that shows
-    up as a load failure rather than a wrong answer, but only if someone knows
-    to look.
-    """
-
 
 @dataclass(slots=True)
 class ConversionReport:
@@ -178,7 +194,6 @@ class ConversionReport:
     tables: int = 0
     rows: int = 0
     coerced_columns: tuple[str, ...] = ()
-    truncated_scans: tuple[str, ...] = ()
     skipped_primary_keys: tuple[str, ...] = ()
     skipped_foreign_keys: tuple[str, ...] = ()
     text_replacements: int = 0
@@ -191,7 +206,6 @@ class ConversionReport:
             "tables": self.tables,
             "rows": self.rows,
             "coerced_columns": list(self.coerced_columns),
-            "truncated_scans": list(self.truncated_scans),
             "skipped_primary_keys": list(self.skipped_primary_keys),
             "skipped_foreign_keys": list(self.skipped_foreign_keys),
             "text_replacements": self.text_replacements,
@@ -246,7 +260,129 @@ def plan_database(
         )
         for name in names
     ]
-    return schema, plans
+    return schema, unify_foreign_key_types(database, plans)
+
+
+def unify_foreign_key_types(
+    database: SqliteDatabase, plans: Sequence[TablePlan]
+) -> list[TablePlan]:
+    """Give both sides of a foreign key the same PostgreSQL type, where the data allows.
+
+    **Why this is necessary, and why it is faithful rather than convenient.**
+    Spider declares ``concert.Stadium_ID`` as ``TEXT`` and stores ``'1'``, while
+    ``stadium.Stadium_ID`` is ``INT`` storing ``1``. SQLite joins them happily:
+    comparing a TEXT-affinity column to an INTEGER-affinity one applies *numeric*
+    affinity to the text operand, so ``'1' = 1`` is true there. PostgreSQL has no
+    such rule and answers ``operator does not exist: text = bigint``.
+
+    Left alone, per-column inference is locally correct and globally wrong: the
+    foreign key cannot be created, retrieval loses the join edge, and every gold
+    query crossing it fails. Measured on Spider: 35 of 769 foreign keys, across
+    21 of 166 databases, and 19 of 45 dev questions on ``concert_singer`` alone.
+
+    **The unification always runs toward the numeric type, never toward text.**
+    That direction reproduces what SQLite actually computed. The other direction
+    does not: ``'01' = 1`` is true under numeric affinity but ``'01' = '1'`` is
+    false as text, so widening a numeric column to text would silently change
+    which rows join.
+
+    A column is only re-typed when *every* one of its values converts losslessly.
+    Where they do not, the types stay as inferred and the constraint is dropped
+    and reported -- the honest outcome, because SQLite is then doing a comparison
+    this conversion cannot reproduce.
+    """
+    by_name = {plan.target_name: plan for plan in plans}
+    retyped: dict[tuple[str, str], str] = {}
+
+    for plan in plans:
+        for local, referenced_table, remote in plan.foreign_keys:
+            target = by_name.get(referenced_table)
+            if target is None:
+                continue
+            for local_column, remote_column in zip(local, remote, strict=True):
+                left = _column(plan, local_column)
+                right = _column(target, remote_column)
+                if left is None or right is None:
+                    continue
+
+                wanted = _unified_type(
+                    retyped.get((plan.target_name, local_column), left.pg_type),
+                    retyped.get((referenced_table, remote_column), right.pg_type),
+                )
+                if wanted is None:
+                    continue
+
+                for owner, column in ((plan, left), (target, right)):
+                    current = retyped.get((owner.target_name, column.target_name), column.pg_type)
+                    if current == wanted:
+                        continue
+                    if _values_fit(database, owner, column, wanted):
+                        retyped[(owner.target_name, column.target_name)] = wanted
+                    else:
+                        logger.info(
+                            "%s.%s cannot become %s without loss; foreign key will be dropped",
+                            owner.target_name,
+                            column.target_name,
+                            wanted,
+                        )
+
+    if not retyped:
+        return list(plans)
+
+    return [_apply_retypes(plan, retyped) for plan in plans]
+
+
+def _column(plan: TablePlan, target_name: str) -> ColumnPlan | None:
+    return next((c for c in plan.columns if c.target_name == target_name), None)
+
+
+_NUMERIC_RANK = {BIGINT: 1, DOUBLE: 2}
+
+
+def _unified_type(left: str, right: str) -> str | None:
+    """The type both sides should take, or ``None`` if they already agree or cannot."""
+    if left == right:
+        return None
+    if BYTEA in (left, right):
+        return None
+    if left in _NUMERIC_RANK and right in _NUMERIC_RANK:
+        return DOUBLE
+    # One side numeric, one side text: adopt the numeric type. Never the reverse.
+    numeric = left if left in _NUMERIC_RANK else right if right in _NUMERIC_RANK else None
+    return numeric
+
+
+def _values_fit(
+    database: SqliteDatabase, plan: TablePlan, column: ColumnPlan, pg_type: str
+) -> bool:
+    """Whether every value in a column converts to ``pg_type`` without loss.
+
+    Checked against the source rather than assumed from the inferred type,
+    because the whole point is that the inferred type was too narrow a view of
+    what the column means in a join.
+    """
+    caster: Callable[[Any], float] = int if pg_type == BIGINT else float
+    for (value,) in database.rows(plan.source_name, [column.source_name]):
+        if value is None:
+            continue
+        try:
+            converted = caster(value)
+        except (TypeError, ValueError):
+            return False
+        # `int('1.5')` raises, but `int(1.5)` silently truncates.
+        if pg_type == BIGINT and isinstance(value, float) and converted != value:
+            return False
+    return True
+
+
+def _apply_retypes(plan: TablePlan, retyped: dict[tuple[str, str], str]) -> TablePlan:
+    columns = tuple(
+        replace(column, pg_type=retyped[(plan.target_name, column.target_name)])
+        if (plan.target_name, column.target_name) in retyped
+        else column
+        for column in plan.columns
+    )
+    return replace(plan, columns=columns)
 
 
 def _plan_table(
@@ -261,20 +397,19 @@ def _plan_table(
     columns = column_maps[source.name]
     names = [column.name for column in source.columns]
 
-    scan_limit = settings.benchmark_type_scan_rows
-    sample = list(database.rows(source.name, names, limit=scan_limit + 1))
-    truncated = len(sample) > scan_limit
-    if truncated:
-        sample = sample[:scan_limit]
+    # Exact, over the whole column, in one scan. See `storage_classes`.
+    classes = database.storage_classes(source.name, names)
 
     plans = tuple(
         ColumnPlan(
             source_name=column.name,
             target_name=columns.safe(column.name),
-            pg_type=infer_pg_type((row[index] for row in sample), declared=column.declared_type),
+            pg_type=pg_type_for_storage_classes(
+                classes.get(column.name, set()), declared=column.declared_type
+            ),
             declared_type=column.declared_type,
         )
-        for index, column in enumerate(source.columns)
+        for column in source.columns
     )
 
     foreign_keys: list[tuple[tuple[str, ...], str, tuple[str, ...]]] = []
@@ -305,7 +440,6 @@ def _plan_table(
         columns=plans,
         primary_key=tuple(columns.safe(name) for name in source.primary_key),
         foreign_keys=tuple(foreign_keys),
-        truncated_scan=truncated,
     )
 
 
@@ -365,8 +499,6 @@ def convert_database(
             report.rows += _load_table(connection, database, schema_ident, plan, settings=settings)
             report.tables += 1
 
-            if plan.truncated_scan:
-                report.truncated_scans = (*report.truncated_scans, plan.target_name)
             report.coerced_columns = (
                 *report.coerced_columns,
                 *(
@@ -565,7 +697,9 @@ __all__ = [
     "adapt",
     "convert_database",
     "infer_pg_type",
+    "pg_type_for_storage_classes",
     "plan_database",
     "schema_name_for",
     "sqlite_affinity",
+    "unify_foreign_key_types",
 ]

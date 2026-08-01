@@ -395,15 +395,6 @@ class BenchmarkSettings(BaseSettings):
     benchmark_copy_batch_rows: int = Field(default=5_000, ge=1, le=1_000_000)
     """Rows buffered per COPY batch. Bounds loader memory on a wide table."""
 
-    benchmark_type_scan_rows: int = Field(default=200_000, ge=1)
-    """Rows read per column when inferring a PostgreSQL type.
-
-    SQLite columns are dynamically typed, so the declared type is a hint and
-    the data is the evidence. A cap exists so a huge table cannot make planning
-    unbounded; when it truncates, the plan records that the inference was
-    partial rather than presenting it as complete.
-    """
-
     benchmark_verify_timeout_ms: int = Field(default=30_000, ge=100, le=600_000)
 
 

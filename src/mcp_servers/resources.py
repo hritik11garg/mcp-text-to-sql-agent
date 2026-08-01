@@ -27,6 +27,7 @@ import psycopg
 from psycopg import Connection
 
 from adapters.embedding.factory import build_embedder
+from core.dsn import libpq_dsn, redact_dsn
 from core.exceptions import ConfigurationError
 from core.settings import Settings
 from schema.catalog import SchemaCatalog, load_catalog
@@ -120,10 +121,22 @@ def _connect(url: object, variable: str, *, timeout_ms: int) -> Connection[Any]:
     if url is None:
         raise ConfigurationError(f"{variable} is required to run this MCP server")
 
-    secret = url.get_secret_value() if hasattr(url, "get_secret_value") else str(url)
-    # libpq takes whole seconds and treats 0 as "wait forever", so a sub-second
-    # configured timeout must round up rather than down.
-    return psycopg.connect(secret, autocommit=True, connect_timeout=max(1, timeout_ms // 1000))
+    # `.env.example` ships DATABASE_URL in SQLAlchemy's `postgresql+psycopg://`
+    # form because alembic needs it, and psycopg rejects that string outright.
+    # Passing the raw value here meant a server following the shipped example
+    # could not open its owner connection at all.
+    dsn = libpq_dsn(url)
+    try:
+        # libpq takes whole seconds and treats 0 as "wait forever", so a
+        # sub-second configured timeout must round up rather than down.
+        return psycopg.connect(dsn, autocommit=True, connect_timeout=max(1, timeout_ms // 1000))
+    except psycopg.Error as exc:
+        # psycopg quotes the whole DSN back, password included. Re-raised as a
+        # configuration error with the credential removed, because this is
+        # startup and the message goes somewhere an operator is reading.
+        raise ConfigurationError(
+            f"could not connect using {variable}: {redact_dsn(str(exc)).strip()}"
+        ) from None
 
 
 __all__ = ["Resources"]

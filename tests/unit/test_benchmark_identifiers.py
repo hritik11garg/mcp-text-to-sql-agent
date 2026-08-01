@@ -40,21 +40,48 @@ class TestFolding:
 
 
 class TestRefusal:
+    """What is refused, and — just as deliberately — what is not.
+
+    The first version of this module allowed only ``[a-z0-9_ $-]``. Running the
+    real Spider corpus refused two whole databases over a ``%`` and a pair of
+    parentheses. Neither is dangerous once every composition site uses
+    ``sql.Identifier``; the narrow set was usability reasoning wearing a
+    security label, and it cost data.
+    """
+
     @pytest.mark.parametrize(
         "raw",
         [
-            'weird"name',
-            "drop;table",
-            "schema.table",
-            "back\\slash",
-            "new\nline",
-            "tab\there",
-            "unicode_ñame",
+            'weird"name',  # what both quoting paths escape by doubling
+            "back\\slash",  # an escape character in several string contexts
+            "new\nline",  # control character
+            "tab\there",  # control character
+            "unicode_ñame",  # non-ASCII: out of scope, not unsafe
         ],
     )
-    def test_dangerous_or_unusable_characters_are_refused(self, raw: str) -> None:
+    def test_genuinely_unusable_characters_are_refused(self, raw: str) -> None:
         with pytest.raises(UnsafeIdentifierError):
             to_pg_identifier(raw, kind="column")
+
+    @pytest.mark.parametrize(
+        "raw",
+        [
+            "%_Change_2007",  # Spider's `aircraft` -- refused by the old rule
+            "Official_ratings_(millions)",  # Spider's `orchestra` -- likewise
+            "schema.table",
+            "drop;table",
+            "a,b",
+            "a+b",
+            "50%",
+            "col#1",
+        ],
+    )
+    def test_punctuation_that_quoting_makes_safe_is_accepted(self, raw: str) -> None:
+        # None of these can escape `sql.Identifier`, which quotes whatever it is
+        # given. Refusing them bought no safety and cost two real databases. The
+        # allowlist that actually matters is the *catalog* -- which identifiers
+        # may be named at all -- not a character class (ADR-017).
+        assert to_pg_identifier(raw, kind="column") == raw.lower()
 
     @pytest.mark.parametrize("raw", ["", "   ", "\t"])
     def test_empty_names_are_refused(self, raw: str) -> None:
@@ -74,10 +101,10 @@ class TestRefusal:
 
     def test_the_error_names_the_kind_and_the_original(self) -> None:
         with pytest.raises(UnsafeIdentifierError) as caught:
-            to_pg_identifier("bad;name", kind="column")
+            to_pg_identifier('bad"name', kind="column")
         message = str(caught.value)
         assert "column" in message
-        assert "bad;name" in message
+        assert 'bad"name' in message
 
 
 class TestIdentifierMap:

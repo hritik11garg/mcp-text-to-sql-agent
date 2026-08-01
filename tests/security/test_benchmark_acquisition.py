@@ -14,6 +14,7 @@ data integrity failures); the size caps are availability controls.
 
 from __future__ import annotations
 
+import os
 import zipfile
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -23,7 +24,14 @@ from typing import IO
 
 import pytest
 
-from benchmark.acquire import clear_directory, download, extract, resolve_member, sha256_file
+from benchmark.acquire import (
+    clear_directory,
+    download,
+    extract,
+    resolve_member,
+    sha256_file,
+    unrepresentable_reason,
+)
 from benchmark.sources import ArtifactLock
 from core.exceptions import ArtifactIntegrityError, UnsafeArchiveError
 from core.settings import BenchmarkSettings
@@ -100,14 +108,99 @@ class TestPathTraversal:
         self, tmp_path: Path, settings: BenchmarkSettings
     ) -> None:
         archive = write_zip(tmp_path / "ok.zip", {"database/concert/concert.sqlite": b"data"})
-        written = extract(archive, tmp_path / "out", settings=settings)
+        result = extract(archive, tmp_path / "out", settings=settings)
 
-        assert written == [tmp_path / "out" / "database" / "concert" / "concert.sqlite"]
-        assert written[0].read_bytes() == b"data"
+        assert result.written == [tmp_path / "out" / "database" / "concert" / "concert.sqlite"]
+        assert result.written[0].read_bytes() == b"data"
+        assert result.skipped == []
 
     def test_resolve_member_rejects_a_path_that_climbs_out(self, tmp_path: Path) -> None:
         with pytest.raises(UnsafeArchiveError, match="escapes"):
             resolve_member("../x", tmp_path)
+
+    def test_a_drive_letter_is_still_refused(self, tmp_path: Path) -> None:
+        # Path.joinpath on a drive-absolute component discards everything to
+        # its left, so this is the one colon that really is an escape.
+        with pytest.raises(UnsafeArchiveError, match="drive reference"):
+            resolve_member("C:/windows/x", tmp_path)
+
+
+class TestUnrepresentableNames:
+    """A name this filesystem cannot hold is not an attack, and was treated as one.
+
+    Spider ships `receipts (3:11:18, 5:53 PM)_original.csv`. Rejecting any
+    colon as "a drive or stream separator" failed the entire benchmark on a CSV
+    the loader does not even read. Found on first contact with the real
+    archive, which is the only place it could have been found.
+    """
+
+    def test_a_colon_inside_a_name_is_skipped_not_refused(
+        self, tmp_path: Path, settings: BenchmarkSettings
+    ) -> None:
+        archive = write_zip(
+            tmp_path / "spider.zip",
+            {
+                "database/concert/concert.sqlite": b"data",
+                "database/bakery/data_csv/receipts (3:11:18, 5:53 PM).csv": b"a,b",
+            },
+        )
+        result = extract(archive, tmp_path / "out", settings=settings)
+
+        assert (tmp_path / "out" / "database" / "concert" / "concert.sqlite").is_file()
+        if os.name == "nt":
+            assert [name for name, _ in result.skipped] == [
+                "database/bakery/data_csv/receipts (3:11:18, 5:53 PM).csv"
+            ]
+        else:
+            # Perfectly legal on POSIX; discarding it there would lose real data.
+            assert result.skipped == []
+
+    @pytest.mark.skipif(os.name != "nt", reason="these names are legal on POSIX")
+    def test_an_unrepresentable_database_file_refuses_the_archive(
+        self, tmp_path: Path, settings: BenchmarkSettings
+    ) -> None:
+        # The line between "cannot store a CSV" and "the corpus you converted
+        # is not the corpus you think it is". Skipping a database silently
+        # changes which databases exist.
+        archive = write_zip(tmp_path / "bad.zip", {"database/we:ird/we:ird.sqlite": b"data"})
+
+        with pytest.raises(UnsafeArchiveError, match="database file"):
+            extract(archive, tmp_path / "out", settings=settings)
+
+    @pytest.mark.skipif(os.name != "nt", reason="these names are legal on POSIX")
+    @pytest.mark.parametrize("name", ["a<b.csv", 'a"b.csv', "a|b.csv", "a?b.csv", "a*b.csv"])
+    def test_other_windows_illegal_characters_are_skipped(
+        self, tmp_path: Path, settings: BenchmarkSettings, name: str
+    ) -> None:
+        archive = write_zip(tmp_path / "x.zip", {f"data/{name}": b"x", "data/ok.csv": b"y"})
+        result = extract(archive, tmp_path / "out", settings=settings)
+
+        assert len(result.skipped) == 1
+        assert (tmp_path / "out" / "data" / "ok.csv").is_file()
+
+    def test_a_traversal_component_is_never_classified_as_unwritable(self) -> None:
+        # The regression that mattered. `..` ends in a dot, so a naive
+        # representability rule matches it -- and when that rule ran first, a
+        # traversal attempt was skipped as a portability issue instead of
+        # refused. The whole traversal suite went red, which is what a negative
+        # suite is for.
+        assert unrepresentable_reason("../escaped.txt") is None
+        assert unrepresentable_reason("nested/../../escaped.txt") is None
+
+    def test_escape_wins_over_representability_when_both_apply(
+        self, tmp_path: Path, settings: BenchmarkSettings
+    ) -> None:
+        # A member that is both an escape and unwritable must be refused, not
+        # skipped. Silently skipping it would report an archive as clean.
+        archive = write_zip(tmp_path / "both.zip", {"../we:ird.csv": b"x"})
+        with pytest.raises(UnsafeArchiveError, match="escapes"):
+            extract(archive, tmp_path / "out", settings=settings)
+
+    def test_a_reason_is_recorded_with_every_skip(self) -> None:
+        # A file the tool decided not to write must not be discoverable only by
+        # noticing it missing later.
+        reason = unrepresentable_reason("a/b:c.csv")
+        assert (reason is not None and "Windows" in reason) or os.name != "nt"
 
 
 class TestSymlinks:

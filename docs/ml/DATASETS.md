@@ -121,7 +121,9 @@ Built from gold SQL as described in [TRAINING.md](TRAINING.md) §2–3.
 python -m benchmark.load splits --questions data/spider/dev.json --benchmark spider --dataset spider
 ```
 
-Writes one JSONL file per split plus `spider-assignment.json`, all under `data/splits/` and all committed — the one thing under `data/` that is.
+Writes one JSONL file per split plus `spider-assignment.json`, under `data/splits/`.
+
+**Only the assignment is committed.** It is a map of database name to split — metadata, a few kilobytes. The per-split `.jsonl` files hold the questions and gold SQL themselves, which is the benchmark, which is CC BY-SA, and §7 says benchmark data is not vendored. They regenerate exactly from the assignment plus the archive the lockfile pins, so committing them would redistribute 2.5 MB of someone else's licensed data to save one command.
 
 **Assignment is a hash of the database name, not a seeded shuffle.** A shuffle is reproducible only while the input list is unchanged; add one database and every later one can move to a different split, silently training on what used to be held out. Hashing each name independently makes membership a property of the name alone, so adding databases never moves the ones already assigned. See [ADR-021](../architecture/DECISIONS.md#adr-021--splits-are-a-hash-of-the-database-name-not-a-seeded-shuffle).
 

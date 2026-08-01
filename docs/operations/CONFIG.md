@@ -209,12 +209,11 @@ Read only by `python -m benchmark.load`. Nothing here is reachable from a reques
 | `BENCHMARK_MAX_ARCHIVE_MEMBERS` | int | `200000` | Member count ceiling |
 | `BENCHMARK_MAX_MEMBER_BYTES` | int | 4 GiB | Per-member ceiling |
 | `BENCHMARK_COPY_BATCH_ROWS` | int | `5000` | Bounds loader memory during `COPY` |
-| `BENCHMARK_TYPE_SCAN_ROWS` | int | `200000` | Rows read per column when inferring a PostgreSQL type |
 | `BENCHMARK_VERIFY_TIMEOUT_MS` | int | `30000` | `statement_timeout` for each gold query during verification |
 
 **The byte caps are enforced against bytes written, never against the sizes the archive declares.** A zip's directory is attacker-controlled: a 42-byte bomb declares whatever it likes. Raising them to accommodate a large benchmark is fine; the point is that the limit is a real one.
 
-**`BENCHMARK_TYPE_SCAN_ROWS` truncating is recorded, not silent.** SQLite columns are dynamically typed, so the declared type is a hint and the data is the evidence. A partial scan can be wrong in one direction only — too narrow — which surfaces as a load failure rather than a wrong answer, but only if someone knows to look. The conversion report names every table whose scan was truncated.
+**There is no setting for how many rows type inference reads, because it does not read rows.** SQLite is asked directly, with `group_concat(DISTINCT typeof(col))`, which answers exactly and over the whole column in one scan per table. The previous sampling cap was a real defect rather than a tuning knob: Spider's `wta_1.rankings` has 510,437 rows and exactly one empty-string `player_id` past row 1.5 million, so a 200,000-row sample inferred `bigint` and the load died on that single value.
 
 **There is no variable that points the loader at a URL.** Sources are an allowlist in `benchmark/sources.py`; see [DATASETS.md](../ml/DATASETS.md) §8.
 
