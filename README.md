@@ -1,13 +1,14 @@
 # Text-to-SQL Analytics Agent (MCP-native)
 
-> **Status: Stage 1 core loop plus the Stage 3 MCP layer.** The four servers run and are callable from any MCP host over stdio. Still open: the HTTP API, and the eval harness that every accuracy number waits on. Nothing below claims a benchmark number until that exists. See [ROADMAP](docs/project/ROADMAP.md) for stage status and [TASKS](docs/project/TASKS.md) for the working checklist.
+> **Status: Stage 1 core loop, the Stage 3 MCP layer, and Stage 2's benchmark now loaded.** The four servers run and are callable from any MCP host over stdio. Spider's dev split is converted to PostgreSQL and *verified* against its own gold results. Still open: the HTTP API, and the seam that connects the pipeline to the eval harness. **No accuracy number is claimed until that seam exists** — the only measured number below is how faithfully the benchmark data converted, which is the precondition for the rest. See [ROADMAP](docs/project/ROADMAP.md) for stage status and [TASKS](docs/project/TASKS.md) for the working checklist.
 >
 > | Landed | Next |
 > |---|---|
-> | **Four MCP servers over stdio, with runtime `tools/list` discovery** | **Loading a benchmark dataset — every accuracy number waits on it** |
-> | Postgres 16 + pgvector, Alembic migrations | FastAPI + SSE, and the `/health` · `/ready` pair |
-> | `SELECT`-only role, proven by 30 negative tests | Wiring the pipeline into the eval harness's answerer seam |
-> | Schema catalog — introspection, serialization, embedding | The agent loop that drives the discovered tools |
+> | **Four MCP servers over stdio, with runtime `tools/list` discovery** | **Wiring the pipeline into the eval harness's answerer seam** |
+> | **Spider loaded — 20 dev databases converted to Postgres and verified at 97.3% fidelity** | FastAPI + SSE, and the `/health` · `/ready` pair |
+> | Postgres 16 + pgvector, Alembic migrations | The agent loop that drives the discovered tools |
+> | `SELECT`-only role, proven by 30 negative tests | Diagnosing the 25 gold queries the conversion does not yet reproduce |
+> | Schema catalog — introspection, serialization, embedding | |
 > | Retrieval — pgvector ANN, join-path expansion, clamped limits | |
 > | Validation — sqlglot AST + `EXPLAIN`, refused at both layers | |
 > | Execution — row limits, timeouts, audit trail | |
@@ -124,7 +125,7 @@ That creates the `agent_meta` schema, the pgvector extension and the HNSW index,
 Verify the install — the security suite is the one that matters, and it passes by being **refused**:
 
 ```powershell
-pytest                    # 782 tests; integration, security and contract need Docker
+pytest                    # 837 tests; integration, security and contract need Docker
 pytest -m security        # the read-only containment suite, on its own
 ruff check . ; mypy
 ```
@@ -214,10 +215,11 @@ Directories marked *(stub)* exist with a docstring stating which stage fills the
 
 ## Benchmarks
 
-> **TBD — Stage 2 onward.** No numbers are claimed until the eval harness is committed and reproducible. Every measurement is recorded in [BENCHMARKS.md](docs/ml/BENCHMARKS.md) with the commit it came from.
+> **TBD — Stage 2 onward.** No accuracy numbers are claimed until the pipeline is wired to the eval harness. Every measurement is recorded in [BENCHMARKS.md](docs/ml/BENCHMARKS.md) with the commit it came from.
 
 | Metric | Baseline | Current | Stage |
 |---|---|---|---|
+| **Conversion fidelity** (Spider dev, 1034 questions) | — | **97.3%** — 912 / 937, 10 of 20 databases fully verified | 2 |
 | Execution accuracy (held-out Spider/BIRD subset) | TBD | TBD | 2 |
 | Schema-linking Recall@5 | TBD | TBD | 5 |
 | Schema-linking Recall@10 | TBD | TBD | 5 |

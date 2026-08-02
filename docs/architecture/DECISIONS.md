@@ -375,7 +375,7 @@ PostgreSQL folds *unquoted* identifiers to lower case and then matches case-sens
 
 **Decision.** Fold every source identifier to lower case, quote it with `sql.Identifier` at every composition site, and **refuse** any name that cannot be represented unambiguously rather than rewriting it.
 
-Refused: names containing quotes, backslashes, semicolons, dots, or control characters; empty names; and anything over PostgreSQL's 63-byte limit.
+Refused: names containing a double quote, a backslash, a control character, or any non-ASCII byte; empty names; and anything over PostgreSQL's 63-byte limit.
 
 **Alternatives.**
 - *Preserve case and quote both sides* — correct only if every gold query quotes every identifier. None do, so this fails every question.
@@ -388,6 +388,8 @@ Refused: names containing quotes, backslashes, semicolons, dots, or control char
 **Consequences worth recording.** The collision guard this was designed around turned out to be unreachable from SQLite: SQLite compares table and column names case-insensitively too, so a source database holding both `Song` and `song` cannot exist. The guard stays — it is cheap, and it still covers a set of `db_id`s assembled from directory names on a case-sensitive filesystem — but it is defence *behind* the source engine rather than the only thing standing there. A test asserts the SQLite behaviour rather than a docstring asserting it.
 
 The length case, by contrast, *is* reachable: SQLite has no identifier length limit at all.
+
+**The refusal set was too narrow when it met real data, and that is a correction to this ADR rather than a footnote.** It was first written as the allowlist `[a-z0-9_ $-]`, which refused two whole Spider databases: `aircraft` over the column `%_Change_2007`, and `orchestra` over `Official_ratings_(millions)`. Neither `%` nor a parenthesis can escape `sql.Identifier`, which quotes whatever it is handed and doubles any quote inside it — so the narrow set bought no safety at all and cost data. **An allowlist doing usability work under a security label is worse than no allowlist**, because its cost is charged to the security argument and nobody re-examines it. What actually threatens the composition is a double quote (it can end the quoting), a backslash (`standard_conforming_strings` can be off), a control character (it can hide what a reviewer reads), and a non-ASCII byte (it is not decidably foldable). That is now the whole set, and it is small enough to justify each member.
 
 **Generalises to:** when two systems disagree about identity, pick the stricter one and refuse the difference. Mapping the difference away produces a system that works until the day two things map to one.
 
@@ -473,4 +475,202 @@ A conversion defect does not raise. A column that silently became `text`, a fore
 
 **Generalises to:** verify a transformation against the *consumer's* definition of equality, not the strictest one available. The strictest one reports differences nobody would ever have noticed and hides the fact that you never checked the ones that matter.
 
+**Consequences worth recording.** Five outcomes became seven when the first real corpus ran. `dialect_error` and `ambiguous_order` were both cases the original five *misattributed to the conversion* — see [ADR-026](#adr-026--gold-sql-is-repaired-for-sqlites-quoted-literal-rule-and-dialect-gaps-are-not-conversion-faults) and [ADR-027](#adr-027--an-undetermined-result-order-is-not-a-mismatch--in-verification-only). The lesson is about the taxonomy rather than either bug: **a classification with a bucket named after the component under test will absorb everything unexplained**, and every absorbed case reads as evidence against that component.
+
 **Revisit:** never, while the comparator and the verifier share a definition. If they diverge, this ADR is the thing that broke.
+
+---
+
+## ADR-023 — An unrepresentable archive name is skipped and recorded; an escaping one refuses the archive
+
+**Status:** accepted · **Date:** 2026-08-02 · **Stage:** 2
+
+**Context.** [ADR-020](#adr-020--benchmark-archives-are-pinned-by-a-committed-lockfile-recorded-on-first-use) validates every zip member before a byte is written. The first implementation had one verdict: refuse the whole archive, and name the member. Then the real Spider archive arrived carrying `receipts (3:11:18, 5:53 PM)_original.csv`, and the entire benchmark was refused over a CSV the loader never reads — because a colon on Windows is a drive or alternate-data-stream separator.
+
+**Decision.** Two verdicts, because there are two different facts:
+
+| The member | Means | Verdict |
+|---|---|---|
+| Escapes the destination — `..`, absolute path, drive letter, backslash separator, symlink, special file | **The archive is not trustworthy.** Something in it is trying to write outside where it was told to | Refuse the whole archive |
+| Cannot be named on *this* filesystem — a colon, `<>"\|?*`, a reserved device name, a trailing dot or space | **This filesystem cannot store it.** The same archive is fine on Linux | Skip it, record it in the extraction report |
+
+With one exception, which is the part that matters: if the unrepresentable member is a **database file** (`.sqlite`, `.sqlite3`, `.db`), the archive is refused after all. Skipping it would silently change which databases exist in the corpus, and a corpus that quietly lost a database is exactly the "silently different dataset" failure ADR-020 exists to prevent.
+
+**The reason for the split.** A traversal attempt is a statement about the *archive*. An unrepresentable name is a statement about the *host*. Collapsing them means either accusing a benign archive of an attack, or — far worse, and see below — excusing an attack as a portability problem.
+
+**Alternatives.**
+- *Keep one verdict and refuse.* What shipped. It makes the loader unable to read the benchmark it was written for, on the platform it was developed on.
+- *Mangle the name into something representable.* Rejected for the same reason [ADR-019](#adr-019--benchmark-identifiers-are-folded-to-lower-case-and-ambiguity-is-refused) rejects sanitising identifiers: two names can mangle to one, and the collision is silent. Skipping is loud; renaming is not.
+- *Skip everything unrepresentable, database files included.* Rejected — that is the silent-corpus-change case, and it would be invisible in every number computed afterwards.
+
+**Consequences worth recording — a usability fix briefly disarmed the primary control.** The first version of this ran the representability check *before* the escape check. `..` is a path component ending in a dot; a trailing dot is unrepresentable on Windows; so a traversal member was being classified as a portability problem and **skipped instead of refused**. The whole traversal suite went red on the same run that fixed the colon, which is the only reason it was caught within a minute rather than at review.
+
+Two things came out of it. The ordering in `acquire.extract` now carries a comment saying it is load-bearing, and the representability check explicitly excludes `.` and `..` because those are *path semantics*, not filenames. And a regression test asserts that a member which is both traversing and unrepresentable is refused rather than skipped.
+
+**Generalises to:** when a check is relaxed to admit a benign case, the question is not "is the new case safe" but "what else now takes the new path". Adding a second verdict to a security check adds an edge the old test suite was not written to defend.
+
+**Revisit:** if the loader ever runs somewhere with a materially different representability rule, in which case the rule belongs behind a platform interface rather than an `os.name` check.
+
+---
+
+## ADR-024 — Column types are inferred from SQLite's own `typeof()`, over the whole column
+
+**Status:** accepted · **Date:** 2026-08-02 · **Stage:** 2
+
+**Context.** SQLite does not enforce declared types, so the conversion infers each PostgreSQL type from the data ([DATASETS.md](../ml/DATASETS.md) §3). The first implementation read up to `BENCHMARK_TYPE_SCAN_ROWS` (200,000) rows per column and widened from what it saw.
+
+Spider's `wta_1.rankings` has **510,437 rows and exactly one empty-string `player_id`, at rowid 1,593,272** — past the cap. The column was inferred `bigint`, the schema was created, `COPY` began, and the load died partway through on `invalid literal for int() with base 10: ''`, naming no database, table, column or row.
+
+**Decision.** Ask SQLite. One statement per table:
+
+```sql
+SELECT group_concat(DISTINCT typeof("col1")), group_concat(DISTINCT typeof("col2")), … FROM "table"
+```
+
+`typeof()` returns the storage class of every value — the thing being inferred — and `DISTINCT` collapses it to the set. The answer is **exact and covers the whole column**, and it costs one scan per table rather than one per column.
+
+`BENCHMARK_TYPE_SCAN_ROWS` is deleted rather than raised. It was never a tuning knob: every value it could hold other than "all of them" is a wrong answer waiting for a large enough table.
+
+**Alternatives.**
+- *Raise the cap.* Moves the failure to the next benchmark. BIRD's largest tables are bigger than Spider's.
+- *Sample and widen defensively — infer `text` when unsure.* Turns every large numeric column into text, and then every gold query comparing it to a number fails. Trades a loud failure for a quiet one.
+- *Catch the coercion failure during `COPY` and restart the table as `text`.* Doubles the load time for the affected table and leaves the schema decided by whichever row happened to be first. It also means the plan is no longer a plan.
+
+**Tradeoff.** Inference now reads every row of every table instead of a prefix — on Spider, seconds. On a benchmark where that becomes expensive, the honest fix is a cheaper exact answer, not an inexact one.
+
+**Consequences worth recording.** The failure that exposed this was *unhandleable by the operator*: `invalid literal for int() with base 10: ''` names nothing. Coercion failures now raise a `ConversionError` naming database, table, column and the offending value, so the residual case is diagnosable in one read.
+
+**Generalises to:** a sample answers "what is in this data" only when the question tolerates being wrong. Schema inference does not — it is a claim about *every* row, and the one row that breaks it is by construction the row a sample is least likely to contain.
+
+**Revisit:** if a corpus arrives where a full scan is genuinely too slow, at which point this becomes a documented, per-database opt-out with its inexactness recorded in the conversion report — not a global default.
+
+---
+
+## ADR-025 — A foreign key joining two types is unified toward the numeric side
+
+**Status:** accepted · **Date:** 2026-08-02 · **Stage:** 2
+
+**Context.** Spider declares `concert.Stadium_ID` as `TEXT` holding `'1'`, referencing `stadium.Stadium_ID`, an `INT` holding `1`. SQLite joins them: comparing a TEXT-affinity column to an INTEGER-affinity column applies **numeric affinity to the text operand**, so `'1' = 1` is true. PostgreSQL answers `operator does not exist: text = bigint`.
+
+Measured across the full Spider corpus: **35 of 769 foreign keys, in 21 of 166 databases**, join two different inferred types. Every gold query that traverses one of them fails on the converted copy — not because the data moved, but because the two engines disagree about what the join *means*.
+
+**Decision.** When a foreign key's two sides infer different types, give both the numeric type — but only if **every value on the text side converts losslessly**. If any does not, both sides keep their inferred types, the constraint is dropped, and both facts go in the conversion report.
+
+**The direction is the decision, and it only goes one way.** Widening the numeric side to text would also make the join compile. It would also change which rows join: `'01' = 1` is **true** under SQLite's affinity rule and `'01' = '1'` is **false** as text. Unifying toward text produces a database that runs every gold query and silently returns fewer rows — the exact failure class [ADR-022](#adr-022--the-conversion-is-verified-by-the-eval-harnesss-own-comparator) exists to catch, arriving through the fix for a different problem.
+
+**Alternatives.**
+- *Leave the types alone and drop the constraint.* Loses the relationship for schema retrieval and join reasoning, on 21 databases, without fixing a single query — the gold SQL still compares text to a number.
+- *Rewrite gold SQL to cast at the comparison.* A SQL rewriter that must decide, per comparison, which side to cast and in which direction. Same objection as ADR-019's rejected rewriter: it gets the ambiguous cases wrong silently.
+- *Unify toward text (whichever side is text wins).* Rejected above. It is the version that always compiles.
+- *Unify only when the declared types agree.* The declaration is exactly what SQLite does not enforce; that is the premise of ADR-024.
+
+**Tradeoff.** A column the source declared `TEXT` becomes `bigint` in the converted copy, so the converted schema is not a faithful transcription of the source *declaration*. It is a faithful transcription of the source **semantics**, which is what is being measured. The report names every unification.
+
+**Where it does not apply.** A dirty column — `'1'`, `'2'`, `'unknown'` — cannot be unified, because SQLite would coerce `'unknown'` to 0 in the comparison and no PostgreSQL type reproduces that. Types stay, constraint is dropped, both recorded. That is the honest outcome and it is rare.
+
+**Generalises to:** when porting between engines, port the *behaviour the source exhibits*, not the schema the source declares — and when there are two ways to make something compile, pick by which one preserves the observable result, not by which one is less work.
+
+**Revisit:** if a benchmark appears with text keys holding genuinely non-numeric values on both sides, which this leaves alone by construction.
+
+---
+
+## ADR-026 — Gold SQL is repaired for SQLite's quoted-literal rule, and dialect gaps are not conversion faults
+
+**Status:** accepted · **Date:** 2026-08-02 · **Stage:** 2
+
+**Context.** The first verification run over Spider dev reported **213 of 1034 questions** as `postgres_error` — a bucket whose meaning under ADR-022 is "the conversion produced a genuine type difference". Classifying all 213 by SQLSTATE showed every single one was `42703 undefined_column`, and every one of those was the same thing:
+
+```sql
+SELECT name FROM student WHERE course = "Math"      -- 42703: column "Math" does not exist
+SELECT name FROM student WHERE name LIKE "%w%"      -- 42703: column "%w%" does not exist
+```
+
+**SQLite treats a double-quoted token that matches no column as a string literal.** It is a documented compatibility misfeature (`SQLITE_DQS`), the benchmark's gold SQL relies on it heavily, and PostgreSQL has no such fallback. Nothing about the conversion was wrong.
+
+**Decision, part one.** Before transpiling, apply SQLite's own test: a double-quoted identifier that is unqualified and matches no table or column name in the schema becomes a string literal. Done on the parsed AST, not by regex.
+
+The three guards are the whole design:
+- **A quoted token that *is* a real name is left alone.** Spider has columns named `Official_ratings_(millions)`; rewriting one into a string turns a valid query into nonsense that still runs.
+- **A qualified token — `s."zzz"` — is left alone.** SQLite's rule does not apply there either.
+- **With no schema available, nothing is rewritten.** No evidence, no repair. Guessing without the name set is precisely the move that turns a real column into a string.
+
+**Decision, part two.** Split PostgreSQL rejections by SQLSTATE, because they answer different questions:
+
+| SQLSTATE | Outcome | Reasoning |
+|---|---|---|
+| `42P01` undefined table · `42703` undefined column · `3F000` invalid schema | `postgres_error` — **blames the conversion** | The names are what the conversion chose. If one is missing, the conversion is why |
+| `42883` undefined function/operator · `42803` grouping error · `42804` datatype mismatch | `dialect_error` — **blames neither** | The gold query asks for something PostgreSQL does not offer. It would fail identically against a perfect conversion |
+
+`dialect_error` is counted and **excluded from the denominator**, the same treatment `gold_error` already gets — because a question whose gold SQL has no PostgreSQL expression cannot be scored later either. Measured on Spider dev: 97 of 1034, of which 56 are `GROUP BY` rules SQLite does not enforce and 41 are type-affinity comparisons that survive ADR-025 because no foreign key is involved.
+
+**Alternatives.**
+- *Leave the 213 as conversion faults.* Reports a 20% conversion failure rate that is not real, and sends every investigation to the wrong component.
+- *Rewrite every double-quoted token to a literal.* Simpler, and wrong on every database with a parenthesised or oddly-named column — of which Spider has several.
+- *Regex the gold SQL.* Cannot tell a quoted identifier in a `SELECT` list from one inside a string literal, and cannot see qualification.
+- *Set `SQLITE_DQS` off and treat the affected questions as gold errors.* Discards a fifth of the benchmark to avoid a 30-line repair, and the questions are not defective — they are valid SQLite.
+- *Fold `dialect_error` into `gold_error`.* Tempting, since both leave the denominator. Rejected: a gold error is a benchmark defect and a dialect error is a portability gap, and only one of them is worth reporting upstream.
+
+**Tradeoff.** The verifier now needs the schema before it can transpile, so transpilation is no longer a pure text-to-text step. That is the cost of applying a rule that is itself schema-dependent — SQLite's own rule is schema-dependent, and any repair that is not would be wrong somewhere.
+
+**And the honest cost of the second half:** excluding dialect errors shrinks the scoreable set. 97 questions leave the denominator, and every published number must state that alongside the score, exactly as [DATASETS.md](../ml/DATASETS.md) §1 requires for the metric itself. An exclusion that is not reported is indistinguishable from cheating.
+
+**Generalises to:** before fixing a failure class, classify it. Two hundred failures with one cause and two hundred with fifty causes look identical in a summary count and call for completely different work.
+
+**Revisit:** if a benchmark's gold SQL is written for PostgreSQL, in which case the repair should be off by default rather than schema-gated.
+
+---
+
+## ADR-027 — An undetermined result order is not a mismatch — in verification only
+
+**Status:** accepted · **Date:** 2026-08-02 · **Stage:** 2
+
+**Context.** Sixteen Spider dev questions verified as `mismatch` with identical rows in a different order. The shape is always the same:
+
+```sql
+SELECT name FROM employee ORDER BY age
+```
+
+with three employees aged 29. Both engines sort the ages identically. Neither promises anything about the *names* within a tie, and they choose differently.
+
+**Decision.** In `benchmark.verify` only: when a strict comparison fails, re-compare with `order_matters=False`. If the rows are equal as a multiset, record `ambiguous_order` and count it as verified.
+
+**Why this is sound here and nowhere else.** Verification runs **the same query** against both engines. If two runs of one query over the same data return the same rows in different orders, the order was never determined by that query — it is a property of the benchmark's SQL, not of the conversion. Nothing about the data moved.
+
+**`evals.comparison` is deliberately untouched.** There, predicted and gold are *different queries*. A predicted query returning the right rows in the wrong order may well have omitted an `ORDER BY` the question asked for, and that is a real error. The same relaxation applied there would silently mark wrong answers correct — which is why this lives in the verifier and not in the shared comparator, even though both are comparing result sets.
+
+**Alternatives.**
+- *Count them as mismatches.* Fails 6 of 20 databases for something no conversion could fix, and the fix that suggests itself — reordering rows in PostgreSQL to match SQLite — is not achievable and would be meaningless if it were.
+- *Relax the shared comparator.* Cheaper by one function, and it corrupts scoring. Two callers with genuinely different premises need two rules.
+- *Add `ORDER BY` tiebreakers to the gold SQL.* Modifies the benchmark to suit the harness, and changes what the questions ask.
+
+**Tradeoff.** `ambiguous_order` counts as verified, so a conversion that genuinely reordered rows *and* whose gold query had no total order would be missed. That intersection is what the outcome is separately counted and reported for — 16 on Spider dev — rather than being merged into `match`.
+
+**Generalises to:** the same comparison in two places can need two rules, and the giveaway is whether the two sides being compared came from the same source. Sharing the strict one because sharing is tidy is how a correct rule ends up in a place where it is wrong.
+
+**Revisit:** if the eval ever verifies with a query it also scores, which would collapse the distinction this rests on.
+
+---
+
+## ADR-028 — One connection-string form per consumer, converted at the driver
+
+**Status:** accepted · **Date:** 2026-08-02 · **Stage:** 2
+
+**Context.** `DATABASE_URL` is documented and shipped as `postgresql+psycopg://user:pw@host/db`. Alembic requires the `+driver` form — it is a SQLAlchemy URL. **psycopg cannot parse it**: `psycopg.connect` rejects the scheme outright.
+
+Both facts had been true since Stage 1. `python -m benchmark.load convert` was the first code path to open an owner connection from a `.env` written by following `.env.example`, and it failed immediately. The MCP servers had never been startable that way either. No test caught it because `conftest` normalised the URL itself — **the workaround lived in the tests and the defect lived in production**, which is the specific way a fixture can hide a bug rather than expose it.
+
+**Decision.** `core/dsn.py` owns the conversion. `libpq_dsn()` strips the `+driver` suffix and is called at every psycopg connection site; the configured value keeps the SQLAlchemy form, because that is what alembic reads and there is no second variable.
+
+**Alternatives.**
+- *Change `.env.example` to the plain form.* Breaks alembic, which is the one consumer that cannot convert.
+- *Two variables — `DATABASE_URL` and `DATABASE_DSN`.* Two ways to say one thing, which can disagree. The one that is wrong is discovered by whichever tool is run second.
+- *Convert in each caller.* Three call sites today, each a place to forget. The point of a boundary is that it is one place.
+- *Let SQLAlchemy own all connections.* A much larger change to make a string parse, and the loader deliberately uses psycopg directly for `COPY`.
+
+**Decided alongside it — the failure printed a password.** psycopg quotes the whole connection string in its *parse* errors, and the handler logged `str(exc)`. `redact_dsn()` now masks the password in anything derived from a driver exception before it reaches a log, a message, or a terminal. It deliberately keeps the **user name** visible, because "which role failed to connect" is the first thing anyone needs and it is not the secret. Full analysis in [SECURITY.md](../operations/SECURITY.md) §14.2.10.
+
+A test asserts the *premise* rather than only the fix: it checks that psycopg really does put the DSN in a parse error. If a future version stops doing so, the redaction becomes belt-and-braces instead of load-bearing, and that is worth knowing rather than assuming either way.
+
+**Generalises to:** when a value has two required formats, pick one canonical form, convert at the boundary that needs the other, and never let the two be configured separately. And when a test fixture massages configuration before use, it has stopped testing the configuration — the massaging is a defect report waiting to be read.
+
+**Revisit:** if alembic gains support for plain libpq URLs, at which point the conversion can be deleted rather than moved.

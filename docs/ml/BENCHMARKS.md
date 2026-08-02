@@ -4,7 +4,7 @@
 
 Metric definitions: [EVALUATION.md](EVALUATION.md). Every row must be reproducible from the recorded command.
 
-> **No runs yet — Stage 2 produces the first.** The tables below are the recording format.
+> **No accuracy runs yet — Stage 2 produces the first.** The tables in §1–§7 are the recording format. §0 is real: it records what the data those numbers will be computed from is actually worth.
 
 ---
 
@@ -20,7 +20,8 @@ Each row records:
 | Dataset | Spider / BIRD / both, with subset size |
 | Metric | `execution accuracy (single DB)` unless stated. **Not** Spider's official Test Suite Accuracy, which is stricter — see [EVALUATION.md](EVALUATION.md) §2 |
 | Archive digest | The `sha256` from `data/artifacts.lock.json`. Both benchmarks have been re-released with corrections, so two rows computed from different archives are not comparable and nothing else in this table would say so |
-| Conversion verified | That `benchmark.load verify` exited 0 for every database in the split. A number from an unverified conversion measures the conversion, not the system |
+| Conversion verified | That `benchmark.load verify` exited 0 for every database in the split. A number from an unverified conversion measures the conversion, not the system. §0 records the fidelity every row depends on |
+| Questions excluded | How many left the denominator and why — `gold_error`, `transpile_error`, `dialect_error`. An exclusion that is not reported is indistinguishable from cheating |
 | Retriever | `model_version` from `schema_elements` |
 | LLM | Model ID + effort level |
 | Prompt version | From [PROMPTS.md](PROMPTS.md) |
@@ -31,6 +32,18 @@ Each row records:
 A row missing any of these is not a benchmark; it is an anecdote.
 
 ---
+
+## 0. Conversion fidelity
+
+**Every row in §1 inherits this one.** Execution accuracy measured on a converted database is bounded above by how faithfully that database was converted, and a system score reported without this number is unattributable — a drop could be the model, the retriever, or the data.
+
+Fidelity is `(match + ambiguous_order) / (questions − gold_error − transpile_error − dialect_error)`. Definitions in [DATASETS.md](DATASETS.md) §3.1.
+
+| Date | Commit | Dataset | Databases | Questions | Fidelity | Excluded | Verified | Command |
+|---|---|---|---|---|---|---|---|---|
+| 2026-08-02 | `5551fb5` | Spider `dev.json`, digest `00636695…c85b121b` | 20 / 20 converted | 1034 | **912 / 937 = 97.3%** — 896 match, 16 ambiguous order, 25 mismatch, 0 postgres error | 97 dialect error (56 `GROUP BY`, 41 type affinity) | **10 / 20 databases** | `python -m benchmark.load verify --databases data/spider/spider_data/database --questions data/spider/spider_data/dev.json --benchmark spider --prefix spider_` |
+
+**Open:** the 25 mismatches — 22 `no_column_bijection`, 3 `shape_mismatch`, spread over the 10 unverified databases — are not yet diagnosed. Until they are, an accuracy number from those 10 databases carries an unknown share of conversion error and must say so.
 
 ## 1. Execution accuracy
 

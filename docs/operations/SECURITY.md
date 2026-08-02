@@ -154,7 +154,7 @@ Planned:
 - **Never in code, logs, traces, error responses, or fixtures.**
 - Loaded from environment via `pydantic-settings`; `.env` is gitignored, `.env.example` carries placeholders only. See [CONFIG.md](CONFIG.md).
 - Secret-typed settings use `SecretStr` so accidental `repr()` does not leak them.
-- Database URL is redacted in every log line and span attribute.
+- Database URL is redacted in every log line and span attribute — **and in driver exception text**, which is where it actually escaped. psycopg quotes the connection string it was handed in its parse errors, so `str(exc)` renders the password. `core/dsn.redact_dsn()` is applied where the exception becomes a message, and §14.2.10 has the full analysis. This bullet existed before anything enforced it.
 - **Rotation:** database password and API key rotate independently. Procedure **TBD — Stage 6**.
 - Pre-commit secret scanning: **TBD — Stage 6**.
 
@@ -465,6 +465,7 @@ The four servers add no new capability. They add a *transport*, and a transport 
 | **Whole-archive validation before any write** | Every member path is resolved and checked first; a rejection leaves nothing on disk for a later run to adopt as complete |
 | **Path checks plus a realpath containment check** | Absolute paths, drive letters, `..`, and backslash separators all refused, then the resolved target must still be under the destination. Covers 1 |
 | **Symlinks and special files refused** | Mode bits are inspected, with the file-type field isolated. Covers 2 |
+| **An escape refuses the archive; an unrepresentable name only skips the member** | Two different facts, so two verdicts ([ADR-023](../architecture/DECISIONS.md#adr-023--an-unrepresentable-archive-name-is-skipped-and-recorded-an-escaping-one-refuses-the-archive)) — **except** for a database file, which refuses, because skipping one would silently change the corpus |
 | **Caps on bytes written, member count, and per-member size** | Enforced against bytes actually written, never against the archive's own declarations. Covers 3 |
 | **No `--url` flag** | Sources are an allowlist in source code, so the download target cannot be redirected by an argument |
 | **Source allowlist is https-only** | The default fetcher refuses any other scheme |
@@ -476,6 +477,10 @@ The four servers add no new capability. They add a *transport*, and a transport 
 
 **Why the fixes are secure.** The ordering is the argument. Hashing first means an archive that fails integrity never reaches a parser; validating the whole archive before writing means a refusal is total rather than partial; enforcing caps on written bytes means the archive's own claims about itself are never load-bearing. Each control is asserted by a test that builds the malicious archive and checks the file is genuinely absent afterwards — a refusal that happened to land somewhere harmless is not evidence.
 
+**A near miss worth recording, because it is the failure mode this section is least protected against.** When the skip-and-record verdict above was added, the representability check was written to run *before* the escape check. `..` is a path component ending in a dot; a trailing dot is unrepresentable on Windows; so a **traversal member was classified as a portability problem and skipped rather than refusing the archive**. The primary control in this section was disarmed by a usability fix, for a few minutes, and the entire traversal suite went red on the same run — which is the only reason the window was minutes.
+
+Two conclusions, both acted on. The check ordering in `acquire.extract` carries a comment stating it is load-bearing, and the representability rule explicitly excludes `.` and `..` as path semantics rather than filenames. And a regression test now asserts that a member which is *both* traversing and unrepresentable is refused, not skipped — the intersection, which neither original suite covered. **Relaxing a security check to admit a benign case adds an edge the existing tests were not written to defend; the question to ask is never "is the new case safe" but "what else now takes the new path".**
+
 **Residual risk, stated plainly.**
 
 - **The first acquisition is trusted.** Neither benchmark publishes a stable digest, so there is nothing to check the first download against. Made visible rather than eliminated: it requires a flag, logs a warning, and what it records is committed and reviewable. Trust-on-first-use is only dangerous when it is invisible.
@@ -483,6 +488,37 @@ The four servers add no new capability. They add a *transport*, and a transport 
 - **The loader runs as the owner role.** It has to — conversion writes. This is an operator running an offline tool, not a request path, and the boundary is *re-asserted* at the end of every conversion rather than relaxed.
 
 **CIA impact.** Integrity primarily (the extraction and substitution cases), availability (bombs), confidentiality if traversal reaches a credential file.
+
+### 14.2.10 A driver error message that quotes the connection string — **High**
+
+**Vulnerability.** psycopg includes the connection string it was given in its **parse** errors. Any handler that renders `str(exc)` therefore renders the database password in cleartext — to a terminal, a log file, a log aggregator, an exception tracker, or an MCP error frame. *(OWASP A09 security logging and monitoring failures; CWE-532, insertion of sensitive information into a log file. Confidentiality, and Integrity by consequence, since the credential is the owner role.)*
+
+This is not hypothetical here. It fired. `.env.example` ships `DATABASE_URL` in SQLAlchemy's `postgresql+psycopg://` form because alembic requires it, psycopg cannot parse that scheme, and the first code path to open an owner connection from a `.env` written by following the example printed the whole DSN — password included — to the operator's terminal. §9 of this document already said "never in logs, traces, error responses". It was a rule with nothing enforcing it.
+
+**Why it's dangerous.** The leaked credential is the **owner** role, not the read-only one — the account that can write, drop, and read `agent_meta`, which holds the audit log and every sampled schema value. And the leak happens on the *failure* path, which is the path most likely to be copied into a bug report, pasted into a chat, or shipped to a third-party error tracker by a library nobody configured deliberately. A secret that only escapes when something breaks escapes precisely when the most people are looking at the output.
+
+**Attack scenarios.**
+
+1. **Shoulder-level.** An operator hits the misconfiguration, screenshots the traceback into an issue, and the password is now in a public tracker.
+2. **Log aggregation.** The MCP servers run under a supervisor that ships stderr to a central store with wider read access than the database itself. Every restart against a bad DSN deposits the password there.
+3. **Error-tracking SDK.** Any handler that forwards exception text off-box turns a startup misconfiguration into an exfiltration of the owner credential to a third party.
+4. **Through the protocol.** The MCP SDK's catch-all returns `str(exc)` to the *model* — already mitigated in §14.2.7 by catching first, but the same driver exception is what that mitigation exists for.
+
+**Secure implementation.**
+
+| Control | What it does |
+|---|---|
+| **`core/dsn.libpq_dsn()`** | One boundary converts the SQLAlchemy URL to a libpq DSN, so the parse error that started this cannot occur at a psycopg call site ([ADR-028](../architecture/DECISIONS.md#adr-028--one-connection-string-form-per-consumer-converted-at-the-driver)) |
+| **`core/dsn.redact_dsn()`** | Masks the password in anything derived from a driver exception — both URL form (`user:pw@`) and keyword form (`password=…`) — before it reaches a message, a log, or a terminal |
+| **`raise … from None` at the connection site** | Suppresses the chained original, so the unredacted text cannot resurface in a `__cause__` traceback below the redacted message |
+| **The user name is deliberately *not* redacted** | "Which role failed to connect" is the first thing anyone needs and is not the secret. Redacting it would push operators toward printing the raw DSN to debug |
+| **A test that pins the premise** | Asserts psycopg really does quote the DSN in a parse error. If a future version stops, the redaction is known to have become belt-and-braces rather than load-bearing |
+
+**Why the fixes are secure.** The redaction is applied at the point the exception is converted into a message, not at the point it is logged — so it cannot be bypassed by a second handler that logs the same exception differently. `from None` closes the traceback path, which is the one a redacted message alone leaves open. And the premise test is the part that keeps this honest over time: a redaction whose necessity has never been demonstrated is indistinguishable from a redaction that stopped working.
+
+**Residual risk.** Redaction is pattern-based. A password containing an `@` in a URL-form DSN is ambiguous to any parser, including psycopg's own; the keyword-form pattern covers the case URLs cannot. The durable mitigation is that the value is a `SecretStr` from a gitignored `.env` and is rotatable — and **a credential that has appeared in terminal output is compromised and must be rotated**, not reasoned about.
+
+**CIA impact.** Confidentiality directly. Integrity and availability follow from it, because the exposed role is the one that can write and drop.
 
 ### 14.3 Related: prompt injection reaches further with weaker models
 

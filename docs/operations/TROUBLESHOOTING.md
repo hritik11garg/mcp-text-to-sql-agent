@@ -52,6 +52,14 @@ Postgres is not running or not on the expected port. `docker compose ps`, then `
 
 Two URLs are configured (`DATABASE_URL` and `DATABASE_RO_URL`) and it is easy to fix one and leave the other. Check both. See [CONFIG.md](CONFIG.md) §2.
 
+**Before changing the password, check what is answering on the port.** A native PostgreSQL installed on the host takes 5432 first, and the compose container then binds a different port or fails silently — so correct credentials get rejected by an entirely different server that happens to be listening. `docker compose ps` shows the mapping the container actually got. Moving the container's published port and updating both URLs is the fix; changing the password to match the wrong server is not.
+
+### `invalid connection option "postgresql+psycopg"` or a DSN in an error message
+
+`DATABASE_URL` is a **SQLAlchemy** URL because alembic requires the `+driver` form. psycopg cannot parse it. Every psycopg call site converts it through `core.dsn.libpq_dsn()`, so this means a new call site passed the configured value straight to `psycopg.connect` — fix the call site, do not add a second variable ([ADR-028](../architecture/DECISIONS.md#adr-028--one-connection-string-form-per-consumer-converted-at-the-driver)).
+
+**If you saw the connection string itself in the output, the password in it is compromised — rotate it.** psycopg quotes the DSN in parse errors; `core.dsn.redact_dsn()` masks it, and anything that got past that is a bug worth reporting. See [SECURITY.md](SECURITY.md) §14.2.10.
+
 ### `permission denied for table X` — from `execute_sql`
 
 **This is usually correct behaviour, not a bug.** The read-only role is meant to be unable to reach some things.
@@ -192,11 +200,23 @@ The one response that is always wrong is editing the lockfile to make the check 
 
 Working as intended, and worth reading before assuming a bug. `ZipFile.extractall` would have written that file. If the archive came from the official source and the digest matched, report it upstream; if the digest did not match, that is the more interesting finding.
 
+### `archive member '...' cannot be represented on this filesystem`
+
+Not a refusal — a **skip**, listed in the extraction report. The member has a name Windows cannot store (a colon, `<>"|?*`, a trailing dot or space, a reserved device name); Spider genuinely ships one. The archive still extracts. If the skipped member is something the loader needs, run the acquisition on Linux or in WSL, where the name is representable.
+
+A skipped `.sqlite` file is the one case that refuses the whole archive instead, because a corpus that quietly lost a database invalidates every number computed from it ([ADR-023](../architecture/DECISIONS.md#adr-023--an-unrepresentable-archive-name-is-skipped-and-recorded-an-escaping-one-refuses-the-archive)).
+
 ### `table 'X' contains characters that cannot be used safely`
 
-A source identifier that cannot be represented in PostgreSQL unambiguously — a quote, a dot, a control character — or one over 63 bytes. The database is refused rather than converted with the name rewritten, because a rewrite that collides with another name merges two tables and every question about either is then scored against the wrong data ([ADR-019](../architecture/DECISIONS.md#adr-019--benchmark-identifiers-are-folded-to-lower-case-and-ambiguity-is-refused)).
+A source identifier holding a double quote, a backslash, a control character or a non-ASCII byte — or one over 63 bytes. The database is refused rather than converted with the name rewritten, because a rewrite that collides with another name merges two tables and every question about either is then scored against the wrong data ([ADR-019](../architecture/DECISIONS.md#adr-019--benchmark-identifiers-are-folded-to-lower-case-and-ambiguity-is-refused)).
+
+Note that `%`, parentheses, spaces and `$` are **fine** — they are quoted by `sql.Identifier` like anything else. An earlier, narrower rule refused them and cost two Spider databases for nothing.
 
 Use `--keep-going` to convert the rest of the corpus and record which databases were skipped.
+
+### `<db>.<table>.<column> was planned as bigint but holds ''`
+
+A value that does not fit its planned type. Type inference is exact — it asks SQLite with `typeof()` over the whole column — so this should be unreachable, and reaching it means the plan and the data disagree for a reason worth finding rather than working around. Do **not** force the column to `text`: that changes what gold queries comparing it to a number will do ([ADR-024](../architecture/DECISIONS.md#adr-024--column-types-are-inferred-from-sqlites-own-typeof-over-the-whole-column)).
 
 ### `schema 'X' already exists`
 
@@ -209,9 +229,11 @@ At least one database did not reproduce every gold result. The report names them
 - `mismatch` — the data moved. This is the one that matters.
 - `gold_error` — the reference query fails on its own SQLite database. A benchmark defect; excluded from the denominator and not your problem.
 - `transpile_error` — sqlglot could not render the query for PostgreSQL. A parser gap, not a conversion defect.
-- `postgres_error` — ran on SQLite, errored on PostgreSQL. Usually a real type difference the conversion produced; check whether the column was coerced to `text` in the conversion report.
+- `dialect_error` — the gold query asks PostgreSQL for something it does not offer (`42883` undefined operator, `42803` grouping, `42804` type mismatch). It would fail against a perfect conversion too. Excluded from the denominator, and **must be reported alongside any accuracy number computed from the split** — 97 of 1034 on Spider dev.
+- `postgres_error` — a missing table, column or schema (`42P01`, `42703`, `3F000`). The names are what the conversion chose, so this one does blame the conversion; check the conversion report for that database.
+- `ambiguous_order` — identical rows in a different order, from a gold query with no total order. Counted as agreement, and counted separately so it is visible.
 
-Do not "fix" this by relaxing the comparison. The comparator is the one the eval will score with, so a change here changes every number.
+Do not "fix" this by relaxing the comparison. The comparator is the one the eval will score with, so a change here changes every number. The one relaxation that exists — `ambiguous_order` — lives in the verifier and deliberately not in `evals.comparison`, because there the two queries being compared are different ([ADR-027](../architecture/DECISIONS.md#adr-027--an-undetermined-result-order-is-not-a-mismatch--in-verification-only)).
 
 ### `permission denied for schema spider_x` — from the read-only role
 

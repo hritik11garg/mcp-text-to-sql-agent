@@ -104,6 +104,11 @@ Additional cases:
 
 **Archive tests** are the newest kind, and the only ones whose subject is the filesystem rather than the database. Each builds a hostile zip — a member named `../../escaped.txt`, a backslash-separated traversal, a Windows drive letter, a symlink pointing at `/etc`, a member that expands past its budget — and asserts the loader refuses it. Each also asserts the file is genuinely **not on disk** afterwards, because a refusal that happened to write somewhere harmless is not evidence of a control. One positive test sits among them, checking that an ordinary nested path still extracts: it is what caught a symlink check that rejected every archive `ZipFile.writestr` produces, since those record permission bits with no file-type field at all.
 
+Two lessons from the archive tests are worth stating separately, because both are about the suite rather than the code.
+
+- **Test the intersection, not just each case.** When extraction gained a second verdict — skip an unrepresentable name, refuse an escaping one — a member that is *both* (`..` ends in a dot, which Windows cannot store) took the new path and was skipped instead of refused. Neither existing suite covered the overlap; the traversal suite went red only because the escape check had moved wholesale. There is now a test for the intersection specifically.
+- **Assert the premise, not only the mitigation.** `tests/security/test_dsn_handling.py` asserts that psycopg really does quote the connection string in a parse error, alongside asserting that the redaction removes it. Without the first, a driver change that stopped leaking would leave a redaction nobody could tell was still necessary — and a redaction whose necessity is unproven is indistinguishable from one that has quietly stopped working.
+
 A third kind appears here and nowhere else: **source-level assertions**. That no identifier is interpolated into SQL, that raw values are read in exactly one function, that the sensitivity check precedes the statistics call. They check the shape of a module rather than its behaviour, which is unusual and deliberate — the property being protected is that someone changing the file can *see* what they are changing.
 
 ## 6. Contract tests (MCP)

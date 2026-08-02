@@ -113,9 +113,12 @@ Convention: `[ ]` open · `[x]` done · `[~]` in progress · `[!]` blocked
 - [x] SQLite → Postgres conversion — one schema per database, types inferred from the **data** rather than the declaration, constraints added after the load and skipped-with-a-reason where the data cannot satisfy them
 - [x] **Verify conversion: gold queries return identical results on both** — using the eval harness's own comparator, not a stricter one (ADR-022); exits 3 when a database fails, so CI cannot pass while reporting the data is wrong
 - [x] Database-level splits (train / dev / held-out / smoke), committed as a file — assigned by hashing the database name, after a test caught that the first implementation's smoke set moved when the corpus grew (ADR-021)
+- [x] **Acquire and load a real archive** — Spider `spider_data.zip` pinned at `sha256:00636695…`, 20 dev databases converted, 97.3% of comparable gold results reproduced. Nine defects found that synthetic tests could not, two of them shipped Stage 1 bugs (ADR-023 → ADR-028)
+- [ ] Diagnose the 25 remaining verification mismatches — 22 `no_column_bijection`, 3 `shape_mismatch`, in the 10 databases that do not fully verify
+- [ ] **Decide the split question** — this project's hash-based split cuts across Spider's own train/dev boundary, so a score from it is not comparable to published Spider numbers. Either accept that and say so on every row, or adopt Spider's dev set as held-out (DATASETS.md §5)
 - [ ] Wire the pipeline into the answerer seam — *the one line `evals.run` refuses at*
 - [ ] Baseline runs: no-retrieval, retrieval-only, +validation
-- [ ] BENCHMARKS rows + DATASETS/EVALUATION filled in
+- [~] BENCHMARKS rows + DATASETS/EVALUATION filled in — BENCHMARKS §0 and DATASETS §1/§3.1 carry measured values; the accuracy rows wait on the seam
 - [ ] CHANGELOG v0.2
 
 ## Stage 3 — MCP servers + client refactor

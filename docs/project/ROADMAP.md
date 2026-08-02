@@ -74,12 +74,16 @@ Scope: Spider/BIRD acquisition and SQLite→Postgres conversion; database-level 
 - [~] Reproducible from a clean checkout via one command — the command exists and refuses at the pipeline seam
 - [x] Conversion verified — gold queries return identical results on SQLite and Postgres, compared with the harness's own comparator, exiting 3 when they do not
 - [x] Splits are database-disjoint and committed as a file — and stable when the corpus grows, which a seeded shuffle is not
-- [ ] Baseline rows in [../ml/BENCHMARKS.md](../ml/BENCHMARKS.md)
-- [~] Failure taxonomy populated with counts — the taxonomy and its counting exist; there is nothing to count yet
+- [~] Baseline rows in [../ml/BENCHMARKS.md](../ml/BENCHMARKS.md) — §0 conversion fidelity is recorded from a real run; the accuracy rows wait on the pipeline seam
+- [~] Failure taxonomy populated with counts — the taxonomy and its counting exist; verification has produced real counts, scoring has not
 
 **The measurement machinery landed before the data, deliberately.** Comparison, Recall@k, the failure taxonomy, artifacts and resumption are built and tested against synthetic cases — 84 tests, no model and no database. The order matters: the logic that decides what a number *means* is the part a benchmark cannot check, because a wrong comparison produces a plausible score rather than an error. Building it against a dataset would have meant debugging two unknowns at once.
 
-**The loader is built; no benchmark has been loaded through it.** Acquisition, conversion, verification and splits all exist and are tested — against synthetic SQLite databases for the logic, and against a real PostgreSQL for the conversion. What has not happened is a Spider or BIRD archive actually being downloaded, which is why DATASETS.md still says TBD for every count and digest. Those are properties of a download, and writing them in before one would make the file lie about what the project has been measured against.
+**Spider is loaded, and the real archive found nine defects the synthetic tests could not.** Acquisition, conversion, verification and splits had all been built and tested — against synthetic SQLite for the logic, a real PostgreSQL for the conversion — and were nonetheless wrong in nine places that only real data exposes: a sampling cap that missed one bad value in 510,437 rows, an identifier allowlist that refused two databases over characters that cannot escape a quoted identifier, foreign keys joining two types in 35 of 769 cases, a filename this filesystem cannot store, and 213 gold queries relying on a SQLite quirk. Two of the nine were **shipped bugs in Stage 1 code**, both in the same failure: `DATABASE_URL` in the form the example ships could not open a psycopg connection at all, and the resulting error printed the password.
+
+The pattern is worth keeping. Every one of those was invisible to a test suite that generated its own inputs — **synthetic tests check the logic you thought of; real data checks the assumptions you did not know you had made.** DATASETS.md §1 and BENCHMARKS.md §0 now carry measured values instead of TBD. BIRD has still not been downloaded, and its rows stay TBD for the same reason they always did.
+
+**What the load bought and what it did not.** 20 of 20 dev databases convert; 912 of 937 comparable gold results reproduce (97.3%); 10 of 20 databases reproduce every one. That is a precondition for a baseline, not a baseline — no question has yet been answered by the system itself, because the pipeline seam is still open.
 
 **Resumability was added to this stage's scope.** It was not in the original plan and it is what makes the harness usable at all here: free-tier models cap tokens per model per day, so a full run spans most of a budget and being stopped partway is routine rather than exceptional.
 

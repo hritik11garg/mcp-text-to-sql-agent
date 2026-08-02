@@ -84,6 +84,12 @@ Three splits, with strictly different jobs:
 
 **The questions must come from a *verified* conversion.** Every gold query is executed on both the original SQLite and the converted PostgreSQL copy before a database is eligible to be scored against, using this document's own comparator ([DATASETS.md](DATASETS.md) §3.1). A conversion defect does not raise — it lowers an accuracy number, and the investigation that follows looks at the model.
 
+Measured on Spider dev: **10 of 20 databases reproduce every gold result; 97.3% of comparable questions do.** That number is the ceiling on any accuracy computed from those databases, and BENCHMARKS.md §0 is where it is recorded so a later row can be read against it.
+
+**A question whose gold SQL has no PostgreSQL expression leaves the denominator, and that must be reported.** §5's rule for gold errors extends to `dialect_error` — a query PostgreSQL rejects for a reason no conversion could fix (`GROUP BY` rules SQLite does not enforce, comparisons that rely on type affinity). 97 of Spider dev's 1034 questions are in this class. Excluding them is correct, because they cannot be scored either way; **not saying so is not**, since the exclusion raises every percentage computed afterwards.
+
+> **Open — and it bounds what any number here may be compared against.** The splits above are hash-assigned over the *combined* corpus, so `dev` is not Spider's `dev.json`. Published Spider results are computed on Spider's own dev set. Until this is decided (see [DATASETS.md](DATASETS.md) §5), a score from this harness is comparable only to another score from this harness.
+
 ## 3. Harness design
 
 Requirements, and where each stands:

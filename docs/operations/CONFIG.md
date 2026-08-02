@@ -18,8 +18,8 @@ All configuration comes from environment variables, loaded and validated by `pyd
 
 | Variable | Type | Default | Notes |
 |---|---|---|---|
-| `DATABASE_URL` | SecretStr | — | **Required.** App role — owns `agent_meta`, runs migrations |
-| `DATABASE_RO_URL` | SecretStr | — | **Required.** Read-only role used by `execute_sql` |
+| `DATABASE_URL` | SecretStr | — | **Required.** App role — owns `agent_meta`, runs migrations. Written in SQLAlchemy's `postgresql+psycopg://` form |
+| `DATABASE_RO_URL` | SecretStr | — | **Required.** Read-only role used by `execute_sql`. Same form |
 | `DB_POOL_MIN_SIZE` | int | `2` | |
 | `DB_POOL_MAX_SIZE` | int | `10` | **This is what bounds concurrent load on the database** |
 | `DB_CONNECT_TIMEOUT_MS` | int | `5000` | |
@@ -31,6 +31,10 @@ All configuration comes from environment variables, loaded and validated by `pyd
 **`DB_READONLY_ROLE` exists because migration 002 grants on `public` only.** A schema created afterwards is invisible to the read-only role until granted, so the loader has to name the role. It is validated as an identifier before it reaches a `GRANT` — quoting answers "how is this written", not "may this be named" ([ADR-017](../architecture/DECISIONS.md#adr-017--servers-claim-stdout-and-validate-arguments-themselves)).
 
 **Two URLs, and they must be different roles.** If `DATABASE_RO_URL` resolves to a role with write privileges, every containment guarantee in [SECURITY.md](SECURITY.md) is void. Startup validation asserts the read-only role cannot write — a real check against the database, not a naming convention.
+
+**Both are SQLAlchemy URLs, and psycopg cannot parse one.** The `+psycopg` suffix is required by alembic and rejected by `psycopg.connect`. There is deliberately no second variable holding the other form — two ways to say one thing can disagree, and the one that is wrong is found by whichever tool runs second. `core.dsn.libpq_dsn()` converts at every psycopg call site instead ([ADR-028](../architecture/DECISIONS.md#adr-028--one-connection-string-form-per-consumer-converted-at-the-driver)). A new call site that skips it fails at startup with `invalid connection option`.
+
+**These values reach error messages, so they are redacted where errors are built, not where they are logged.** psycopg quotes the whole connection string in its parse errors; `SecretStr` does nothing about that, because the string has already been handed to the driver. `core.dsn.redact_dsn()` masks the password in anything derived from a driver exception — see [SECURITY.md](SECURITY.md) §14.2.10, which exists because this leaked a live password to a terminal before it was fixed.
 
 ## 3. Execution limits
 

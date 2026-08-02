@@ -1,6 +1,6 @@
 # Datasets
 
-> **Status: the loader is built (§3, §5, §8). Counts and digests stay TBD until an archive is actually acquired** — they are properties of a download, and inventing them would make this file lie about what the project has been run against.
+> **Status: Spider is acquired, converted and verified** — §1 and §3.1 carry measured numbers from a real run. BIRD is not; its counts and digest stay TBD, because they are properties of a download and inventing them would make this file lie about what the project has been run against.
 
 ---
 
@@ -34,10 +34,10 @@
 |---|---|
 | Source | Yale LILY group — the Spider **1.0** dataset link on <https://yale-lily.github.io/spider> |
 | Format | SQLite databases + question/SQL pairs |
-| Layout | `database/<db_id>/<db_id>.sqlite`, plus `train_spider.json` / `dev.json` / `tables.json` |
+| Layout | The archive nests everything one level down, under `spider_data/`: `spider_data/database/<db_id>/<db_id>.sqlite`, plus `train_spider.json` / `dev.json` / `tables.json` alongside it. Pass `--databases data/spider/spider_data/database` |
 | License | CC BY-SA 4.0 |
-| Subset used | **TBD** — recorded once acquired |
-| SHA256 of archive | Recorded in `data/artifacts.lock.json` on first acquisition |
+| Subset used | `dev.json` — **1034 questions over 20 databases** — converted and verified (§3.1). Split assignment covers all **160** databases named by `dev.json` and `train_spider.json`: 104 train, 16 dev, 7 smoke, 33 held-out |
+| SHA256 of archive | `00636695dabed6b5f4b8328a16b13e069a2f16591d5efcce57660669c85b121b` — `spider_data.zip`, 205,800,266 bytes, recorded 2026-08-01 in `data/artifacts.lock.json` |
 
 ## 2. BIRD
 
@@ -70,11 +70,13 @@ python -m benchmark.load convert --databases data/spider/database --prefix spide
 
 | Issue | Handling |
 |---|---|
-| SQLite dynamic typing vs PostgreSQL static typing | Inferred from the **data**, not the declaration. Widening only: all-`int` → `bigint`, `int`+`float` → `double precision`, anything else → `text`. Every coercion the declaration did not imply is named in the conversion report |
-| Identifier quoting and case-folding | Folded to lower case so unquoted gold SQL resolves; unrepresentable names refuse the database rather than being rewritten ([ADR-019](../architecture/DECISIONS.md#adr-019--benchmark-identifiers-are-folded-to-lower-case-and-ambiguity-is-refused)) |
+| SQLite dynamic typing vs PostgreSQL static typing | Inferred from the **data**, not the declaration, and **exactly** — SQLite is asked with `group_concat(DISTINCT typeof(col))` rather than sampled ([ADR-024](../architecture/DECISIONS.md#adr-024--column-types-are-inferred-from-sqlites-own-typeof-over-the-whole-column)). Widening only: all-`int` → `bigint`, `int`+`float` → `double precision`, anything else → `text`. Every coercion the declaration did not imply is named in the conversion report |
+| A foreign key whose two sides hold different types | Both sides take the **numeric** type, if every value converts losslessly ([ADR-025](../architecture/DECISIONS.md#adr-025--a-foreign-key-joining-two-types-is-unified-toward-the-numeric-side)). SQLite joins `'1'` to `1` by applying numeric affinity to the text side; PostgreSQL answers `operator does not exist`. Measured on Spider: **35 of 769 foreign keys, across 21 of 166 databases**. Never unified toward text — `'01' = 1` is true under affinity and `'01' = '1'` is not, so that direction would silently change which rows join. A column that cannot convert keeps its type, the constraint is dropped, and both are reported |
+| Identifier quoting and case-folding | Folded to lower case so unquoted gold SQL resolves; unrepresentable names refuse the database rather than being rewritten ([ADR-019](../architecture/DECISIONS.md#adr-019--benchmark-identifiers-are-folded-to-lower-case-and-ambiguity-is-refused)). "Unrepresentable" means a double quote, a backslash, a control character or a non-ASCII byte — and nothing else. A narrower rule refused `%_Change_2007` and `Official_ratings_(millions)`, which are perfectly safe inside `sql.Identifier` |
 | `AUTOINCREMENT`, SQLite-specific pragmas | Dropped — irrelevant to read-only querying |
 | Views and virtual tables | Not converted. A view is a stored query; a virtual table's backing module can read the filesystem |
 | Date/time stored as text | Preserved as text; conversion would change what the gold SQL means |
+| A value that does not fit the planned type | Raises, naming database, table, column and the value. Under exact inference this should be unreachable; if it is ever reached, the message is the diagnosis rather than an `invalid literal for int()` naming nothing |
 | Primary and foreign keys | Added **after** the data loads, foreign keys as `NOT VALID`. They are metadata for schema retrieval and join reasoning, not integrity enforcement — benchmark data is routinely inconsistent, and a constraint the data cannot satisfy is skipped and recorded rather than failing the database |
 | Text that is not valid UTF-8 | Decoded with replacement characters and **counted** in the report. Refusing the database for one bad byte would cost most of BIRD; doing it silently would change values a gold `WHERE` clause filters on |
 | Gold SQL dialect differences | Gold queries are transpiled with sqlglot for the reference execution path |
@@ -94,15 +96,34 @@ python -m benchmark.load verify --databases data/spider/database \
 
 The comparator is `evals.comparison.compare` — the eval harness's own, not a stricter one written for this purpose. The question is not whether the two databases are identical (they are not; one is SQLite) but whether the eval will score a correct answer as correct on the converted copy, and only the thing that will do the scoring can answer that. See [ADR-022](../architecture/DECISIONS.md#adr-022--the-conversion-is-verified-by-the-eval-harnesss-own-comparator).
 
-| Outcome | Means |
-|---|---|
-| `match` | The converted copy reproduced the reference result |
-| `mismatch` | The data moved. One is enough to fail the database |
-| `gold_error` | The reference query fails on its **own** SQLite database. A benchmark defect; excluded from the denominator |
-| `transpile_error` | sqlglot could not render the query for PostgreSQL. Distinct from a mismatch on purpose |
-| `postgres_error` | The query ran on SQLite and errored on PostgreSQL — usually a genuine type difference the conversion produced |
+| Outcome | Means | In the denominator? |
+|---|---|---|
+| `match` | The converted copy reproduced the reference result | Yes |
+| `ambiguous_order` | Identical rows, different order, from a gold query that never determined one — `ORDER BY age` with tied ages. A property of the benchmark query, not the conversion ([ADR-027](../architecture/DECISIONS.md#adr-027--an-undetermined-result-order-is-not-a-mismatch--in-verification-only)) | Yes, as agreement |
+| `mismatch` | The data moved. One is enough to fail the database | Yes |
+| `gold_error` | The reference query fails on its **own** SQLite database. A benchmark defect | No |
+| `transpile_error` | sqlglot could not render the query for PostgreSQL. Distinct from a mismatch on purpose | No |
+| `dialect_error` | The gold query asks for something PostgreSQL does not offer — `42883`, `42803`, `42804`. It would fail identically against a perfect conversion ([ADR-026](../architecture/DECISIONS.md#adr-026--gold-sql-is-repaired-for-sqlites-quoted-literal-rule-and-dialect-gaps-are-not-conversion-faults)) | No |
+| `postgres_error` | A missing table, column or schema — `42P01`, `42703`, `3F000`. The names are what the conversion chose, so the conversion is why | Yes, as failure |
+
+The last two used to be one bucket, and that bucket was named after the component under test. It absorbed 213 questions that had nothing to do with the conversion.
 
 A database is `verified` only if **every** comparable query agreed. Not most of them: one disagreement is a class of data that moved, and which questions it affects is unknown until someone looks at it. The command exits **3** when any database fails, distinct from exit 1 for a tool failure, so a CI step cannot pass while reporting that the data is wrong.
+
+**Measured — Spider `dev.json`, 2026-08-02.** 20 databases, 1034 questions, all 20 converted:
+
+| | Questions | |
+|---|---|---|
+| `match` | 896 | 86.7% |
+| `ambiguous_order` | 16 | 1.5% |
+| `mismatch` | 25 | 2.4% |
+| `dialect_error` | 97 | 9.4% — 56 `GROUP BY`, 41 type-affinity comparisons |
+| `postgres_error` | 0 | |
+| **Conversion fidelity** | **912 / 937** | **97.3%** of comparable questions |
+
+**10 of 20 databases verify completely.** The other 10 hold the 25 mismatches — 22 classified `no_column_bijection`, 3 `shape_mismatch` — which are open and not yet diagnosed. They are stated here rather than in a footnote because a fidelity number without its failures is a marketing number.
+
+**The 97 dialect errors leave the denominator, and that must be reported with any accuracy figure computed from this split.** They are questions whose gold SQL has no PostgreSQL expression, so they cannot be scored later either — but an exclusion that is not reported is indistinguishable from cheating. Same rule §5 of [EVALUATION.md](EVALUATION.md) applies to gold errors.
 
 ## 4. Training pairs (derived)
 
@@ -126,6 +147,10 @@ Writes one JSONL file per split plus `spider-assignment.json`, under `data/split
 **Only the assignment is committed.** It is a map of database name to split — metadata, a few kilobytes. The per-split `.jsonl` files hold the questions and gold SQL themselves, which is the benchmark, which is CC BY-SA, and §7 says benchmark data is not vendored. They regenerate exactly from the assignment plus the archive the lockfile pins, so committing them would redistribute 2.5 MB of someone else's licensed data to save one command.
 
 **Assignment is a hash of the database name, not a seeded shuffle.** A shuffle is reproducible only while the input list is unchanged; add one database and every later one can move to a different split, silently training on what used to be held out. Hashing each name independently makes membership a property of the name alone, so adding databases never moves the ones already assigned. See [ADR-021](../architecture/DECISIONS.md#adr-021--splits-are-a-hash-of-the-database-name-not-a-seeded-shuffle).
+
+Spider's 160 databases assign as **104 train / 16 dev / 7 smoke / 33 held-out** — smoke being a sub-band of dev, so the dev band is 23 of 160 rather than 16.
+
+> **Open, and it affects what any number here may be compared to.** This split cuts across Spider's *own* train/dev boundary: `spider-dev` is a hash-selected slice of both files, not Spider's `dev.json`. Published Spider numbers are computed on Spider's dev set, so **a score from this split is not comparable to them** — only to other scores from this split. The alternative is to adopt Spider's dev set as held-out and carve an internal dev from their train, which buys comparability and gives up the property [ADR-021](../architecture/DECISIONS.md#adr-021--splits-are-a-hash-of-the-database-name-not-a-seeded-shuffle) was written for. ADR-021's own *Revisit* clause anticipates exactly this. Undecided; every BENCHMARKS.md row must state which split it used until it is.
 
 | Split | Share | Purpose |
 |---|---|---|
@@ -185,5 +210,7 @@ python -m benchmark.load acquire spider --archive ~/Downloads/spider.zip --trust
 | More members than `BENCHMARK_MAX_ARCHIVE_MEMBERS` | Inode exhaustion |
 
 A rejected archive leaves nothing behind: validation covers the whole archive first, so a partial extraction can never be picked up by a later run as though it had succeeded. Asserted in `tests/security/test_benchmark_acquisition.py`, which builds each of these archives and checks the file is genuinely not on disk afterwards.
+
+**A name this filesystem cannot store is a different fact, and gets a different verdict.** Spider ships `receipts (3:11:18, 5:53 PM)_original.csv`; a colon on Windows is a drive or stream separator. Refusing the archive for it fails the entire benchmark over a CSV the loader never reads, and the same archive is fine on Linux — so an unrepresentable member is **skipped and listed in the extraction report**, while an escaping member still refuses the whole archive. The exception is a database file (`.sqlite`, `.sqlite3`, `.db`), which refuses, because skipping one would silently change which databases exist. See [ADR-023](../architecture/DECISIONS.md#adr-023--an-unrepresentable-archive-name-is-skipped-and-recorded-an-escaping-one-refuses-the-archive) — including the ordering bug that briefly made a traversal attempt look like a portability problem.
 
 **Disk.** Spider is a few GB extracted; BIRD's train pack is substantially larger and is not needed to produce a dev or held-out number. Only the extracted tree is kept — nothing is vendored, per §7.
