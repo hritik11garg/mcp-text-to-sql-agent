@@ -37,6 +37,21 @@ _FENCE_RE = re.compile(
 )
 _LEADING_LABEL_RE = re.compile(r"^\s*(?:sql|query)\s*:\s*", re.IGNORECASE)
 
+_THINK_RE = re.compile(r"^\s*<think\b.*</think>", re.DOTALL | re.IGNORECASE)
+"""A leading reasoning block, which several open models put in `content`.
+
+Greedy on purpose. Reasoning text routinely *discusses* its own tags -- the
+sample that produced this contained the literal string ``</think>`` inside the
+reasoning -- so matching to the **last** closing tag is what leaves the answer
+rather than a fragment of the monologue.
+
+Anchored at the start, because the only thing this is allowed to remove is a
+prefix. A `<think>` appearing after SQL is not a reasoning block; it is a model
+doing something this should not silently rewrite.
+"""
+
+_UNCLOSED_THINK_RE = re.compile(r"^\s*<think\b", re.IGNORECASE)
+
 
 class UnanswerableQuestionError(LLMResponseError):
     """The model reported that the retrieved schema cannot answer the question.
@@ -204,8 +219,33 @@ def strip_formatting(text: str) -> str:
     Only *formatting* is removed. Nothing here alters the statement itself;
     rewriting model output would mean the SQL that was validated is not the SQL
     that was generated.
+
+    **A leading ``<think>`` block is formatting too**, and is stripped first.
+    Several open-weight models -- Qwen, DeepSeek-R1 derivatives, and whatever a
+    free tier substitutes when the primary is rate limited -- put their
+    reasoning in the ``content`` field rather than a separate one, then emit the
+    answer after ``</think>``. Left in place the whole monologue is submitted as
+    a query, and it fails to execute.
+
+    That is not hypothetical: it cost 27 of 150 questions in the first real
+    benchmark run, every one of them with correct SQL sitting after the closing
+    tag. It went unnoticed because the *configured* model does not do this --
+    only the fallback the rate limiter switched to does, which is exactly the
+    kind of difference a fallback chain is supposed to absorb and this one did
+    not.
+
+    An **unterminated** block returns empty rather than a fragment of reasoning.
+    The model spent its whole budget thinking, and the caller already reports
+    that case usefully; handing back half a monologue would send it to the
+    validator instead.
     """
     cleaned = text.strip()
+
+    # Before the fence check: a reasoning model emits ```sql *after* </think>,
+    # so a fence match on the whole blob would never anchor.
+    cleaned = _THINK_RE.sub("", cleaned, count=1).strip()
+    if _UNCLOSED_THINK_RE.match(cleaned):
+        return ""
 
     fenced = _FENCE_RE.match(cleaned)
     if fenced:

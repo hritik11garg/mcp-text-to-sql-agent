@@ -172,6 +172,16 @@ def main(argv: list[str] | None = None) -> int:
         owner.close()
         readonly.close()
 
+    if not summary.single_model:
+        # Loud, because the number above it is a weighted average of two
+        # systems and nothing about its shape says so.
+        logger.warning(
+            "%d models answered this run: %s. The accuracy figure is a blend, "
+            "not a score for any one of them.",
+            len(summary.answered_by),
+            ", ".join(f"{model} x{n}" for model, n in sorted(summary.answered_by.items())),
+        )
+
     emit_summary(
         {
             **summary.to_dict(),

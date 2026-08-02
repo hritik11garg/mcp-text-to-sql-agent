@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any
+from typing import Any, ClassVar
 
 import pytest
 
@@ -538,3 +538,156 @@ class TestResumeReadsIdsFromContent:
         )
 
         assert RunStore(tmp_path, manifest()).resume() == {"q1"}
+
+
+class TestEveryEmittedErrorTypeIsClassified:
+    """No `error_type` any component produces may land in UNCATEGORISED.
+
+    That bucket means "a failure nobody could explain". The first real run put
+    12 of 150 questions in it for a cause the runner had already written down --
+    `execution_failed` -- because the taxonomy had no entry. This walks the
+    emitters so the next one added cannot repeat it.
+    """
+
+    EMITTED: ClassVar[list[str]] = [
+        # evals/runner.py
+        "execution_failed",
+        "internal_error",
+        # evals/pipeline.py
+        "scope_unavailable",
+        "retrieval_failed",
+        "unanswerable",
+        "llm_failed",
+        # validation/validator.py and execution/executor.py, reaching the
+        # answerer through ValidationResult
+        "syntax_error",
+        "multiple_statements",
+        "not_read_only",
+        "table_not_found",
+        "unknown_identifier",
+        "cost_exceeded",
+        "explain_failed",
+        "statement_timeout",
+        "permission_denied",
+    ]
+
+    @pytest.mark.parametrize("error_type", EMITTED)
+    def test_it_has_a_category(self, error_type: str) -> None:
+        category = classify(comparison=None, error_type=error_type)
+
+        assert category is not FailureCategory.UNCATEGORISED
+
+    def test_the_two_structures_agree(self) -> None:
+        """`_INFRASTRUCTURE` exists only to express *ordering*; if it and the
+        lookup table disagreed, a type would be classified one way before recall
+        and another way after."""
+        from evals.taxonomy import _FROM_ERROR_TYPE, _INFRASTRUCTURE
+
+        assert all(
+            _FROM_ERROR_TYPE[name] is FailureCategory.INFRASTRUCTURE for name in _INFRASTRUCTURE
+        )
+
+    def test_an_unknown_type_still_falls_through_rather_than_raising(self) -> None:
+        """The bucket keeps its job: a type from a future version is counted,
+        not fatal."""
+        assert (
+            classify(comparison=None, error_type="invented_later") is FailureCategory.UNCATEGORISED
+        )
+
+
+class TestInfrastructureLeavesTheDenominator:
+    def test_a_provider_outage_is_not_a_wrong_answer(self, tmp_path: Path) -> None:
+        """Counting it as one reports a ten-minute rate limit as a model that
+        got worse -- the same argument that excludes gold errors."""
+        runner = EvalRunner(
+            RunStore(tmp_path, manifest()),
+            lambda q: (
+                Attempt(sql="SELECT id FROM customers", retrieved=(("customers", "id"),))
+                if q.question_id == "q1"
+                else Attempt(
+                    error_type="llm_failed",
+                    error_message="429",
+                    retrieved=(("customers", "id"),),
+                )
+            ),
+            _rows({"SELECT id FROM customers": [[1]]}),
+        )
+
+        summary = runner.run([question("q1"), question("q2")])
+
+        assert summary.total == 2
+        assert summary.scored == 1
+        assert summary.infrastructure_errors == 1
+        assert summary.execution_accuracy == 1.0
+
+    def test_a_failed_execution_is_still_scored(self, tmp_path: Path) -> None:
+        """The model wrote SQL and the database refused it. That is the model's
+        failure and it belongs in the denominator -- it is what the
+        invalid-query rate measures."""
+        runner = EvalRunner(
+            RunStore(tmp_path, manifest()),
+            lambda q: Attempt(sql="SELECT nope FROM customers", retrieved=(("customers", "id"),)),
+            _rows({"SELECT id FROM customers": [[1]]}),
+        )
+
+        summary = runner.run([question("q1")])
+
+        assert summary.scored == 1
+        assert summary.matched == 0
+        assert summary.failures["execution_failed"] == 1
+
+
+class TestModelMixIsVisible:
+    """A run answered by two models is not one measurement.
+
+    Measured: one run was 100% `gpt-oss-120b` at 73%; the next, same code and
+    same k, fell back for 27 questions to a model that scored 0% and reported
+    64.7% overall. Neither figure is a score for any single model, and nothing
+    in the summary said so.
+    """
+
+    def test_one_model_reads_as_a_single_model_run(self, tmp_path: Path) -> None:
+        runner = EvalRunner(
+            RunStore(tmp_path, manifest()),
+            lambda q: Attempt(
+                sql="SELECT id FROM customers",
+                retrieved=(("customers", "id"),),
+                answering_model="gpt-oss-120b",
+            ),
+            _rows({"SELECT id FROM customers": [[1]]}),
+        )
+
+        summary = runner.run([question("q1"), question("q2")])
+
+        assert summary.answered_by == {"gpt-oss-120b": 2}
+        assert summary.single_model is True
+
+    def test_a_fallback_makes_the_blend_visible(self, tmp_path: Path) -> None:
+        runner = EvalRunner(
+            RunStore(tmp_path, manifest()),
+            lambda q: Attempt(
+                sql="SELECT id FROM customers",
+                retrieved=(("customers", "id"),),
+                answering_model="gpt-oss-120b" if q.question_id == "q1" else "qwen-27b",
+            ),
+            _rows({"SELECT id FROM customers": [[1]]}),
+        )
+
+        summary = runner.run([question("q1"), question("q2")])
+
+        assert summary.answered_by == {"gpt-oss-120b": 1, "qwen-27b": 1}
+        assert summary.single_model is False
+
+    def test_a_question_that_never_reached_a_model_is_not_counted(self, tmp_path: Path) -> None:
+        """An outage leaves no answering model, and inventing one would put a
+        question in a bucket no model earned."""
+        runner = EvalRunner(
+            RunStore(tmp_path, manifest()),
+            lambda q: Attempt(error_type="llm_failed", retrieved=(("customers", "id"),)),
+            _rows({"SELECT id FROM customers": [[1]]}),
+        )
+
+        summary = runner.run([question("q1")])
+
+        assert summary.answered_by == {}
+        assert summary.single_model is True

@@ -40,6 +40,9 @@ logger = logging.getLogger(__name__)
 
 Rows = list[list[Any]]
 
+_UNSCORED = frozenset({FailureCategory.GOLD_ERROR, FailureCategory.INFRASTRUCTURE})
+"""Categories that leave the denominator. See :meth:`EvalRunner._summarise`."""
+
 
 @dataclass(frozen=True, slots=True)
 class Attempt:
@@ -83,6 +86,18 @@ class RunSummary:
     scored: int = 0
     matched: int = 0
     gold_errors: int = 0
+    infrastructure_errors: int = 0
+
+    answered_by: dict[str, int] = field(default_factory=dict)
+    """Questions answered, per model, and it belongs beside the score.
+
+    A fallback chain switches models when a free-tier limit is hit, so a run can
+    silently be a blend. Measured: one run was 100% `gpt-oss-120b` at 73%, and
+    the next -- same code, same k -- fell back for 27 questions to a model that
+    scored 0%, reporting 64.7% overall. Neither number is a model score, and
+    nothing in the summary said so until this field existed.
+    """
+
     failures: dict[str, int] = field(default_factory=dict)
     recall: dict[str, float | int] = field(default_factory=dict)
     input_tokens: int = 0
@@ -90,8 +105,19 @@ class RunSummary:
     duration_ms: float = 0.0
 
     @property
+    def single_model(self) -> bool:
+        """Whether one model answered every question that reached one.
+
+        False means the accuracy figure is a weighted average of two systems.
+        Reported rather than corrected: which model answered is a property of
+        the provider's rate limiter, not something the harness should pretend
+        away by discarding questions.
+        """
+        return len(self.answered_by) <= 1
+
+    @property
     def execution_accuracy(self) -> float | None:
-        """Matched over *scored*, where scored excludes gold errors.
+        """Matched over *scored*, where scored excludes what was never asked.
 
         ``None`` rather than ``0.0`` when nothing scored. A zero would enter a
         BENCHMARKS table looking like a measured result, and "the harness ran
@@ -107,7 +133,10 @@ class RunSummary:
             "scored": self.scored,
             "matched": self.matched,
             "gold_errors": self.gold_errors,
+            "infrastructure_errors": self.infrastructure_errors,
             "execution_accuracy": self.execution_accuracy,
+            "answered_by": self.answered_by,
+            "single_model": self.single_model,
             "failures": self.failures,
             "recall": self.recall,
             "input_tokens": self.input_tokens,
@@ -244,12 +273,27 @@ class EvalRunner:
 
     def _summarise(self, artifacts: Sequence[QuestionArtifact]) -> RunSummary:
         gold_errors = sum(1 for a in artifacts if a.failure_category == FailureCategory.GOLD_ERROR)
-        scorable = [a for a in artifacts if a.failure_category != FailureCategory.GOLD_ERROR]
+        infrastructure = sum(
+            1 for a in artifacts if a.failure_category == FailureCategory.INFRASTRUCTURE
+        )
+        # Both exclusions say the same thing: nothing about the system under
+        # test can be concluded from this question. A gold error means the
+        # reference answer does not run; an infrastructure failure means the
+        # model was never asked. Counting either as a wrong answer reports a
+        # provider outage as a model that got worse.
+        scorable = [a for a in artifacts if a.failure_category not in _UNSCORED]
 
         recall_values: dict[int, list[float]] = {}
         for artifact in artifacts:
             for k, value in artifact.recall_at_k.items():
                 recall_values.setdefault(k, []).append(value)
+
+        answered_by: dict[str, int] = {}
+        for artifact in artifacts:
+            if artifact.answering_model:
+                answered_by[artifact.answering_model] = (
+                    answered_by.get(artifact.answering_model, 0) + 1
+                )
 
         recall: dict[str, float | int] = {
             "questions": len(artifacts),
@@ -264,6 +308,8 @@ class EvalRunner:
             scored=len(scorable),
             matched=sum(1 for a in scorable if a.matched),
             gold_errors=gold_errors,
+            infrastructure_errors=infrastructure,
+            answered_by=answered_by,
             failures=counts([parse_category(a.failure_category) for a in artifacts]),
             recall=recall,
             input_tokens=sum(a.input_tokens for a in artifacts),

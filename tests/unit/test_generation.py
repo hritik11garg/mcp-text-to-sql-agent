@@ -250,3 +250,49 @@ class TestRefusalCarriesItsCost:
 
         with pytest.raises(UnanswerableQuestionError):
             await SQLGenerator(llm).generate("who?", RetrievalResult())
+
+
+class TestReasoningBlocks:
+    """Several open models put their reasoning in `content` and the answer after it.
+
+    Cost 27 of 150 questions in the first real benchmark run -- every one with
+    correct SQL sitting after the closing tag. The configured model does not do
+    this; the fallback the rate limiter switched to does.
+    """
+
+    def test_the_answer_after_the_block_survives(self) -> None:
+        text = "<think>\nThe user wants a count.\nI will use cars_data.\n</think>\n\nSELECT 1"
+
+        assert strip_formatting(text) == "SELECT 1"
+
+    def test_a_block_that_discusses_its_own_tag_still_resolves(self) -> None:
+        """Reasoning text routinely quotes its own tags. Matching the *first*
+        closing tag would return a fragment of the monologue as SQL."""
+        text = '<think>I must end with "</think>" then answer.</think>\nSELECT 2'
+
+        assert strip_formatting(text) == "SELECT 2"
+
+    def test_a_fence_after_the_block_is_still_removed(self) -> None:
+        # The reason the think strip runs first: a fence match on the whole
+        # blob would never anchor at the start.
+        text = "<think>reasoning</think>\n```sql\nSELECT 3\n```"
+
+        assert strip_formatting(text) == "SELECT 3"
+
+    def test_an_unterminated_block_yields_nothing(self) -> None:
+        """The budget went on thinking. Half a monologue is not SQL, and the
+        caller already reports the truncation case usefully."""
+        assert strip_formatting("<think>I am still thinking and the budget ran") == ""
+
+    def test_sql_containing_the_word_think_is_untouched(self) -> None:
+        assert strip_formatting("SELECT think FROM notes") == "SELECT think FROM notes"
+
+    def test_a_trailing_tag_is_not_treated_as_a_block(self) -> None:
+        """Only a *prefix* may be removed. A model doing something else here is
+        not something to silently rewrite."""
+        text = "SELECT 1 <think>afterthought</think>"
+
+        assert strip_formatting(text) == text
+
+    def test_the_case_of_the_tag_does_not_matter(self) -> None:
+        assert strip_formatting("<THINK>x</THINK>\nSELECT 4") == "SELECT 4"

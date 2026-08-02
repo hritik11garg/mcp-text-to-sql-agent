@@ -46,6 +46,26 @@ class FailureCategory(StrEnum):
     WRONG_VALUES = "wrong_values"
     GOLD_ERROR = "gold_error"
     UNANSWERABLE = "unanswerable"
+
+    EXECUTION_FAILED = "execution_failed"
+    """The generated query parsed but the database refused to run it.
+
+    A model failure, and the one the invalid-query-rate metric counts. It had no
+    category until the first real run put 12 of 150 questions into
+    ``UNCATEGORISED`` -- a bucket named after the unexplained, collecting a
+    failure whose cause the runner already knew and had written down.
+    """
+
+    INFRASTRUCTURE = "infrastructure"
+    """The system under test never got to answer.
+
+    A provider outage, a spent rate limit, a database that was never indexed, an
+    internal error in the harness. **Excluded from the scored denominator**, for
+    the reason :attr:`GOLD_ERROR` is: nothing about the model can be concluded
+    from a question it was never asked. Counting these as wrong answers means a
+    ten-minute rate limit is reported as a model that got worse.
+    """
+
     UNCATEGORISED = "uncategorised"
 
 
@@ -78,6 +98,16 @@ def classify(
         # concluded from a question whose reference answer does not run.
         return FailureCategory.GOLD_ERROR
 
+    if error_type in _INFRASTRUCTURE:
+        # Before the recall branch, and that ordering is load-bearing. A
+        # database that was never indexed retrieves nothing, so its Recall@k is
+        # 0 and the branch below would file it as a retrieval miss -- reporting
+        # a missing catalog as a failing retriever, which is the one thing that
+        # taxonomy is used to decide. Same argument as `gold_failed`: nothing
+        # about the system under test can be concluded from a question it was
+        # never asked.
+        return FailureCategory.INFRASTRUCTURE
+
     if error_type == "unanswerable":
         return FailureCategory.UNANSWERABLE
 
@@ -104,7 +134,38 @@ _FROM_ERROR_TYPE: dict[str, FailureCategory] = {
     "explain_failed": FailureCategory.SYNTAX_UNRECOVERABLE,
     "not_read_only": FailureCategory.NOT_READ_ONLY,
     "statement_timeout": FailureCategory.TIMEOUT,
+    "permission_denied": FailureCategory.NOT_READ_ONLY,
+    "table_not_found": FailureCategory.UNKNOWN_IDENTIFIER,
+    "cost_exceeded": FailureCategory.TIMEOUT,
+    # Everything the runner and the pipeline emit. Each one existed and none of
+    # them were mapped, so every one landed in UNCATEGORISED -- which is how a
+    # bucket meant for "nobody could explain this" fills with failures the code
+    # had already explained one layer up.
+    "execution_failed": FailureCategory.EXECUTION_FAILED,
+    "llm_failed": FailureCategory.INFRASTRUCTURE,
+    "scope_unavailable": FailureCategory.INFRASTRUCTURE,
+    "retrieval_failed": FailureCategory.INFRASTRUCTURE,
+    "internal_error": FailureCategory.INFRASTRUCTURE,
 }
+"""Every ``error_type`` any component produces, mapped to a cause.
+
+Kept exhaustive on purpose, and there is a test that walks the codebase's
+emitters to prove it stays that way. An unmapped type does not raise -- it
+becomes ``UNCATEGORISED``, which reads in a report as "a failure nobody could
+explain" and is the most expensive kind of quiet wrongness this taxonomy can
+produce.
+"""
+
+_INFRASTRUCTURE = frozenset(
+    {"llm_failed", "scope_unavailable", "retrieval_failed", "internal_error"}
+)
+"""Error types meaning the system under test never got to answer.
+
+Consulted *before* recall, and the set is separate from
+:data:`_FROM_ERROR_TYPE` only so that ordering can be expressed. Both map to
+:attr:`FailureCategory.INFRASTRUCTURE`; a test asserts they agree.
+"""
+
 
 _FROM_VERDICT: dict[Verdict, FailureCategory] = {
     Verdict.ORDER_MISMATCH: FailureCategory.ROW_ORDER,
