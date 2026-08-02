@@ -232,6 +232,7 @@ At least one database did not reproduce every gold result. The report names them
 - `dialect_error` — the gold query asks PostgreSQL for something it does not offer (`42883` undefined operator, `42803` grouping, `42804` type mismatch). It would fail against a perfect conversion too. Excluded from the denominator, and **must be reported alongside any accuracy number computed from the split** — 97 of 1034 on Spider dev.
 - `postgres_error` — a missing table, column or schema (`42P01`, `42703`, `3F000`). The names are what the conversion chose, so this one does blame the conversion; check the conversion report for that database.
 - `ambiguous_order` — identical rows in a different order, from a gold query with no total order. Counted as agreement, and counted separately so it is visible.
+- `undetermined_limit` — the gold `ORDER BY` ties across its `LIMIT`, so the question has several equally correct answers. Excluded from the denominator. **Not the same as `ambiguous_order`:** there the two engines return the same rows, here they return different ones, which is why one is counted as agreement and the other is excluded.
 
 Do not "fix" this by relaxing the comparison. The comparator is the one the eval will score with, so a change here changes every number. The one relaxation that exists — `ambiguous_order` — lives in the verifier and deliberately not in `evals.comparison`, because there the two queries being compared are different ([ADR-027](../architecture/DECISIONS.md#adr-027--an-undetermined-result-order-is-not-a-mismatch--in-verification-only)).
 

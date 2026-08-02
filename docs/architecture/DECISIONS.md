@@ -614,6 +614,12 @@ The three guards are the whole design:
 
 **And the honest cost of the second half:** excluding dialect errors shrinks the scoreable set. 97 questions leave the denominator, and every published number must state that alongside the score, exactly as [DATASETS.md](../ml/DATASETS.md) §1 requires for the metric itself. An exclusion that is not reported is indistinguishable from cheating.
 
+**A second rule of the same kind, found later — the title of this ADR understates it.** SQLite's `LIKE` is **case-insensitive for ASCII** by default (`case_sensitive_like` is off and nothing here turns it on); PostgreSQL's is case-sensitive. So `WHERE paragraph_text LIKE 'korea'` returns two rows on SQLite and none on PostgreSQL. Nothing raises — it silently returns different rows, which is why it surfaced as a conversion *mismatch* rather than an error. Measured: 3 of 1034 questions. `LIKE` is therefore rendered as `ILIKE`.
+
+The principle is identical to the quoted-literal repair, so it lives here rather than in its own entry: **the gold SQL means what SQLite says it means, and a faithful rendering says that in PostgreSQL's vocabulary rather than passing the token through unchanged.** Two details are load-bearing. sqlglot models `NOT LIKE` as a `Like` node carrying `negate=True`, not as a `Not` wrapping a `Like` — so rebuilding the node from its two obvious arguments drops the negation and **inverts the predicate**, which is a worse bug than the one being fixed, and a test pins it. And `ILIKE` folds by collation while SQLite folds only ASCII, so a non-ASCII pattern can match where SQLite would not; recorded rather than closed, because the alternative is an ASCII-only fold around every operand for a case Spider does not contain.
+
+**This correction cost an existing test its premise, which is the useful part.** An integration test asserted that `LIKE` case sensitivity was "a genuine engine difference the verifier catches". It was not an engine difference at all — it was a transpilation gap, attributed to the layer below the one that owned it, exactly like the 213. That test now uses the one difference no transpilation can close: a mixed-storage column that must become `text`.
+
 **Generalises to:** before fixing a failure class, classify it. Two hundred failures with one cause and two hundred with fifty causes look identical in a summary count and call for completely different work.
 
 **Revisit:** if a benchmark's gold SQL is written for PostgreSQL, in which case the repair should be off by default rather than schema-gated.
@@ -674,3 +680,48 @@ A test asserts the *premise* rather than only the fix: it checks that psycopg re
 **Generalises to:** when a value has two required formats, pick one canonical form, convert at the boundary that needs the other, and never let the two be configured separately. And when a test fixture massages configuration before use, it has stopped testing the configuration — the massaging is a defect report waiting to be read.
 
 **Revisit:** if alembic gains support for plain libpq URLs, at which point the conversion can be deleted rather than moved.
+
+---
+
+## ADR-029 — A LIMIT that cuts a tie has no correct answer, and is excluded
+
+**Status:** accepted · **Date:** 2026-08-02 · **Stage:** 2
+
+**Context.** After [ADR-026](#adr-026--gold-sql-is-repaired-for-sqlites-quoted-literal-rule-and-dialect-gaps-are-not-conversion-faults) and [ADR-027](#adr-027--an-undetermined-result-order-is-not-a-mismatch--in-verification-only), 25 Spider dev questions still verified as `mismatch`. Diagnosed, they were three things, and only one of them was a conversion defect:
+
+| Cause | Questions |
+|---|---|
+| `LIMIT n` where the `ORDER BY` key ties across the cut | 16 |
+| SQLite's case-insensitive `LIKE` | 3 |
+| `wta_1.players.birth_date` — 20,144 integers and 518 empty strings, so static typing forces `text` | 6 |
+
+The 16 are all the same shape: `SELECT hometown FROM teacher GROUP BY hometown ORDER BY count(*) DESC LIMIT 1` where three towns are tied at the top. Every engine returns *a* correct answer and no two need agree on which.
+
+**Decision.** A new outcome, `undetermined_limit`, counted and **excluded from the denominator** — the treatment `gold_error` and `dialect_error` already get, because a question with no unique correct answer cannot be scored later either.
+
+**Why excluded rather than counted as agreement, unlike `ambiguous_order`.** They look similar and the difference decides the arithmetic. Under `ambiguous_order` the two engines return **the same rows** and disagree only about their order, so the data is provably intact and counting it as agreement is a statement about the data. Here they return **different rows** — nothing follows about the data in either direction, so calling it agreement would be a claim the evidence does not support.
+
+**Detection requires two independent facts, and the second one is the entire safeguard.**
+
+1. Without the `LIMIT`, both engines return identical multisets — the underlying data agrees.
+2. On SQLite alone, the `ORDER BY` key at the cut equals the key of the first excluded row — the prefix genuinely is not determined.
+
+Fact 1 alone is not sufficient, and assuming it was would have hidden the only real finding in the set. Two engines can also disagree about a prefix because they **order the same key differently** — which is precisely what a column wrongly converted to `text` causes, since SQLite orders integers numerically and PostgreSQL orders text lexicographically. Of the 18 questions that pass fact 1, **16 are ties and 2 are `wta_1.birth_date`**. A one-fact rule would have marked those 2 as benchmark ambiguity and reported a fidelity number that had quietly absorbed a conversion defect.
+
+Fact 2 is answered by projecting the `ORDER BY` expressions into the select list, dropping the `LIMIT`, and reading the two rows either side of the cut — against **SQLite alone**, because the question "does this benchmark query determine its own answer" is a property of the original data and has nothing to do with the conversion.
+
+**Conservative wherever it cannot be certain.** An unparseable query, a non-literal `LIMIT`, a `DISTINCT` whose row count the probe would change, or a `LIMIT` that never actually cut — each falls through to `mismatch`, which is the outcome that gets looked at. One specific trap is pinned by test: sqlglot answers `'1'` for the count in `LIMIT 1 + 1`, because `.name` returns the leftmost leaf, so reading it without a type check yields a wrong cut position with no error at all.
+
+**Alternatives.**
+- *Count them as mismatches.* What shipped. It fails 6 of 20 databases for questions that have no single right answer, and the fix it suggests — making PostgreSQL break ties the way SQLite does — is not achievable and would be meaningless if it were.
+- *Count them as agreement, like `ambiguous_order`.* Overstates what was checked, and on this corpus would have swallowed the `birth_date` defect.
+- *Use fact 1 alone.* Simpler, no probe query, and wrong on 2 of 18 in the first corpus it met.
+- *Add a deterministic tiebreaker to both engines.* Changes the benchmark's queries to suit the harness.
+
+**Tradeoff.** Detection costs an extra execution of the un-limited query on both engines, plus a probe on SQLite — and the un-limited form has no `LIMIT` by construction, so on a large table it materialises the full result. Bounded in practice by only running for questions that already mismatched, and by this being an offline operator tool; the PostgreSQL side inherits the session `statement_timeout`, the SQLite side has no equivalent. Accepted rather than hidden: if a future corpus makes this expensive, the fix is a row cap on the *probe* with the truncation recorded, not a cheaper rule.
+
+**What this deliberately does not do.** It does not fix the remaining 6. A column holding 20,144 integers and 518 empty strings has no faithful static type: `bigint` cannot hold the empty strings, and `text` makes `SELECT birth_date` return `'19680831'` where SQLite returns `19680831`. Coercing the empty strings to `NULL` would make the column numeric and change what the data *is* — `WHERE birth_date = ''` would stop matching 518 rows. This is the consequence [DATASETS.md](../ml/DATASETS.md) §3 predicted in writing before any archive was downloaded, and reporting it is the correct outcome.
+
+**Generalises to:** when two explanations produce identical symptoms and only one is your fault, the rule that tells them apart is worth more than the rule that handles either. Building only the cheap check is how a defect gets reclassified as someone else's ambiguity.
+
+**Revisit:** if a benchmark ships orderedness or answer-uniqueness metadata per question, which would replace the inference entirely.

@@ -79,7 +79,7 @@ python -m benchmark.load convert --databases data/spider/database --prefix spide
 | A value that does not fit the planned type | Raises, naming database, table, column and the value. Under exact inference this should be unreachable; if it is ever reached, the message is the diagnosis rather than an `invalid literal for int()` naming nothing |
 | Primary and foreign keys | Added **after** the data loads, foreign keys as `NOT VALID`. They are metadata for schema retrieval and join reasoning, not integrity enforcement — benchmark data is routinely inconsistent, and a constraint the data cannot satisfy is skipped and recorded rather than failing the database |
 | Text that is not valid UTF-8 | Decoded with replacement characters and **counted** in the report. Refusing the database for one bad byte would cost most of BIRD; doing it silently would change values a gold `WHERE` clause filters on |
-| Gold SQL dialect differences | Gold queries are transpiled with sqlglot for the reference execution path |
+| Gold SQL dialect differences | Gold queries are transpiled with sqlglot for the reference execution path — including two rules that are SQLite *semantics* rather than syntax: a double-quoted token matching no column is a string literal, and `LIKE` folds case ([ADR-026](../architecture/DECISIONS.md#adr-026--gold-sql-is-repaired-for-sqlites-quoted-literal-rule-and-dialect-gaps-are-not-conversion-faults)). Both produce *silently different rows* rather than errors when missed |
 
 **What the conversion deliberately does not do:** rewrite data so that gold queries pass. A column holding a mix of numbers and text becomes `text`, and a gold query comparing it to a number then fails on PostgreSQL where it succeeded on SQLite. That failure is real and §3.1 is what finds it. Coercing the column and dropping the rows that do not fit would make the query pass and the answer wrong.
 
@@ -104,6 +104,7 @@ The comparator is `evals.comparison.compare` — the eval harness's own, not a s
 | `gold_error` | The reference query fails on its **own** SQLite database. A benchmark defect | No |
 | `transpile_error` | sqlglot could not render the query for PostgreSQL. Distinct from a mismatch on purpose | No |
 | `dialect_error` | The gold query asks for something PostgreSQL does not offer — `42883`, `42803`, `42804`. It would fail identically against a perfect conversion ([ADR-026](../architecture/DECISIONS.md#adr-026--gold-sql-is-repaired-for-sqlites-quoted-literal-rule-and-dialect-gaps-are-not-conversion-faults)) | No |
+| `undetermined_limit` | The gold `ORDER BY` ties across its `LIMIT`, so the question has no single correct answer. Requires *both* that the un-limited results agree and that the key at the cut is tied ([ADR-029](../architecture/DECISIONS.md#adr-029--a-limit-that-cuts-a-tie-has-no-correct-answer-and-is-excluded)) | No |
 | `postgres_error` | A missing table, column or schema — `42P01`, `42703`, `3F000`. The names are what the conversion chose, so the conversion is why | Yes, as failure |
 
 The last two used to be one bucket, and that bucket was named after the component under test. It absorbed 213 questions that had nothing to do with the conversion.
@@ -114,16 +115,21 @@ A database is `verified` only if **every** comparable query agreed. Not most of 
 
 | | Questions | |
 |---|---|---|
-| `match` | 896 | 86.7% |
+| `match` | 899 | 86.9% |
 | `ambiguous_order` | 16 | 1.5% |
-| `mismatch` | 25 | 2.4% |
+| `mismatch` | 6 | 0.6% |
 | `dialect_error` | 97 | 9.4% — 56 `GROUP BY`, 41 type-affinity comparisons |
+| `undetermined_limit` | 16 | 1.5% |
 | `postgres_error` | 0 | |
-| **Conversion fidelity** | **912 / 937** | **97.3%** of comparable questions |
+| **Conversion fidelity** | **915 / 921** | **99.3%** of comparable questions |
 
-**10 of 20 databases verify completely.** The other 10 hold the 25 mismatches — 22 classified `no_column_bijection`, 3 `shape_mismatch` — which are open and not yet diagnosed. They are stated here rather than in a footnote because a fidelity number without its failures is a marketing number.
+**19 of 20 databases verify completely.** All six remaining mismatches are in `wta_1`, and all six are **one column**: `players.birth_date` holds 20,144 integers and 518 empty strings, so no static type is faithful. `bigint` cannot hold the empty strings; `text` makes `SELECT birth_date` return `'19680831'` where SQLite returns `19680831`. Coercing the empty strings to `NULL` would make the column numeric and change what the data is — 518 rows would stop matching `WHERE birth_date = ''`.
 
-**The 97 dialect errors leave the denominator, and that must be reported with any accuracy figure computed from this split.** They are questions whose gold SQL has no PostgreSQL expression, so they cannot be scored later either — but an exclusion that is not reported is indistinguishable from cheating. Same rule §5 of [EVALUATION.md](EVALUATION.md) applies to gold errors.
+This is exactly the consequence stated two paragraphs above, and it was written down before any archive was downloaded. Reporting it is the correct outcome, not a defect to be closed.
+
+> **How the other 19 mismatches were resolved, since a fidelity number that moved needs to say why.** They were never conversion defects. 3 were SQLite's case-insensitive `LIKE`, a transpilation gap now closed. 16 were `LIMIT` cutting a tie — questions with no single correct answer, now counted as `undetermined_limit` and excluded. Critically, 2 questions that looked identical to those 16 from outside were **not** ties, and were the `birth_date` defect: the rule that separates them is the reason the number is 99.3% and not a number that had quietly absorbed a real fault ([ADR-029](../architecture/DECISIONS.md#adr-029--a-limit-that-cuts-a-tie-has-no-correct-answer-and-is-excluded)).
+
+**113 questions leave the denominator — 97 dialect errors and 16 undetermined limits — and that must be reported with any accuracy figure computed from this split.** They are questions that cannot be scored later either, so excluding them is correct; an exclusion that is not reported is indistinguishable from cheating. Same rule §5 of [EVALUATION.md](EVALUATION.md) applies to gold errors.
 
 ## 4. Training pairs (derived)
 

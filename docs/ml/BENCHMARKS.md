@@ -42,8 +42,11 @@ Fidelity is `(match + ambiguous_order) / (questions − gold_error − transpile
 | Date | Commit | Dataset | Databases | Questions | Fidelity | Excluded | Verified | Command |
 |---|---|---|---|---|---|---|---|---|
 | 2026-08-02 | `5551fb5` | Spider `dev.json`, digest `00636695…c85b121b` | 20 / 20 converted | 1034 | **912 / 937 = 97.3%** — 896 match, 16 ambiguous order, 25 mismatch, 0 postgres error | 97 dialect error (56 `GROUP BY`, 41 type affinity) | **10 / 20 databases** | `python -m benchmark.load verify --databases data/spider/spider_data/database --questions data/spider/spider_data/dev.json --benchmark spider --prefix spider_` |
+| 2026-08-02 | `3242dc1` | Spider `dev.json`, digest `00636695…c85b121b` | 20 / 20 converted | 1034 | **915 / 921 = 99.3%** — 899 match, 16 ambiguous order, 6 mismatch, 0 postgres error | 97 dialect error · 16 undetermined limit | **19 / 20 databases** | *as above* |
 
-**Open:** the 25 mismatches — 22 `no_column_bijection`, 3 `shape_mismatch`, spread over the 10 unverified databases — are not yet diagnosed. Until they are, an accuracy number from those 10 databases carries an unknown share of conversion error and must say so.
+**The two rows differ by diagnosis, not by conversion.** Nothing about the data changed between them. 3 of the 25 mismatches were SQLite's case-insensitive `LIKE`, a transpilation gap; 16 were `LIMIT` cutting a tie, which is a question with no single correct answer and now leaves the denominator. Both rows stay, per the append-only rule — a number that improved because the measurement got more accurate is exactly the kind of change worth being able to see.
+
+**Residual, and it is not going away:** all 6 remaining mismatches are `wta_1.players.birth_date`, a column holding 20,144 integers and 518 empty strings. No static type is faithful to that, so an accuracy number over `wta_1` carries a known, bounded conversion difference on one column. The other 19 databases carry none.
 
 ## 1. Execution accuracy
 

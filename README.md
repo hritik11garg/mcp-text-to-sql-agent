@@ -5,9 +5,9 @@
 > | Landed | Next |
 > |---|---|
 > | **Four MCP servers over stdio, with runtime `tools/list` discovery** | **Wiring the pipeline into the eval harness's answerer seam** |
-> | **Spider loaded — 20 dev databases converted to Postgres and verified at 97.3% fidelity** | FastAPI + SSE, and the `/health` · `/ready` pair |
+> | **Spider loaded — 20 dev databases converted to Postgres, 19 verified against every gold result** | FastAPI + SSE, and the `/health` · `/ready` pair |
 > | Postgres 16 + pgvector, Alembic migrations | The agent loop that drives the discovered tools |
-> | `SELECT`-only role, proven by 30 negative tests | Diagnosing the 25 gold queries the conversion does not yet reproduce |
+> | `SELECT`-only role, proven by 30 negative tests | |
 > | Schema catalog — introspection, serialization, embedding | |
 > | Retrieval — pgvector ANN, join-path expansion, clamped limits | |
 > | Validation — sqlglot AST + `EXPLAIN`, refused at both layers | |
@@ -125,7 +125,7 @@ That creates the `agent_meta` schema, the pgvector extension and the HNSW index,
 Verify the install — the security suite is the one that matters, and it passes by being **refused**:
 
 ```powershell
-pytest                    # 837 tests; integration, security and contract need Docker
+pytest                    # 855 tests; integration, security and contract need Docker
 pytest -m security        # the read-only containment suite, on its own
 ruff check . ; mypy
 ```
@@ -219,7 +219,7 @@ Directories marked *(stub)* exist with a docstring stating which stage fills the
 
 | Metric | Baseline | Current | Stage |
 |---|---|---|---|
-| **Conversion fidelity** (Spider dev, 1034 questions) | — | **97.3%** — 912 / 937, 10 of 20 databases fully verified | 2 |
+| **Conversion fidelity** (Spider dev, 1034 questions) | — | **99.3%** — 915 / 921, 19 of 20 databases fully verified | 2 |
 | Execution accuracy (held-out Spider/BIRD subset) | TBD | TBD | 2 |
 | Schema-linking Recall@5 | TBD | TBD | 5 |
 | Schema-linking Recall@10 | TBD | TBD | 5 |

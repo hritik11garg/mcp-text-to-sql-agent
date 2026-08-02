@@ -384,19 +384,30 @@ class TestVerification:
         make_sqlite_db: Callable[..., Path],
         settings: BenchmarkSettings,
     ) -> None:
-        # `LIKE` is case-insensitive for ASCII in SQLite and case-sensitive in
-        # PostgreSQL. Both queries run cleanly on both engines and return
-        # different rows -- which is exactly the shape of defect this whole
-        # module exists for: nothing raises, an accuracy number just drops.
-        loaded = _load(loader_connection, make_sqlite_db, settings, "school", SCHOOL)
+        # A mixed-storage column, which is the one difference no transpilation
+        # can close. `Reading` holds integers and one empty string, so static
+        # typing forces `text` -- and then SQLite answers `5` where PostgreSQL
+        # answers `'5'`. Nothing raises; an accuracy number just drops.
+        #
+        # This test used to use `LIKE`, on the belief that its case sensitivity
+        # was an engine difference. It is not: SQLite's LIKE folds case and the
+        # *transpilation* has to say so, which it now does. The premise was
+        # wrong in the same direction as the 213 questions that were counted
+        # against the conversion for a quoted-literal rule -- a difference
+        # attributed to the layer below the one that owned it.
+        mixed = """
+            CREATE TABLE Reading (id INTEGER PRIMARY KEY, Value INT);
+            INSERT INTO Reading VALUES (1, 5), (2, 7), (3, '');
+        """
+        loaded = _load(loader_connection, make_sqlite_db, settings, "mixed", mixed)
         questions = self._questions(
             [
-                ("How many students?", "SELECT count(*) FROM Student"),
-                ("Anyone called hopper?", "SELECT LName FROM Student WHERE LName LIKE 'hopper'"),
+                ("How many readings?", "SELECT count(*) FROM Reading"),
+                ("What is reading one?", "SELECT Value FROM Reading WHERE id = 1"),
             ]
         )
 
-        with open_database(loaded.path, db_id="school") as database:
+        with open_database(loaded.path, db_id="mixed") as database:
             report = verify_database(
                 loader_connection,
                 database,
@@ -412,6 +423,32 @@ class TestVerification:
         # someone looks at the one that did not.
         assert report.verified is False
         assert [check.outcome for check in report.checks] == [Outcome.MATCH, Outcome.MISMATCH]
+
+    def test_case_insensitive_like_is_reproduced_rather_than_reported(
+        self,
+        loader_connection: Conn,
+        make_sqlite_db: Callable[..., Path],
+        settings: BenchmarkSettings,
+    ) -> None:
+        # The other half of the correction above, asserted directly: SQLite's
+        # LIKE folds case, so a gold query matching 'hopper' against 'Hopper'
+        # must reproduce on PostgreSQL. Measured on Spider dev at 3 questions.
+        loaded = _load(loader_connection, make_sqlite_db, settings, "school", SCHOOL)
+        questions = self._questions(
+            [("Anyone called hopper?", "SELECT LName FROM Student WHERE LName LIKE 'hopper'")]
+        )
+
+        with open_database(loaded.path, db_id="school") as database:
+            report = verify_database(
+                loader_connection,
+                database,
+                questions,
+                schema=loaded.schema,
+                statement_timeout_ms=10_000,
+            )
+
+        assert report.checks[0].outcome is Outcome.MATCH
+        assert report.verified is True
 
 
 class TestTranspile:

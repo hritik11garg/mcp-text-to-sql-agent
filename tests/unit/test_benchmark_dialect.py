@@ -21,7 +21,14 @@ from benchmark.convert import (
     plan_database,
 )
 from benchmark.sqlite_source import open_database
-from benchmark.verify import Outcome, schema_names, transpile_to_postgres
+from benchmark.verify import (
+    Outcome,
+    QueryCheck,
+    VerificationReport,
+    limit_cut_is_tied,
+    schema_names,
+    transpile_to_postgres,
+)
 from core.settings import BenchmarkSettings
 
 KNOWN = frozenset({"course", "student", "name", "age", "title"})
@@ -75,6 +82,136 @@ class TestQuotedLiteralRepair:
     def test_an_unparseable_query_still_raises(self) -> None:
         with pytest.raises(ValueError, match=r".+"):
             transpile_to_postgres("SELECT FROM WHERE ((((", known_names=KNOWN)
+
+
+class TestLikeIsCaseInsensitive:
+    """SQLite's LIKE folds case; PostgreSQL's does not.
+
+    Measured on Spider dev: 3 of 1034 questions returned different rows for
+    this reason alone, and every one was counted as a conversion mismatch until
+    the transpilation said what SQLite meant.
+    """
+
+    @pytest.mark.parametrize(
+        "gold",
+        [
+            "SELECT name FROM student WHERE name LIKE 'korea'",
+            "SELECT name FROM student WHERE name LIKE '%w%'",
+        ],
+    )
+    def test_like_becomes_ilike(self, gold: str) -> None:
+        rendered = transpile_to_postgres(gold, known_names=KNOWN)
+        assert "ILIKE" in rendered.upper()
+
+    def test_not_like_keeps_its_negation(self) -> None:
+        # Load-bearing. sqlglot models NOT LIKE as a Like node carrying
+        # `negate=True`, not as a Not wrapping a Like, so rebuilding the node
+        # from `this` and `expression` alone silently inverts the predicate.
+        # This assertion is what caught that.
+        rendered = transpile_to_postgres(
+            "SELECT name FROM student WHERE name NOT LIKE 'a%'", known_names=KNOWN
+        ).upper()
+        assert "NOT ILIKE" in rendered
+
+    def test_an_escape_clause_survives(self) -> None:
+        rendered = transpile_to_postgres(
+            r"SELECT name FROM student WHERE name LIKE '100!%' ESCAPE '!'", known_names=KNOWN
+        ).upper()
+        assert "ILIKE" in rendered
+        assert "ESCAPE" in rendered
+
+    def test_a_query_without_like_is_untouched(self) -> None:
+        rendered = transpile_to_postgres("SELECT name FROM student", known_names=KNOWN)
+        assert "ILIKE" not in rendered.upper()
+
+    def test_the_repaired_quoted_literal_is_still_a_like_pattern(self) -> None:
+        # Both repairs run on the same statement, and this is the case that
+        # needs both: SQLite reads `"%w%"` as a string *and* folds the case.
+        rendered = transpile_to_postgres(
+            'SELECT name FROM student WHERE name LIKE "%w%"', known_names=KNOWN
+        )
+        assert "'%w%'" in rendered
+        assert "ILIKE" in rendered.upper()
+
+
+class TestLimitCutIsTied:
+    """The check that separates an arbitrary answer from a conversion defect.
+
+    Both look identical from outside -- same rows overall, different prefix --
+    and only one of them is the benchmark's fault. On Spider dev this rule
+    separated 16 real ties from 2 questions where the engines ordered the same
+    key differently because a mixed column had to become text.
+    """
+
+    @pytest.fixture
+    def towns(self, make_sqlite_db: Callable[..., Path]) -> Path:
+        return make_sqlite_db(
+            "t",
+            """
+            CREATE TABLE teacher (name TEXT, hometown TEXT);
+            INSERT INTO teacher VALUES
+                ('a', 'Bristol'), ('b', 'Leeds'), ('c', 'York'), ('d', 'Hull'), ('e', 'Hull');
+            """,
+        )
+
+    def test_a_tie_at_the_cut_is_reported(self, towns: Path) -> None:
+        # Bristol, Leeds and York all have one teacher, so "the town with the
+        # fewest" has three equally correct answers.
+        gold = "SELECT hometown FROM teacher GROUP BY hometown ORDER BY count(*) ASC LIMIT 1"
+        with open_database(towns, db_id="t") as database:
+            assert limit_cut_is_tied(database, gold) is True
+
+    def test_a_distinct_top_row_is_not_a_tie(self, towns: Path) -> None:
+        # Hull has two teachers and nothing else has more. One correct answer.
+        gold = "SELECT hometown FROM teacher GROUP BY hometown ORDER BY count(*) DESC LIMIT 1"
+        with open_database(towns, db_id="t") as database:
+            assert limit_cut_is_tied(database, gold) is False
+
+    def test_a_limit_with_no_order_by_is_undetermined(self, towns: Path) -> None:
+        with open_database(towns, db_id="t") as database:
+            assert limit_cut_is_tied(database, "SELECT name FROM teacher LIMIT 1") is True
+
+    def test_a_limit_that_never_cut_is_not_undetermined(self, towns: Path) -> None:
+        # Nothing was excluded, so the LIMIT cannot explain any difference.
+        gold = "SELECT name FROM teacher ORDER BY name LIMIT 50"
+        with open_database(towns, db_id="t") as database:
+            assert limit_cut_is_tied(database, gold) is False
+
+    def test_a_query_with_no_limit_is_not_undetermined(self, towns: Path) -> None:
+        with open_database(towns, db_id="t") as database:
+            assert limit_cut_is_tied(database, "SELECT name FROM teacher") is False
+
+    def test_distinct_is_refused_rather_than_guessed(self, towns: Path) -> None:
+        # The probe adds the ordering key to the select list, which changes
+        # which rows a DISTINCT collapses -- so the cut would land somewhere
+        # else and prove nothing. Conservative: report a mismatch instead.
+        gold = "SELECT DISTINCT hometown FROM teacher ORDER BY hometown LIMIT 1"
+        with open_database(towns, db_id="t") as database:
+            assert limit_cut_is_tied(database, gold) is False
+
+    def test_a_non_literal_limit_is_refused(self, towns: Path) -> None:
+        # `LIMIT 1 + 1` cuts after two rows, and sorted by hometown those are
+        # Bristol and Hull -- not a tie. But sqlglot answers '1' for the count,
+        # because `.name` returns the leftmost leaf of the expression, so a
+        # naive read would test rows 1 and 2 (Bristol, Hull) instead of 2 and 3
+        # (Hull, Hull) and report a tie that is not there.
+        gold = "SELECT hometown FROM teacher ORDER BY hometown LIMIT 1 + 1"
+        with open_database(towns, db_id="t") as database:
+            assert limit_cut_is_tied(database, gold) is False
+
+    def test_an_offset_moves_the_cut(self, towns: Path) -> None:
+        # Sorted by hometown: Bristol, Hull, Hull, Leeds, York. A cut after two
+        # rows falls between the two Hulls; without the OFFSET it would fall
+        # after Bristol and there would be nothing ambiguous about it.
+        with open_database(towns, db_id="t") as database:
+            tied = "SELECT hometown FROM teacher ORDER BY hometown LIMIT 1 OFFSET 1"
+            plain = "SELECT hometown FROM teacher ORDER BY hometown LIMIT 1"
+            assert limit_cut_is_tied(database, tied) is True
+            assert limit_cut_is_tied(database, plain) is False
+
+    def test_an_unparseable_query_is_refused(self, towns: Path) -> None:
+        with open_database(towns, db_id="t") as database:
+            assert limit_cut_is_tied(database, "SELECT FROM WHERE ((((") is False
 
 
 class TestSchemaNames:
@@ -196,3 +333,20 @@ class TestOutcomes:
 
     def test_dialect_error_is_distinct_from_a_conversion_fault(self) -> None:
         assert Outcome.DIALECT_ERROR is not Outcome.POSTGRES_ERROR
+
+    def test_an_undetermined_limit_is_not_an_ambiguous_order(self) -> None:
+        # They are not two names for one thing, and the difference decides how
+        # each is counted. Ambiguous order returns the *same rows* and is
+        # counted as agreement; an undetermined limit returns *different rows*
+        # and is excluded, because nothing about the data follows from it.
+        assert Outcome.UNDETERMINED_LIMIT is not Outcome.AMBIGUOUS_ORDER
+
+    def test_an_undetermined_limit_leaves_the_denominator(self) -> None:
+        report = VerificationReport(db_id="d", schema="s")
+        report.checks = [
+            QueryCheck("q1", Outcome.MATCH),
+            QueryCheck("q2", Outcome.UNDETERMINED_LIMIT),
+        ]
+        assert report.comparable == 1
+        assert report.unscoreable == 1
+        assert report.verified is True

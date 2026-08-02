@@ -94,6 +94,41 @@ class Outcome(StrEnum):
     is deliberately not touched by this.
     """
 
+    UNDETERMINED_LIMIT = "undetermined_limit"
+    """The gold query's ``ORDER BY`` ties across its ``LIMIT``, so it has no
+    single correct answer.
+
+    ``SELECT hometown FROM teacher GROUP BY hometown ORDER BY count(*) DESC
+    LIMIT 1`` where three towns are tied at the top. Every engine returns *a*
+    correct answer and no two need agree on which.
+
+    Distinct from :attr:`AMBIGUOUS_ORDER`, and the difference is why this is
+    excluded rather than counted as agreement: there the two engines return the
+    *same rows* and disagree only about their order, so the data is provably
+    intact. Here they return **different rows**, because an arbitrary cut fell
+    in a tie -- so nothing can be concluded about the data from the comparison,
+    in either direction.
+
+    Established by two independent facts, both required:
+
+    1. Without the ``LIMIT``, the two engines return identical multisets. The
+       underlying data agrees.
+    2. On SQLite alone, the ``ORDER BY`` key at the cut equals the key of the
+       first excluded row. The prefix genuinely is not determined.
+
+    Fact 2 is what stops this absorbing a real defect. Two engines can also
+    disagree about a prefix because they *order the key differently* -- which is
+    exactly what a column wrongly converted to text would cause, and is a
+    conversion fault. Measured on Spider dev: 16 questions are ties, and 2 more
+    look identical from outside and are not (``wta_1.birth_date``, a mixed
+    column that had to become text). Testing only fact 1 would have marked those
+    2 as benchmark ambiguity and hidden the one real finding in the set.
+
+    Counted and excluded from the denominator, like :attr:`GOLD_ERROR` and
+    :attr:`DIALECT_ERROR`: a question with no unique correct answer cannot be
+    scored later either.
+    """
+
     POSTGRES_ERROR = "postgres_error"
     """PostgreSQL rejected the query for a reason the conversion is responsible
     for -- a missing table or column. Unlike a dialect error, this one means
@@ -142,7 +177,8 @@ class VerificationReport:
         return sum(
             1
             for check in self.checks
-            if check.outcome in (Outcome.GOLD_ERROR, Outcome.DIALECT_ERROR)
+            if check.outcome
+            in (Outcome.GOLD_ERROR, Outcome.DIALECT_ERROR, Outcome.UNDETERMINED_LIMIT)
         )
 
     @property
@@ -212,7 +248,9 @@ def transpile_to_postgres(gold_sql: str, *, known_names: frozenset[str] = frozen
         # it away and failing somewhere less obvious.
         statements = [item for item in parsed if isinstance(item, exp.Expression)]
         rendered = [
-            _repair_quoted_literals(statement, known_names).sql(dialect="postgres")
+            _match_sqlite_like(_repair_quoted_literals(statement, known_names)).sql(
+                dialect="postgres"
+            )
             for statement in statements
         ]
     except ValueError:
@@ -260,6 +298,42 @@ def _repair_quoted_literals(
             continue
         column.replace(exp.Literal.string(identifier.name))
 
+    return statement
+
+
+def _match_sqlite_like(statement: exp.Expression) -> exp.Expression:
+    """Render SQLite's ``LIKE`` as PostgreSQL's ``ILIKE``.
+
+    **SQLite's ``LIKE`` is case-insensitive for ASCII by default** -- the
+    ``case_sensitive_like`` pragma is off unless something turns it on, and
+    nothing here does. PostgreSQL's ``LIKE`` is case-sensitive. So the same
+    query means two different things on the two engines, and the difference is
+    silent: it returns different rows rather than raising.
+
+    Measured on Spider dev: 3 of 1034 questions, all of them counted as
+    conversion mismatches until this existed. ``WHERE paragraph_text LIKE
+    'korea'`` returns two rows on SQLite and none on PostgreSQL, and nothing
+    about the conversion is wrong -- the transpilation was.
+
+    Same principle as :func:`_repair_quoted_literals`: the gold SQL means what
+    *SQLite* says it means, and a faithful rendering has to say that in
+    PostgreSQL's vocabulary rather than pass the token through unchanged.
+
+    **Every argument is carried across, not just the two obvious ones.**
+    sqlglot represents ``NOT LIKE`` as a ``Like`` node with ``negate=True``
+    rather than as a ``Not`` wrapping a ``Like``, so rebuilding the node from
+    ``this`` and ``expression`` alone would drop the negation and **invert the
+    predicate** -- a silent wrong answer, which is worse than the case
+    sensitivity being fixed. The same applies to a trailing ``ESCAPE``.
+
+    The one place this is imperfect: SQLite folds only ASCII, while ``ILIKE``
+    folds according to the collation, so a non-ASCII pattern can match where
+    SQLite would not. Recorded rather than worked around -- the alternative is
+    an ASCII-only fold expression around every operand, which is a much larger
+    rewrite for a case Spider does not contain.
+    """
+    for node in list(statement.find_all(exp.Like)):
+        node.replace(exp.ILike(**node.args))
     return statement
 
 
@@ -371,12 +445,162 @@ def _check_one(
                 detail="same rows; the gold ORDER BY does not determine their order",
             )
 
+    if _limit_is_undetermined(connection, database, question.gold_sql, known_names=known_names):
+        return QueryCheck(
+            question.question_id,
+            Outcome.UNDETERMINED_LIMIT,
+            verdict=result.verdict,
+            detail="the gold ORDER BY ties across the LIMIT; no single answer is correct",
+        )
+
     return QueryCheck(
         question.question_id,
         Outcome.MISMATCH,
         verdict=result.verdict,
         detail=result.detail,
     )
+
+
+def _limit_is_undetermined(
+    connection: Connection[Any],
+    database: SqliteDatabase,
+    gold_sql: str,
+    *,
+    known_names: frozenset[str],
+) -> bool:
+    """Whether a gold query's ``LIMIT`` cut a tie, so its answer is arbitrary.
+
+    Both facts in :attr:`Outcome.UNDETERMINED_LIMIT` are required, and the
+    cheaper, more discriminating one runs first: the tie check touches SQLite
+    only, and it is what separates a tie from two engines ordering the same key
+    differently. Only if it holds does the second check spend a PostgreSQL round
+    trip proving the underlying data agrees.
+
+    Conservative everywhere it cannot be sure. A query it cannot parse, a
+    non-literal ``LIMIT``, a ``DISTINCT`` whose row count the probe would
+    change, a ``LIMIT`` that never actually cut -- each returns ``False`` and
+    leaves the check reported as a mismatch, which is the outcome that gets
+    looked at.
+    """
+    if not limit_cut_is_tied(database, gold_sql):
+        return False
+
+    bare = _without_limit(gold_sql)
+    if bare is None:
+        return False
+
+    try:
+        expected = database.execute(bare)
+    except sqlite3.Error:
+        return False
+
+    try:
+        with connection.transaction():
+            actual = _run(connection, transpile_to_postgres(bare, known_names=known_names))
+    except (psycopg.Error, ValueError):
+        return False
+
+    return compare(actual, expected, order_matters=False).matched
+
+
+def _without_limit(gold_sql: str) -> str | None:
+    """The same query with its ``LIMIT`` and ``OFFSET`` removed, as SQLite SQL."""
+    select = _parse_select(gold_sql)
+    if select is None:
+        return None
+    bare = select.copy()
+    bare.set("limit", None)
+    bare.set("offset", None)
+    return bare.sql(dialect="sqlite")
+
+
+def limit_cut_is_tied(database: SqliteDatabase, gold_sql: str) -> bool:
+    """Whether the last included and first excluded rows share an ``ORDER BY`` key.
+
+    Answered by projecting the ordering keys into the select list, dropping the
+    ``LIMIT``, and reading the two rows either side of where the cut would fall.
+    Run against SQLite alone: the question is whether the *benchmark query*
+    determines its own answer, which is a property of the original data and has
+    nothing to do with the conversion.
+
+    Public because it is the load-bearing half of
+    :attr:`Outcome.UNDETERMINED_LIMIT` and deserves to be tested on its own. It
+    is what stops that outcome absorbing a conversion defect that looks the
+    same from outside -- two engines ordering the same key differently.
+    """
+    select = _parse_select(gold_sql)
+    if select is None or select.args.get("distinct") is not None:
+        # A DISTINCT query's row count would change when the probe adds columns,
+        # so the cut would land somewhere else and prove nothing.
+        return False
+
+    cut = _cut_position(select)
+    if cut is None:
+        return False
+
+    order = select.args.get("order")
+    keys = [] if order is None else [ordered.this for ordered in order.expressions]
+
+    probe = select.copy()
+    probe.set("limit", None)
+    probe.set("offset", None)
+    for key in keys:
+        probe.select(key.copy(), copy=False)
+
+    try:
+        rows = database.execute(probe.sql(dialect="sqlite"))
+    except sqlite3.Error:
+        return False
+
+    if len(rows) <= cut:
+        return False  # The LIMIT never removed a row, so it cannot be the cause.
+    if not keys:
+        # A LIMIT with no ORDER BY at all: every prefix is equally correct.
+        return True
+    width = len(keys)
+    return bool(rows[cut - 1][-width:] == rows[cut][-width:])
+
+
+def _parse_select(gold_sql: str) -> exp.Select | None:
+    try:
+        parsed = sqlglot.parse_one(gold_sql, read="sqlite")
+    except Exception:  # sqlglot raises several unrelated types
+        return None
+    return parsed if isinstance(parsed, exp.Select) else None
+
+
+def _cut_position(select: exp.Select) -> int | None:
+    """Where the ``LIMIT`` cuts, counting from the start of the ordered result.
+
+    ``None`` unless both counts are plain integer literals. Reading ``.name``
+    off the expression would not be enough: sqlglot answers ``'1'`` for the
+    ``1 + 1`` in ``LIMIT 1 + 1``, because ``name`` returns the leftmost leaf.
+    That is a wrong cut position reported with no error, which would put the
+    tie check on the wrong pair of rows.
+    """
+    limit = select.args.get("limit")
+    if limit is None:
+        return None
+    position = _literal_count(limit)
+    if position is None:
+        return None
+    offset = select.args.get("offset")
+    if offset is not None:
+        skipped = _literal_count(offset)
+        if skipped is None:
+            return None
+        position += skipped
+    return position if position > 0 else None
+
+
+def _literal_count(clause: exp.Expression) -> int | None:
+    value = clause.args.get("expression")
+    if not isinstance(value, exp.Literal) or value.is_string:
+        return None
+    try:
+        return int(value.name)
+    except ValueError:
+        return None
 
 
 _CONVERSION_FAULTS = frozenset(
