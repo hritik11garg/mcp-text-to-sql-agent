@@ -118,9 +118,10 @@ Convention: `[ ]` open · `[x]` done · `[~]` in progress · `[!]` blocked
 - [ ] **Decide the split question** — this project's hash-based split cuts across Spider's own train/dev boundary, so a score from it is not comparable to published Spider numbers. Either accept that and say so on every row, or adopt Spider's dev set as held-out (DATASETS.md §5)
 - [x] **Wire the pipeline into the answerer seam** — it was not one line. A benchmark is 20 databases and every component was single-schema, so the seam is a per-database scope (ADR-031); gold SQL must be the statement verification produced rather than one re-derived at run time (ADR-030); and the eval's query runner cannot be the production executor without truncating both sides of a comparison into a false mismatch (ADR-032). Three baselines are wired: `full-schema`, `retrieval-only`, `with-validation`
 - [x] **`benchmark.load index`** — builds the schema catalog per converted database, introspecting as the read-only role. Retrieval, identifier resolution and the full-schema prompt all read it; without it every question fails for the same uninformative reason
-- [ ] **Run it** — needs PostgreSQL up, the schemas converted into it, and the catalog indexed. No accuracy number exists until this happens
-- [ ] Baseline runs: no-retrieval, retrieval-only, +validation
-- [~] BENCHMARKS rows + DATASETS/EVALUATION filled in — BENCHMARKS §0 and DATASETS §1/§3.1 carry measured values; the accuracy rows wait on the seam
+- [x] **Run it** — Spider dev indexed (20 databases, 519 catalog elements) and answered against. The first runs found five more defects, two worth 30 accuracy points each: a `<think>` block submitted as SQL, and `RETRIEVAL_TOP_K=10` starving a schema that has 10–67 elements
+- [~] Baseline runs: no-retrieval, retrieval-only, +validation — `retrieval-only` measured at k=10 and k=30 over **150 of 921 questions / 3 of 20 databases**; `full-schema` and `with-validation` are wired and unrun
+- [ ] **A full-split run** — every number so far is a 3-database smoke sample, and two of the four rows are a blend of two models because the free tier's daily cap moved the fallback chain mid-run
+- [~] BENCHMARKS rows + DATASETS/EVALUATION filled in — §0 fidelity, §1 execution accuracy, §2 recall and §3 invalid-query rate all carry measured values; every §1 row states the 3-database bound that stops it being a benchmark result
 - [ ] CHANGELOG v0.2
 
 ## Stage 3 — MCP servers + client refactor

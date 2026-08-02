@@ -4,7 +4,7 @@
 
 Metric definitions: [EVALUATION.md](EVALUATION.md). Every row must be reproducible from the recorded command.
 
-> **No accuracy runs yet — Stage 2 produces the first.** The tables in §1–§7 are the recording format. §0 is real: it records what the data those numbers will be computed from is actually worth.
+> **First accuracy runs recorded — and they are smoke rows over 3 of 20 databases, not a benchmark result.** §0 records what the data those numbers are computed from is worth; §1 says exactly what its own sample covers, and why two of its four rows may not be quoted as a model's score. §4–§7 are still the recording format.
 
 ---
 
@@ -50,29 +50,55 @@ Fidelity is `(match + ambiguous_order) / (questions − gold_error − transpile
 
 ## 1. Execution accuracy
 
-> **TBD — Stage 2.**
+> **Smoke rows, not benchmark results — and the distinction is the whole point of recording them.** Every row below covers **150 of the 921 scoreable questions**, and because the file is in database order those 150 are **3 of 20 databases** (`car_1`, `concert_singer`, `pets_1`). A full-split number does not exist yet. These are here because the *trajectory* between them is informative and two of the steps were defects worth 30 points.
 
-| Date | Commit | Split | Dataset | Retriever | LLM | Prompt | Exec. acc. | Notes |
+Common to every row: Spider `dev.json`, digest `00636695…c85b121b`, conversion **verified** (§0, `579e312`, 19/20 databases) · **113 questions excluded** — 97 `dialect_error`, 16 `undetermined_limit` · metric **execution accuracy (single DB)**, *not* Spider's Test Suite Accuracy · retriever `sentence-transformers/all-MiniLM-L6-v2` · prompt `sql_gen/v1` · seed 0 · Windows 11, CPU-only inference, PostgreSQL 16 in Docker.
+
+| Date | Commit | Split | Sample | Baseline | `k` | LLM (answered / matched) | Exec. acc. | Notes |
 |---|---|---|---|---|---|---|---|---|
-| — | — | — | — | — | — | — | — | *No runs yet* |
+| 2026-08-02 | `38f6457` | Spider `dev.json` | 150 / 921 | `retrieval-only` | 10 | `openai/gpt-oss-120b` 75 / — | **42.7%** | **75 of 150 returned `CANNOT_ANSWER`.** Not a generation failure — Recall@10 was 0.94, and one missing element is enough for an honest refusal |
+| 2026-08-02 | `38f6457` | Spider `dev.json` | 150 / 921 | `retrieval-only` | 30 | `openai/gpt-oss-120b` 150 / 109 | **72.7%** | Same code, same questions. The 30-point gain is the retrieval budget and nothing else |
+| 2026-08-02 | `38f6457` | Spider `dev.json` | 150 / 921 | `retrieval-only` | 30 | `gpt-oss-120b` 123 / 97 · `qwen3.6-27b` 27 / 0 | **64.7%** ⚠️ | **A blend, and not a score for either model.** The primary hit its daily cap and the chain fell back to a model scoring 0% — see below |
+| 2026-08-02 | `12cd3d5` | Spider `dev.json` | 150 / 921 | `retrieval-only` | 30 | `qwen3.6-27b` 68 / 65 · `llama-3.3-70b` 82 / 48 | **75.3%** ⚠️ | Blend again, and a wider one: **96%** and **59%**. `execution_failed` 31 → 4 |
+
+```powershell
+python -m evals.run --questions <spider dev.json as JSONL> --split dev `
+    --gold data/splits/spider-dev-gold.jsonl --prefix spider_ `
+    --baseline retrieval-only --top-k 30 --limit 150 --out results/
+```
+
+**Row 1 → 2 is the finding worth keeping.** `RETRIEVAL_TOP_K` defaults to 10, which is tuned for a large schema; a Spider database holds 10–67 catalog elements total, so `k=10` shows the model a partial schema and it correctly refuses rather than guessing. That refusal being a *distinct outcome* — `unanswerable`, separate from a malformed answer — is what pointed at retrieval instead of the prompt. Recall@20 is 1.0, which is why 30 is enough.
+
+**Row 3 → 4 is a bug, not a model improvement.** Several open-weight models emit their reasoning in the `content` field and the answer after `</think>`; the whole monologue was being submitted as a query. `qwen3.6-27b` went from **0% to 96%** once it was stripped. It was invisible for as long as the configured model answered every question, which is precisely how a fallback chain hides a defect it was added to prevent.
+
+**⚠️ marks a run more than one model answered.** The free tier's daily cap moves the chain mid-run, so a single accuracy figure is a weighted average of two systems — 96% and 59% in row 4. The summary carries `answered_by` and `single_model` for this reason, and **no row marked ⚠️ may be quoted as a model's score**.
+
+**None of these are comparable to a published Spider number**, for three independent reasons: a 3-database sample, single-database execution accuracy rather than Test Suite Accuracy, and 113 excluded questions. The first is fixable by running more; the other two are stated on every row by design.
 
 ## 2. Schema-linking recall
 
-> **TBD — Stage 2 (baseline) / Stage 5 (fine-tuned).**
+> **Baseline established. Fine-tuned comparison is Stage 5.**
+
+Measured over the same 150 questions, from gold-SQL elements with aliases resolved. Recall is computed whether or not the model answered, so a generation failure does not remove a retrieval data point.
 
 | Date | Commit | Split | Retriever | R@1 | R@5 | R@10 | R@20 | Notes |
 |---|---|---|---|---|---|---|---|---|
-| — | — | — | — | — | — | — | — | *No runs yet* |
+| 2026-08-02 | `12cd3d5` | Spider `dev.json` (150) | `all-MiniLM-L6-v2` (baseline) | 0.605 | 0.889 | 0.960 | **1.000** | 0 unresolved references. This is the number the fine-tune must beat |
+
+**Recall@20 = 1.0 is why `k=30` was enough, and it also bounds what Stage 5 can buy on Spider.** A retriever that already finds every needed element by rank 20 cannot be improved into a higher execution accuracy here — only into finding them *sooner*, which matters for prompt cost and for schemas too large to show 30 elements of. That is the argument for BIRD, and [R-01](../project/RISKS.md) predicted exactly this shape of null result.
+
+**The gap that does matter is R@1 = 0.605 against R@10 = 0.960.** Ranking, not coverage, is where this retriever is weak on Spider.
 
 ## 3. Invalid-query rate
 
-> **TBD — Stage 2 (baseline) / Stage 4 (with self-correction).**
-
-Pre-correction is the first-attempt rate; post-correction is after the retry budget is exhausted. **The gap between them is what the validation tier is worth** — reporting only the post number hides the contribution.
+> **Pre-correction only. Self-correction is Stage 4, and the gap between the two columns is what the retry loop will be worth.**
 
 | Date | Commit | Split | Config | Invalid (pre) | Invalid (post) | Mean attempts | Notes |
 |---|---|---|---|---|---|---|---|
-| — | — | — | — | — | — | — | *No runs yet* |
+| 2026-08-02 | `38f6457` | Spider `dev.json` (150) | `retrieval-only`, k=30 | **31 / 150 = 20.7%** | — | 1.0 | Before the `<think>` strip. 27 of the 31 were one model's reasoning submitted as SQL |
+| 2026-08-02 | `12cd3d5` | Spider `dev.json` (150) | `retrieval-only`, k=30 | **4 / 150 = 2.7%** | — | 1.0 | After. No validation tier in this baseline — these reached the database and were refused |
+
+**20.7% → 2.7% is a client-side parsing fix, not a model or prompt change.** Worth separating, because an invalid-query rate is normally read as a statement about the model.
 
 ## 4. Multi-step task success
 

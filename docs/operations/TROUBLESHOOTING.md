@@ -162,9 +162,29 @@ The tool description is the model's only selection signal. If a tool is not bein
 
 `LLM_API_KEY` unset in the process's environment. A key in `.env` does not reach a process that never loaded `.env`. (There is no provider-specific key variable — one adapter serves every OpenAI-compatible endpoint, so there is one key setting.)
 
-### `rate_limit_error` during eval runs
+### `rate_limit_error` / HTTP 429 during eval runs
 
-The eval harness parallelizes; sequential dev use did not. Reduce harness concurrency — the SDK retries with backoff automatically, so persistent 429s mean sustained over-limit, not transient contention.
+**Not concurrency — the harness is sequential.** A 150-question run at ~1000 tokens each is enough to hit a free tier's *per-minute* or *daily* cap on its own. The SDK retries with backoff, then `LLM_MODEL_FALLBACKS` advances to the next model.
+
+That advance is the thing to check rather than the 429 itself. Read `answered_by` in the run summary: if more than one model appears, `single_model` is `false` and **the accuracy figure is a weighted average of two systems**. Measured on one run: 96% for one model and 59% for the other, reported as 75.3% — a number neither earned. Re-run with a single model, or record the row as a blend and mark it.
+
+### `LLMUnavailableError ... HTTP 413`
+
+`LLM_MAX_TOKENS` is above the endpoint's completion cap. It is a *request* rejection — the model never ran — and the default of 16000 exceeds at least one free tier's limit. Measured on Groq with `openai/gpt-oss-120b`: 6000 accepted, 8192 refused. Set `LLM_MAX_TOKENS=4096`.
+
+Not to be confused with an oversized prompt, which this almost never is: the `full-schema` baseline sends the most schema of any configuration and a Spider database is 10–67 catalog elements.
+
+### Every generated query fails to execute, and the SQL starts with `<think>`
+
+The model is putting its reasoning in the `content` field and the answer after `</think>`, and an older build submitted the whole monologue as a query. The generator strips a leading block. If this reappears, the tag is a different one — check the raw `generated_sql` in a per-question artifact, which is stored precisely for this.
+
+Worth knowing *which* model did it: the configured model may not, while a fallback does, so the symptom appears only once a rate limit moves the chain. That is how it went unnoticed through an entire run.
+
+### Half the questions come back `unanswerable`
+
+The model is refusing rather than guessing, which is correct behaviour and points at **retrieval, not the prompt**. `RETRIEVAL_TOP_K` defaults to 10; a Spider database holds 10–67 catalog elements in total, so `k=10` shows a partial schema and one missing column is enough for an honest refusal.
+
+Check Recall@k in the summary. Measured on Spider dev: `k=10` gave 42.7% execution accuracy with 75 of 150 unanswerable; `k=30` gave 72.7% with none, and Recall@20 is 1.0. Raise `--top-k` before touching the prompt.
 
 ### Costs are far higher than expected
 

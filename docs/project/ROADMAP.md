@@ -14,13 +14,13 @@ Percentages are checkbox counts from [TASKS.md](TASKS.md), not confidence — a 
 |---|---|---|---|
 | 0 | Scaffolding — docs, deps, interpreter pin | ✅ Done | 100% |
 | 1 | **Core loop** — retrieval, generation, validation, execution, profiling, API, demo UI | 🚧 In progress | 59% |
-| 2 | **Eval harness** — comparison, Recall@k, artifacts, resumption, benchmark loading, pipeline seam | 🚧 In progress | 76% |
+| 2 | **Eval harness** — comparison, Recall@k, artifacts, resumption, benchmark loading, pipeline seam | 🚧 In progress | 80% |
 | 3 | **MCP servers + client refactor** | 🚧 In progress | 84% |
 | 4 | **Agent layer** — decomposition, session memory, self-correction | ⬜ Not started | 0% |
 | 5 | **Fine-tuned schema linker** | ⬜ Not started | 0% |
 | 6 | **Hardening** — limits, tracing, tests | ⬜ Not started | 0% |
 
-**What is genuinely blocking, in order:** a running PostgreSQL with the converted schemas indexed — the pipeline is now wired to the harness's answerer seam, so the remaining gap between here and a first accuracy number is operational rather than structural. Then the HTTP API and the demo UI it serves (blocks the Stage 1 close-out and any visual demo), then the agent loop.
+**What is genuinely blocking, in order:** a full-split run — the pipeline runs end to end and has produced numbers, but every one of them covers 3 of 20 databases and two are a blend of two models. Then the HTTP API and the demo UI it serves (blocks the Stage 1 close-out and any visual demo), then the agent loop.
 
 **Stage 1 dropped from ~75% to 59%** when the demo UI was added to its scope. The percentage got worse because the plan got more honest, which is the direction it should move.
 
@@ -71,11 +71,11 @@ Scope: Spider/BIRD acquisition and SQLite→Postgres conversion; database-level 
 **Demo:** one command produces a scored report over the held-out split.
 
 **Done when:**
-- [~] Reproducible from a clean checkout via one command — the command exists and runs; it is three commands rather than one (verify, index, run), and none has been executed end to end
+- [~] Reproducible from a clean checkout via one command — three commands rather than one (verify, index, run), all now executed end to end against a real Postgres
 - [x] Conversion verified — gold queries return identical results on SQLite and Postgres, compared with the harness's own comparator, exiting 3 when they do not
 - [x] Splits are database-disjoint and committed as a file — and stable when the corpus grows, which a seeded shuffle is not
-- [~] Baseline rows in [../ml/BENCHMARKS.md](../ml/BENCHMARKS.md) — §0 conversion fidelity is recorded from a real run; the accuracy rows wait on a run, not on code
-- [~] Failure taxonomy populated with counts — the taxonomy and its counting exist; verification has produced real counts, scoring has not
+- [~] Baseline rows in [../ml/BENCHMARKS.md](../ml/BENCHMARKS.md) — §0 fidelity, §1 accuracy, §2 recall and §3 invalid-query rate all carry measured values; §1 covers 3 of 20 databases and says so on every row
+- [~] Failure taxonomy populated with counts — real counts from real runs, and the first one found that four of the runner's own error types had no category and were landing in `uncategorised`
 
 **The measurement machinery landed before the data, deliberately.** Comparison, Recall@k, the failure taxonomy, artifacts and resumption are built and tested against synthetic cases — 84 tests, no model and no database. The order matters: the logic that decides what a number *means* is the part a benchmark cannot check, because a wrong comparison produces a plausible score rather than an error. Building it against a dataset would have meant debugging two unknowns at once.
 
@@ -86,6 +86,10 @@ The pattern is worth keeping. Every one of those was invisible to a test suite t
 **What the load bought and what it did not.** 20 of 20 dev databases convert; **915 of 921 comparable gold results reproduce (99.3%); 19 of 20 databases reproduce every one.** That is a precondition for a baseline, not a baseline — no question has yet been answered by the system itself.
 
 **Diagnosing the last 25 mismatches changed the number and, more usefully, the taxonomy.** Only 6 were conversion differences, and all 6 are one column that has no faithful static type. 3 were a transpilation gap — SQLite's `LIKE` folds case — and 16 were questions with no single correct answer, where a `LIMIT` cut through a tie. Two more looked exactly like those 16 and were the real defect; the rule that separates them is what keeps the 99.3% from being a number that had absorbed a fault. That pattern has now repeated three times in this stage: **a failure bucket named after the component under test collects everything unexplained, and each thing it collects reads as evidence against that component.**
+
+**The pipeline ran, and the first run found five defects in four days-old code.** A question id used as a filename (Spider's contain colons, which Windows rejects — and BIRD ships ids that could traverse); a schema declaring the same foreign key twice; `index` refusing the 146 databases a split does not convert; HTTP 413 reported as "the provider could not be reached"; and a refusal's tokens going uncounted. Then two more that were each worth thirty accuracy points: `RETRIEVAL_TOP_K=10` starving a schema that holds 10–67 elements, so the model honestly refused half the questions, and a reasoning model's `<think>` block being submitted as SQL.
+
+**The second of those is the one to remember.** It was invisible for as long as the configured model answered every question. It only appeared once a rate limit moved the fallback chain to a model that emits reasoning in `content` — so a mechanism added to *absorb* a provider failure is what exposed a defect, and would equally have hidden it. Execution accuracy went 42.7% → 75.3% across these fixes with no change to the prompt or the model.
 
 **Resumability was added to this stage's scope.** It was not in the original plan and it is what makes the harness usable at all here: free-tier models cap tokens per model per day, so a full run spans most of a budget and being stopped partway is routine rather than exceptional.
 

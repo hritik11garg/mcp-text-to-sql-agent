@@ -59,7 +59,7 @@ The agent depends on the `LLMClient` protocol, never on a vendor SDK ([ADR-014](
 | `LLM_BASE_URL` | str | — | Required for `openai_compatible`. **Operator-only — never client-controlled** (SSRF; see [SECURITY.md](SECURITY.md) §14.1) |
 | `LLM_MODEL` | str | — | **Required.** Provider-specific model id |
 | `LLM_API_KEY` | SecretStr | — | Required unless the endpoint is local (Ollama / LM Studio) |
-| `LLM_MAX_TOKENS` | int | `16000` | |
+| `LLM_MAX_TOKENS` | int | `16000` | Above some free tiers' completion cap — see below. `4096` works on Groq |
 | `LLM_TEMPERATURE` | float | `0.0` | Omitted for providers that reject it |
 | `LLM_TIMEOUT_MS` | int | `60000` | |
 | `LLM_ALLOWED_HOSTS` | list[str] | `[]` | Optional host allowlist for `LLM_BASE_URL`. Empty means "any host that passes the IP checks". Comma-separated |
@@ -127,7 +127,13 @@ One round trip; reports which model answered, latency, tokens, and cached tokens
 | `openai/gpt-oss-120b` | 515 | 464 | **979** |
 | `llama-3.1-8b-instant` | 474 | 88 | **562** |
 
-Nearly all of the 120b's output is internal reasoning. Two consequences: budget roughly **2× per question** against a daily cap, and **never set `LLM_MAX_TOKENS` low** — a reasoning model whose budget is spent thinking returns an *empty string with no error*. The generator detects that case and names it, rather than reporting "empty response".
+Nearly all of the 120b's output is internal reasoning. Budget roughly **2× per question** against a daily cap.
+
+**`LLM_MAX_TOKENS` is bounded from both sides, and the default of 16000 is above the ceiling on at least one free tier.** Set it too low and a reasoning model spends its whole budget thinking, returning an *empty string with no error* — the generator detects that case and names it. Set it above what the endpoint allows and the request is refused with **HTTP 413** before the model sees it; measured on Groq with `openai/gpt-oss-120b`, 6000 is accepted and 8192 is not. `4096` is a working value for that combination and is what `.env.example` now suggests.
+
+Neither failure is self-evident from the symptom, which is why the adapter maps HTTP statuses to what they mean rather than reporting "the model provider could not be reached" — see [TROUBLESHOOTING.md](TROUBLESHOOTING.md).
+
+**Several open-weight models emit their reasoning in the `content` field**, as `<think>…</think>` followed by the answer. The generator strips a leading block; a model that emits one *and* is truncated mid-thought produces no answer at all, which is the low-`LLM_MAX_TOKENS` case above wearing a different costume.
 
 **Free tiers have daily token caps**, and hitting one on a benchmark run is normal rather than exceptional. Two consequences worth planning for: the eval harness must be resumable, and [BENCHMARKS.md](../ml/BENCHMARKS.md) records accuracy **per provider and model**, never as a single number — a run split across two models is two rows, not an average.
 

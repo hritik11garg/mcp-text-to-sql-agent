@@ -1,6 +1,6 @@
 # Evaluation
 
-> **Status: the harness is built, the benchmark is loaded and verified, and the pipeline is wired in. Nothing has been run through it yet.** Result comparison, Recall@k, the failure taxonomy, per-question artifacts, resumable runs and the answerer seam ship in `src/evals/`. Spider's dev split is converted and verified — 19 of 20 databases reproduce every gold result (§2). `python -m evals.run` no longer refuses; what it needs now is a running PostgreSQL with the converted schemas indexed (§3). **No accuracy results appear here until a run produces them.** Results live in [BENCHMARKS.md](BENCHMARKS.md); this page defines what the numbers mean.
+> **Status: the harness runs end to end, and the first numbers are smoke rows over 3 of 20 databases.** Result comparison, Recall@k, the failure taxonomy, per-question artifacts, resumable runs and the answerer seam ship in `src/evals/`. Spider's dev split is converted and verified — 19 of 20 databases reproduce every gold result (§2) — indexed, and answered against. The first runs found five defects and moved execution accuracy 42.7% → 75.3% without a prompt or model change; see [BENCHMARKS.md](BENCHMARKS.md) §1, which states on every row why none of them is comparable to a published Spider number. This page defines what the numbers mean.
 
 The eval harness is Stage 2 — deliberately before the MCP refactor, the agent layer, and the fine-tune. Without a baseline, every later change is an unfalsifiable claim of improvement.
 
