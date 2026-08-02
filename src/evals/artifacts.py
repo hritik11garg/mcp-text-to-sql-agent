@@ -68,6 +68,15 @@ class RunManifest:
     started_at: str = ""
     notes: str = ""
 
+    baseline: str = ""
+    """Which EVALUATION.md section 4 configuration produced this run.
+
+    In the fingerprint, and it has to be: the baselines exist to be *compared*,
+    so a results directory holding half of one and half of another is the one
+    mixture nobody would ever mean to make. Defaulted to empty so a manifest
+    written before baselines existed still fingerprints as it did.
+    """
+
     @property
     def config_fingerprint(self) -> str:
         """Hash of everything whose change would invalidate a partial run.
@@ -80,6 +89,10 @@ class RunManifest:
         the kind of thing that produces a result nobody can interpret, and it
         is the easiest one to do by accident -- fix a bug, re-run, and half the
         questions were answered by the old code.
+
+        And the baseline, for the same reason one step further out: `model`
+        catches "answered by a different model", but two baselines share a model
+        and differ in whether the schema was retrieved or handed over whole.
         """
         material = json.dumps(
             {
@@ -90,6 +103,7 @@ class RunManifest:
                 "prompt_version": self.prompt_version,
                 "commit": self.commit,
                 "seed": self.seed,
+                "baseline": self.baseline,
             },
             sort_keys=True,
         )

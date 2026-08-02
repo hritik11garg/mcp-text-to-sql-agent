@@ -91,8 +91,11 @@ python -m benchmark.load convert --databases data/spider/database --prefix spide
 
 ```
 python -m benchmark.load verify --databases data/spider/database \
-    --questions data/spider/dev.json --benchmark spider --prefix spider_
+    --questions data/spider/dev.json --benchmark spider --prefix spider_ \
+    --emit-gold data/splits/spider-dev-gold.jsonl
 ```
+
+**`--emit-gold` is what connects this to the eval.** It writes one line per checked question carrying the PostgreSQL statement the gold query became, the outcome, and whether that outcome is scoreable — and `evals.run --gold` requires it. The eval therefore runs *the statement that was verified*, not one re-derived from the same transpiler later, and its denominator is this table's "in the denominator" column rather than a second definition that could drift from it ([ADR-030](../architecture/DECISIONS.md#adr-030--the-eval-runs-the-gold-sql-verification-produced-and-never-re-derives-it)).
 
 The comparator is `evals.comparison.compare` — the eval harness's own, not a stricter one written for this purpose. The question is not whether the two databases are identical (they are not; one is SQLite) but whether the eval will score a correct answer as correct on the converted copy, and only the thing that will do the scoring can answer that. See [ADR-022](../architecture/DECISIONS.md#adr-022--the-conversion-is-verified-by-the-eval-harnesss-own-comparator).
 
@@ -130,6 +133,18 @@ This is exactly the consequence stated two paragraphs above, and it was written 
 > **How the other 19 mismatches were resolved, since a fidelity number that moved needs to say why.** They were never conversion defects. 3 were SQLite's case-insensitive `LIKE`, a transpilation gap now closed. 16 were `LIMIT` cutting a tie — questions with no single correct answer, now counted as `undetermined_limit` and excluded. Critically, 2 questions that looked identical to those 16 from outside were **not** ties, and were the `birth_date` defect: the rule that separates them is the reason the number is 99.3% and not a number that had quietly absorbed a real fault ([ADR-029](../architecture/DECISIONS.md#adr-029--a-limit-that-cuts-a-tie-has-no-correct-answer-and-is-excluded)).
 
 **113 questions leave the denominator — 97 dialect errors and 16 undetermined limits — and that must be reported with any accuracy figure computed from this split.** They are questions that cannot be scored later either, so excluding them is correct; an exclusion that is not reported is indistinguishable from cheating. Same rule §5 of [EVALUATION.md](EVALUATION.md) applies to gold errors.
+
+### 3.2 Indexing the converted schemas
+
+**A converted database is not yet answerable.** Retrieval, identifier validation and the full-schema prompt all read `agent_meta.schema_elements`, and nothing writes it for a benchmark schema until this runs.
+
+```
+python -m benchmark.load index --databases data/spider/database --prefix spider_
+```
+
+One `dataset` per converted schema, named **with the schema's own name** — one database, one schema, one catalog namespace, so a question about `concert_singer` cannot be answered with `wta_1`'s columns ([ADR-031](../architecture/DECISIONS.md#adr-031--one-database-one-schema-one-catalog-namespace-resolved-per-question)). Introspection runs as the **read-only role**, so a table that role cannot `SELECT` is never catalogued: indexing it as the owner would produce retrieval hits that always generate SQL the database then refuses.
+
+Separate from `convert` because it costs a model load and a few thousand embeddings, and re-indexing after a retriever change must not re-convert the archive. Idempotent, so running it again over an unchanged schema leaves the catalog as it was.
 
 ## 4. Training pairs (derived)
 

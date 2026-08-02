@@ -21,20 +21,23 @@ import json
 import logging
 import sys
 from collections import defaultdict
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
 import psycopg
 
+from adapters.embedding.factory import build_embedder
 from benchmark import acquire, convert, readers, splits
 from benchmark.sources import DEFAULT_LOCK_PATH, ArtifactLock, resolve_artifact
 from benchmark.sqlite_source import open_database
 from benchmark.verify import verify_database
 from core.dsn import libpq_dsn, redact_dsn
 from core.exceptions import BenchmarkError, ConfigurationError
-from core.settings import BenchmarkSettings, DatabaseSettings
+from core.settings import BenchmarkSettings, DatabaseSettings, RetrievalSettings
 from evals.dataset import Question, Split, write_questions
+from schema.indexer import SchemaIndexer
+from schema.introspection import PostgresIntrospector
 
 logger = logging.getLogger(__name__)
 
@@ -46,7 +49,7 @@ EXIT_UNVERIFIED = 3
 
 @dataclass(frozen=True, slots=True)
 class LoaderSettings:
-    """The two settings groups this tool actually uses.
+    """The settings groups this tool actually uses, and no others.
 
     Not :class:`core.settings.Settings`. Composing every group would validate
     the LLM configuration, so ``benchmark.load splits`` -- which reads a JSON
@@ -56,16 +59,26 @@ class LoaderSettings:
     inventing a fake value, and a fake value in the environment outlives the
     command that needed it.
 
+    Retrieval joined the list when ``index`` did, and it is the exception that
+    shows the rule still holds: every field on it has a default, so no command
+    is now blocked by configuration it does not use. ``LLM_MODEL`` has no
+    default, which is exactly why the LLM group is still absent.
+
     The settings module composes its groups precisely so they can be taken
     separately; this is that being used rather than described.
     """
 
     benchmark: BenchmarkSettings
     database: DatabaseSettings
+    retrieval: RetrievalSettings
 
     @classmethod
     def load(cls) -> LoaderSettings:
-        return cls(benchmark=BenchmarkSettings(), database=DatabaseSettings())
+        return cls(
+            benchmark=BenchmarkSettings(),
+            database=DatabaseSettings(),
+            retrieval=RetrievalSettings(),
+        )
 
 
 # --- acquire ---------------------------------------------------------------
@@ -199,6 +212,7 @@ def command_verify(args: argparse.Namespace, settings: LoaderSettings) -> int:
 
     reports: list[dict[str, Any]] = []
     unverified: list[str] = []
+    gold: list[dict[str, Any]] = []
 
     with _connect(settings) as connection:
         for db_id, path in selected.items():
@@ -215,8 +229,12 @@ def command_verify(args: argparse.Namespace, settings: LoaderSettings) -> int:
                     statement_timeout_ms=settings.benchmark.benchmark_verify_timeout_ms,
                 )
             reports.append(report.as_dict())
+            gold.extend(report.gold_entries())
             if not report.verified:
                 unverified.append(db_id)
+
+    if args.emit_gold is not None:
+        _write_jsonl(args.emit_gold, gold)
 
     _write_report(args.report, {"verified": reports, "unverified": unverified})
     print(
@@ -240,6 +258,69 @@ def command_verify(args: argparse.Namespace, settings: LoaderSettings) -> int:
     if not reports:
         logger.error("nothing was verified -- no database had questions to check")
         return EXIT_UNVERIFIED
+    return EXIT_OK
+
+
+# --- index -----------------------------------------------------------------
+
+
+def command_index(args: argparse.Namespace, settings: LoaderSettings) -> int:
+    """Build the schema catalog for every converted database.
+
+    Without this the eval cannot retrieve, cannot resolve an identifier, and
+    cannot put a schema in a prompt -- every question fails for the same
+    uninformative reason. It is a separate command from ``convert`` because it
+    costs a model load and a few thousand embeddings, and re-indexing after a
+    retriever change must not re-convert eight gigabytes of SQLite.
+
+    **The catalog namespace is the schema name.** One database, one schema, one
+    ``dataset`` -- rather than a second naming scheme that could disagree with
+    the first and let one database's columns answer another's questions.
+    """
+    found = readers.find_databases(args.databases)
+    selected = _select(found, only=args.only, limit=args.limit)
+
+    embedder = build_embedder(settings.retrieval)
+    reports: list[dict[str, Any]] = []
+
+    with _connect(settings) as owner, _connect_readonly(settings) as readonly:
+        for db_id in selected:
+            schema = convert.schema_name_for(db_id, prefix=args.prefix)
+            # Introspection runs as the read-only role: it is the role the
+            # agent will use, so a table it cannot SELECT must not be indexed.
+            # Cataloguing one would produce retrieval hits that always generate
+            # SQL the database then refuses.
+            introspector = PostgresIntrospector(
+                readonly,
+                schema=schema,
+                sample_values=settings.retrieval.schema_sample_values,
+                sample_count=settings.retrieval.schema_sample_count,
+                sample_max_chars=settings.retrieval.schema_sample_max_chars,
+                sample_scan_limit=settings.retrieval.schema_sample_scan_limit,
+            )
+            snapshot = introspector.snapshot()
+            if not snapshot.tables:
+                raise BenchmarkError(
+                    f"schema {schema!r} has no tables the read-only role can read. "
+                    f"Convert {db_id} first, or check the GRANT the conversion issued."
+                )
+
+            indexer = SchemaIndexer(owner, embedder, dataset=schema)
+            report = indexer.index(snapshot)
+            reports.append({"db_id": db_id, "dataset": schema, **asdict(report)})
+            logger.info("indexed %s -> %s (%d elements)", db_id, schema, report.elements_written)
+
+    _write_report(args.report, {"indexed": reports})
+    print(
+        json.dumps(
+            {
+                "databases": len(reports),
+                "elements": sum(int(r["elements_written"]) for r in reports),
+                "model_version": embedder.model_version,
+            },
+            indent=2,
+        )
+    )
     return EXIT_OK
 
 
@@ -321,9 +402,24 @@ def _connect(settings: LoaderSettings) -> psycopg.Connection[Any]:
     boundary is re-asserted at the end of every conversion by granting the
     read-only role SELECT and nothing more.
     """
-    url = settings.database.database_url
+    return _open(settings.database.database_url, "DATABASE_URL", settings=settings)
+
+
+def _connect_readonly(settings: LoaderSettings) -> psycopg.Connection[Any]:
+    """The ``SELECT``-only connection, used to *read* a converted schema.
+
+    Indexing introspects as the read-only role deliberately: the catalog must
+    describe what the agent can actually reach. A table the role cannot SELECT,
+    indexed as the owner, would produce retrieval hits that always generate SQL
+    the database then refuses -- a confident answer followed by a permission
+    error, which is the worst of both.
+    """
+    return _open(settings.database.database_ro_url, "DATABASE_RO_URL", settings=settings)
+
+
+def _open(url: object, variable: str, *, settings: LoaderSettings) -> psycopg.Connection[Any]:
     if url is None:
-        raise ConfigurationError("DATABASE_URL is required to convert or verify")
+        raise ConfigurationError(f"{variable} is required for this command")
     try:
         return psycopg.connect(
             libpq_dsn(url),
@@ -331,8 +427,9 @@ def _connect(settings: LoaderSettings) -> psycopg.Connection[Any]:
             connect_timeout=max(1, settings.database.db_connect_timeout_ms // 1000),
         )
     except psycopg.Error as exc:
+        # psycopg quotes the whole DSN back on a parse error, password included.
         raise ConfigurationError(
-            f"could not connect using DATABASE_URL: {redact_dsn(str(exc)).strip()}"
+            f"could not connect using {variable}: {redact_dsn(str(exc)).strip()}"
         ) from None
 
 
@@ -342,6 +439,19 @@ def _write_report(path: Path | None, body: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(body, indent=2) + "\n", encoding="utf-8")
     logger.info("wrote %s", path)
+
+
+def _write_jsonl(path: Path, rows: list[dict[str, Any]]) -> None:
+    """One object per line, so a partially written file is still readable.
+
+    The same reason the split files are JSONL: this one can hold a thousand
+    statements, and a truncated JSON array yields nothing at all.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8") as handle:
+        for row in rows:
+            handle.write(json.dumps(row) + "\n")
+    logger.info("wrote %s (%d question(s))", path, len(rows))
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -388,7 +498,21 @@ def build_parser() -> argparse.ArgumentParser:
         "--per-database", type=int, default=None, help="check at most N queries per database"
     )
     check.add_argument("--report", type=Path, default=None)
+    check.add_argument(
+        "--emit-gold",
+        type=Path,
+        default=None,
+        help="write the verified PostgreSQL gold SQL, for `evals.run --gold`",
+    )
     check.set_defaults(handler=command_verify)
+
+    index = subparsers.add_parser("index", help="build the schema catalog for converted databases")
+    index.add_argument("--databases", type=Path, required=True)
+    index.add_argument("--prefix", default="")
+    index.add_argument("--only", nargs="*")
+    index.add_argument("--limit", type=int, default=None)
+    index.add_argument("--report", type=Path, default=None)
+    index.set_defaults(handler=command_index)
 
     split = subparsers.add_parser("splits", help="assign databases to splits and write them")
     split.add_argument("--questions", type=Path, nargs="+", required=True)

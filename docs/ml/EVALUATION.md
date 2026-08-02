@@ -1,6 +1,6 @@
 # Evaluation
 
-> **Status: the harness is built and the benchmark is loaded; the pipeline seam is still open.** Result comparison, Recall@k, the failure taxonomy, per-question artifacts and resumable runs ship in `src/evals/` and are covered by 84 tests. Spider's dev split is converted and verified — 19 of 20 databases reproduce every gold result (§2). What is still missing is the pipeline wired into the answerer seam; `python -m evals.run` refuses with that message rather than reporting 0%. **No accuracy results appear here until it exists.** Results live in [BENCHMARKS.md](BENCHMARKS.md); this page defines what the numbers mean.
+> **Status: the harness is built, the benchmark is loaded and verified, and the pipeline is wired in. Nothing has been run through it yet.** Result comparison, Recall@k, the failure taxonomy, per-question artifacts, resumable runs and the answerer seam ship in `src/evals/`. Spider's dev split is converted and verified — 19 of 20 databases reproduce every gold result (§2). `python -m evals.run` no longer refuses; what it needs now is a running PostgreSQL with the converted schemas indexed (§3). **No accuracy results appear here until a run produces them.** Results live in [BENCHMARKS.md](BENCHMARKS.md); this page defines what the numbers mean.
 
 The eval harness is Stage 2 — deliberately before the MCP refactor, the agent layer, and the fine-tune. Without a baseline, every later change is an unfalsifiable claim of improvement.
 
@@ -103,7 +103,7 @@ Requirements, and where each stands:
 - [x] **Records everything** needed to reproduce: commit, model, prompt version, retriever `model_version`, split, seed, timestamp — written as a manifest *before* the first question, so an interrupted run still records what it was trying to do. Hardware is not captured yet.
 - [x] **Persists per-question artifacts** — generated SQL, gold SQL, both result sets, attempts, timings, and which model actually answered. Aggregate scores without artifacts cannot be debugged.
 - [x] **Resumable.** Not in the original list, and it turned out to be the requirement that shaped the design — see below.
-- [ ] **Isolated database per question** where the benchmark requires it. Lands with dataset loading, which is what creates several databases to isolate.
+- [x] **Isolated database per question** where the benchmark requires it. One converted schema, one catalog namespace, one retriever, resolved per question and cached ([ADR-031](../architecture/DECISIONS.md#adr-031--one-database-one-schema-one-catalog-namespace-resolved-per-question)). Spider's 20 dev databases share table names, so this is what stops one question being answered with another database's columns.
 - [ ] **Parallelism-safe** and bounded. Sequential today; on a free tier the binding constraint is tokens per minute, not wall-clock.
 - [x] **Emits both** a human-readable progress stream (stderr) and machine-readable JSON (stdout), so the command composes.
 
@@ -113,23 +113,46 @@ The corollary is a refusal: a resumed run must have the **same configuration fin
 
 **The pipeline is injected, not built in.** The runner takes an *answerer* — anything that turns a question into candidate SQL — so the five baselines in §4 are five answerers over one orchestration, and the whole harness is testable with a scripted one. It also means gold and predicted SQL go through the *same* query runner: different connections or type adapters would return `Decimal('1')` on one side and `1.0` on the other, and a correct answer would be reported as a value mismatch.
 
+**Gold SQL is an input, not a derivation.** `--gold` is required. The split file holds the benchmark's own SQLite SQL; the file named by `--gold` is what `benchmark.load verify --emit-gold` wrote — the PostgreSQL statement each gold query became *and* the outcome of comparing its results against SQLite. Re-transpiling here would mean an edit to the transpiler changed every reference answer with nothing re-checking it ([ADR-030](../architecture/DECISIONS.md#adr-030--the-eval-runs-the-gold-sql-verification-produced-and-never-re-derives-it)).
+
+**The denominator comes from the same file.** Questions verification marked unscoreable — a gold query PostgreSQL cannot express, a `LIMIT` that cut a tie — are dropped before the run and reported in the summary as `excluded_by_outcome`. On Spider dev that is **921 scoreable of 1034**. Scoring against all 1034 would report a number about eleven points lower for reasons that have nothing to do with the model.
+
+### 3.1 Running it
+
+Three commands, in order. The first two are per conversion; the third is per run.
+
 ```powershell
-python -m evals.run --split held-out --retriever fine-tuned --model $env:LLM_MODEL --out results/
+# 1. Convert (once per archive) and emit the verified gold
+python -m benchmark.load verify --databases data/spider/spider_data/database `
+    --questions data/spider/spider_data/dev.json --benchmark spider --prefix spider_ `
+    --emit-gold data/splits/spider-dev-gold.jsonl --report reports/verify-dev.json
+
+# 2. Build the schema catalog for every converted database
+python -m benchmark.load index --databases data/spider/spider_data/database --prefix spider_
+
+# 3. Run a baseline
+python -m evals.run --questions data/splits/spider-dev.jsonl --split dev `
+    --gold data/splits/spider-dev-gold.jsonl --prefix spider_ `
+    --baseline retrieval-only --dataset spider --out results/
 ```
+
+Step 2 is not optional and is easy to forget. Without a catalog every identifier resolves to nothing, retrieval returns nothing, and every question fails for the same uninformative reason — so the run refuses at the first question instead, naming the command.
 
 ## 4. Baselines
 
 Every improvement is measured against something. Baselines to establish in Stage 2:
 
-| Baseline | Purpose |
-|---|---|
-| No retrieval (full schema in prompt) | Is retrieval helping at all, or just saving tokens? |
-| Baseline retriever + generation, no validation | What does the validation tier contribute? |
-| Baseline retriever + validation, no self-correction | What does error feedback contribute? |
-| Full pipeline, `ENABLE_PROFILE_TABLE=false` | What does profiling contribute? Expected to move **filter errors** specifically, not accuracy uniformly — a profile tells the model a column stores `'FI'` rather than `'Finland'`, which nothing else in the pipeline can |
-| Full pipeline, baseline retriever | The number the fine-tune must beat |
+| Baseline | `--baseline` | Purpose |
+|---|---|---|
+| No retrieval (full schema in prompt) | `full-schema` | Is retrieval helping at all, or just saving tokens? |
+| Baseline retriever + generation, no validation | `retrieval-only` | What does the validation tier contribute? |
+| Baseline retriever + validation, no self-correction | `with-validation` | What does error feedback contribute? |
+| Full pipeline, `ENABLE_PROFILE_TABLE=false` | *Stage 4* | What does profiling contribute? Expected to move **filter errors** specifically, not accuracy uniformly — a profile tells the model a column stores `'FI'` rather than `'Finland'`, which nothing else in the pipeline can |
+| Full pipeline, baseline retriever | *Stage 5* | The number the fine-tune must beat |
 
 Attributing a gain to the fine-tuned retriever requires knowing what the rest of the pipeline was already worth.
+
+**The first three are configurations of the answerer, not flags in the runner** — which is what the seam was designed for, and the reason adding them changed nothing in `EvalRunner`. `with-validation` deliberately does **not** retry: validation alone cannot raise accuracy, it can only convert an execution failure into a refusal that names its reason, and its contribution shows in the invalid-query columns rather than the accuracy one. Self-correction is the next baseline and is Stage 4. If accuracy moves between `retrieval-only` and `with-validation`, something other than validation did it.
 
 **The profiling ablation needs its failure category read, not just its total.** If it improves execution accuracy by a point while halving filter errors, the total is hiding the effect — and if it improves the total without moving filter errors, the gain came from somewhere else and the attribution is wrong.
 

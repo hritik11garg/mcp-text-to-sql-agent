@@ -14,17 +14,17 @@ Percentages are checkbox counts from [TASKS.md](TASKS.md), not confidence — a 
 |---|---|---|---|
 | 0 | Scaffolding — docs, deps, interpreter pin | ✅ Done | 100% |
 | 1 | **Core loop** — retrieval, generation, validation, execution, profiling, API, demo UI | 🚧 In progress | 59% |
-| 2 | **Eval harness** — comparison, Recall@k, artifacts, resumption, benchmark loading | 🚧 In progress | 74% |
+| 2 | **Eval harness** — comparison, Recall@k, artifacts, resumption, benchmark loading, pipeline seam | 🚧 In progress | 76% |
 | 3 | **MCP servers + client refactor** | 🚧 In progress | 84% |
 | 4 | **Agent layer** — decomposition, session memory, self-correction | ⬜ Not started | 0% |
 | 5 | **Fine-tuned schema linker** | ⬜ Not started | 0% |
 | 6 | **Hardening** — limits, tracing, tests | ⬜ Not started | 0% |
 
-**What is genuinely blocking, in order:** wiring the pipeline into the harness's answerer seam (blocks every number in Stages 2, 3 and 5 — the loader now exists, so this is one connection rather than a slice of work), then the HTTP API and the demo UI it serves (blocks the Stage 1 close-out and any visual demo), then the agent loop.
+**What is genuinely blocking, in order:** a running PostgreSQL with the converted schemas indexed — the pipeline is now wired to the harness's answerer seam, so the remaining gap between here and a first accuracy number is operational rather than structural. Then the HTTP API and the demo UI it serves (blocks the Stage 1 close-out and any visual demo), then the agent loop.
 
 **Stage 1 dropped from ~75% to 59%** when the demo UI was added to its scope. The percentage got worse because the plan got more honest, which is the direction it should move.
 
-**Stage 1 is not "the core loop works end to end".** Every component is built and tested, and there is now a real dataset in the database — Spider's dev split, converted and verified. What is still missing is the pipeline connected to the harness, so no question has been answered by the system itself from end to end. That distinction is the difference between the percentage above and a working demo, and it is now a single connection wide.
+**Stage 1 is not "the core loop works end to end".** Every component is built and tested, there is a real dataset in the database — Spider's dev split, converted and verified — and the pipeline is now connected to the harness. What has still not happened is a *run*: no question has yet been answered by the system itself, because that needs the database up and the catalog built. The distinction between wired and measured is the one this project keeps insisting on, and it applies to its own progress table.
 
 ---
 
@@ -71,10 +71,10 @@ Scope: Spider/BIRD acquisition and SQLite→Postgres conversion; database-level 
 **Demo:** one command produces a scored report over the held-out split.
 
 **Done when:**
-- [~] Reproducible from a clean checkout via one command — the command exists and refuses at the pipeline seam
+- [~] Reproducible from a clean checkout via one command — the command exists and runs; it is three commands rather than one (verify, index, run), and none has been executed end to end
 - [x] Conversion verified — gold queries return identical results on SQLite and Postgres, compared with the harness's own comparator, exiting 3 when they do not
 - [x] Splits are database-disjoint and committed as a file — and stable when the corpus grows, which a seeded shuffle is not
-- [~] Baseline rows in [../ml/BENCHMARKS.md](../ml/BENCHMARKS.md) — §0 conversion fidelity is recorded from a real run; the accuracy rows wait on the pipeline seam
+- [~] Baseline rows in [../ml/BENCHMARKS.md](../ml/BENCHMARKS.md) — §0 conversion fidelity is recorded from a real run; the accuracy rows wait on a run, not on code
 - [~] Failure taxonomy populated with counts — the taxonomy and its counting exist; verification has produced real counts, scoring has not
 
 **The measurement machinery landed before the data, deliberately.** Comparison, Recall@k, the failure taxonomy, artifacts and resumption are built and tested against synthetic cases — 84 tests, no model and no database. The order matters: the logic that decides what a number *means* is the part a benchmark cannot check, because a wrong comparison produces a plausible score rather than an error. Building it against a dataset would have meant debugging two unknowns at once.
@@ -83,7 +83,7 @@ Scope: Spider/BIRD acquisition and SQLite→Postgres conversion; database-level 
 
 The pattern is worth keeping. Every one of those was invisible to a test suite that generated its own inputs — **synthetic tests check the logic you thought of; real data checks the assumptions you did not know you had made.** DATASETS.md §1 and BENCHMARKS.md §0 now carry measured values instead of TBD. BIRD has still not been downloaded, and its rows stay TBD for the same reason they always did.
 
-**What the load bought and what it did not.** 20 of 20 dev databases convert; **915 of 921 comparable gold results reproduce (99.3%); 19 of 20 databases reproduce every one.** That is a precondition for a baseline, not a baseline — no question has yet been answered by the system itself, because the pipeline seam is still open.
+**What the load bought and what it did not.** 20 of 20 dev databases convert; **915 of 921 comparable gold results reproduce (99.3%); 19 of 20 databases reproduce every one.** That is a precondition for a baseline, not a baseline — no question has yet been answered by the system itself.
 
 **Diagnosing the last 25 mismatches changed the number and, more usefully, the taxonomy.** Only 6 were conversion differences, and all 6 are one column that has no faithful static type. 3 were a transpilation gap — SQLite's `LIKE` folds case — and 16 were questions with no single correct answer, where a `LIMIT` cut through a tie. Two more looked exactly like those 16 and were the real defect; the rule that separates them is what keeps the 99.3% from being a number that had absorbed a fault. That pattern has now repeated three times in this stage: **a failure bucket named after the component under test collects everything unexplained, and each thing it collects reads as evidence against that component.**
 

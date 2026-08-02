@@ -135,12 +135,39 @@ class Outcome(StrEnum):
     something did not get created."""
 
 
+COMPARABLE = frozenset({Outcome.MATCH, Outcome.MISMATCH, Outcome.AMBIGUOUS_ORDER})
+"""Outcomes where the gold query produced a PostgreSQL answer to compare against.
+
+**This is also the eval's denominator**, and having one definition rather than
+two is the point. A question outside this set has no answer on the converted
+copy -- the reference query is broken, or PostgreSQL cannot express it, or the
+``LIMIT`` cut a tie so several answers are equally correct. Scoring a model
+against any of them measures nothing, and counting them in a denominator
+inflates nothing but the appearance of coverage.
+
+The relationship states itself: conversion fidelity is *matched / comparable*,
+and execution accuracy will be measured over exactly the questions that
+`comparable` counts.
+"""
+
+
 @dataclass(frozen=True, slots=True)
 class QueryCheck:
     question_id: str
     outcome: Outcome
     verdict: Verdict | None = None
     detail: str = ""
+
+    postgres_sql: str = ""
+    """The gold query as PostgreSQL, when it got that far.
+
+    Carried out of verification rather than re-derived later, because the eval
+    harness has to run **the same statement that was verified**. Re-transpiling
+    at eval time would mean a change to the transpiler silently changed the
+    reference answer without anything re-checking it against SQLite -- and the
+    whole point of :func:`verify_database` is that nobody has to take that on
+    trust. Empty when the query never reached PostgreSQL at all.
+    """
 
 
 @dataclass(slots=True)
@@ -154,11 +181,7 @@ class VerificationReport:
     @property
     def comparable(self) -> int:
         """Queries that ran on both sides. The denominator that means anything."""
-        return sum(
-            1
-            for check in self.checks
-            if check.outcome in (Outcome.MATCH, Outcome.MISMATCH, Outcome.AMBIGUOUS_ORDER)
-        )
+        return sum(1 for check in self.checks if check.outcome in COMPARABLE)
 
     @property
     def matched(self) -> int:
@@ -226,6 +249,27 @@ class VerificationReport:
                 if check.outcome not in (Outcome.MATCH, Outcome.GOLD_ERROR)
             ],
         }
+
+    def gold_entries(self) -> list[dict[str, Any]]:
+        """Every checked question, as the eval harness needs to receive it.
+
+        One entry per question, including the unscoreable ones. Emitting only
+        the usable questions would leave the harness unable to tell "verified
+        and excluded, for this reason" from "never verified at all" -- and those
+        two demand opposite responses: the first is a denominator the run should
+        report, the second is a run that should not start.
+        """
+        return [
+            {
+                "question_id": check.question_id,
+                "db_id": self.db_id,
+                "schema": self.schema,
+                "outcome": check.outcome.value,
+                "scoreable": check.outcome in COMPARABLE,
+                "sql": check.postgres_sql,
+            }
+            for check in self.checks
+        ]
 
 
 def transpile_to_postgres(gold_sql: str, *, known_names: frozenset[str] = frozenset()) -> str:
@@ -426,6 +470,7 @@ def _check_one(
             question.question_id,
             _classify_pg_error(exc),
             detail=str(exc).splitlines()[0],
+            postgres_sql=translated,
         )
 
     # Argument order is load-bearing: the SQLite result is the reference, so it
@@ -433,7 +478,12 @@ def _check_one(
     # asymmetric diagnostic in the Comparison would describe the wrong side.
     result = compare(actual, expected, gold_sql=question.gold_sql)
     if result.matched:
-        return QueryCheck(question.question_id, Outcome.MATCH, verdict=result.verdict)
+        return QueryCheck(
+            question.question_id,
+            Outcome.MATCH,
+            verdict=result.verdict,
+            postgres_sql=translated,
+        )
 
     if result.order_enforced:
         unordered = compare(actual, expected, order_matters=False)
@@ -443,6 +493,7 @@ def _check_one(
                 Outcome.AMBIGUOUS_ORDER,
                 verdict=result.verdict,
                 detail="same rows; the gold ORDER BY does not determine their order",
+                postgres_sql=translated,
             )
 
     if _limit_is_undetermined(connection, database, question.gold_sql, known_names=known_names):
@@ -451,6 +502,7 @@ def _check_one(
             Outcome.UNDETERMINED_LIMIT,
             verdict=result.verdict,
             detail="the gold ORDER BY ties across the LIMIT; no single answer is correct",
+            postgres_sql=translated,
         )
 
     return QueryCheck(
@@ -458,6 +510,7 @@ def _check_one(
         Outcome.MISMATCH,
         verdict=result.verdict,
         detail=result.detail,
+        postgres_sql=translated,
     )
 
 
@@ -650,9 +703,11 @@ def _run(connection: Connection[Any], statement: str) -> list[tuple[Any, ...]]:
 
 
 __all__ = [
+    "COMPARABLE",
     "Outcome",
     "QueryCheck",
     "VerificationReport",
+    "limit_cut_is_tied",
     "transpile_to_postgres",
     "verify_database",
 ]

@@ -1,10 +1,10 @@
 # Text-to-SQL Analytics Agent (MCP-native)
 
-> **Status: Stage 1 core loop, the Stage 3 MCP layer, and Stage 2's benchmark now loaded.** The four servers run and are callable from any MCP host over stdio. Spider's dev split is converted to PostgreSQL and *verified* against its own gold results. Still open: the HTTP API, and the seam that connects the pipeline to the eval harness. **No accuracy number is claimed until that seam exists** — the only measured number below is how faithfully the benchmark data converted, which is the precondition for the rest. See [ROADMAP](docs/project/ROADMAP.md) for stage status and [TASKS](docs/project/TASKS.md) for the working checklist.
+> **Status: Stage 1 core loop, the Stage 3 MCP layer, Stage 2's benchmark loaded, and the eval pipeline wired.** The four servers run and are callable from any MCP host over stdio. Spider's dev split is converted to PostgreSQL and *verified* against its own gold results, and `python -m evals.run` now composes retrieval, generation and validation over it. Still open: the HTTP API, and an actual run. **No accuracy number is claimed until one exists** — the only measured number below is how faithfully the benchmark data converted, which is the precondition for the rest. See [ROADMAP](docs/project/ROADMAP.md) for stage status and [TASKS](docs/project/TASKS.md) for the working checklist.
 >
 > | Landed | Next |
 > |---|---|
-> | **Four MCP servers over stdio, with runtime `tools/list` discovery** | **Wiring the pipeline into the eval harness's answerer seam** |
+> | **Four MCP servers over stdio, with runtime `tools/list` discovery** | **Running the wired pipeline — every accuracy number waits on it** |
 > | **Spider loaded — 20 dev databases converted to Postgres, 19 verified against every gold result** | FastAPI + SSE, and the `/health` · `/ready` pair |
 > | Postgres 16 + pgvector, Alembic migrations | The agent loop that drives the discovered tools |
 > | `SELECT`-only role, proven by 30 negative tests | |
@@ -125,7 +125,7 @@ That creates the `agent_meta` schema, the pgvector extension and the HNSW index,
 Verify the install — the security suite is the one that matters, and it passes by being **refused**:
 
 ```powershell
-pytest                    # 855 tests; integration, security and contract need Docker
+pytest                    # 908 tests; integration, security and contract need Docker
 pytest -m security        # the read-only containment suite, on its own
 ruff check . ; mypy
 ```

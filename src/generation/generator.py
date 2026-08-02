@@ -15,9 +15,10 @@ from __future__ import annotations
 
 import logging
 import re
+from dataclasses import dataclass
 
 from core.exceptions import LLMResponseError
-from core.ports.llm import LLMClient
+from core.ports.llm import LLMClient, Usage
 from generation.prompts import build_messages
 from schema.retrieval import RetrievalResult
 
@@ -44,6 +45,22 @@ class UnanswerableQuestionError(LLMResponseError):
     failure: retrying generation will not help, but retrieving more schema
     might. See docs/ml/PROMPTS.md.
     """
+
+
+@dataclass(frozen=True, slots=True)
+class Generated:
+    """Cleaned SQL, plus what producing it cost and which model produced it.
+
+    The model is recorded per call rather than read from configuration because
+    a fallback chain switches models mid-run when a free-tier daily cap is hit
+    (:class:`~adapters.llm.fallback.FallbackLLMClient`). A run labelled with the
+    *configured* model would then be a blend of two, with nothing on the page
+    saying so.
+    """
+
+    sql: str
+    usage: Usage
+    model: str
 
 
 class SQLGenerator:
@@ -87,6 +104,32 @@ class SQLGenerator:
         Raises:
             UnanswerableQuestionError: the model reported the schema is insufficient.
             LLMResponseError: the model returned nothing usable.
+        """
+        generated = await self.generate_detailed(
+            question,
+            context,
+            feedback=feedback,
+            previous_sql=previous_sql,
+            timeout_ms=timeout_ms,
+        )
+        return generated.sql
+
+    async def generate_detailed(
+        self,
+        question: str,
+        context: RetrievalResult,
+        *,
+        feedback: str | None = None,
+        previous_sql: str | None = None,
+        timeout_ms: int | None = None,
+    ) -> Generated:
+        """:meth:`generate`, with the cost and the answering model attached.
+
+        A separate method rather than a changed return type: every caller that
+        only wants SQL keeps getting SQL, and the one caller that has to report
+        a token bill -- the eval harness -- asks for the rest explicitly. The
+        two share one implementation, so they cannot disagree about what
+        counts as a usable answer.
         """
         if not question.strip():
             raise LLMResponseError("the question is empty")
@@ -132,7 +175,7 @@ class SQLGenerator:
                 "the model reported that the retrieved schema cannot answer this question"
             )
 
-        return sql
+        return Generated(sql=sql, usage=response.usage, model=response.model)
 
 
 def strip_formatting(text: str) -> str:

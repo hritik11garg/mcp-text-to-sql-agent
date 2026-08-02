@@ -725,3 +725,84 @@ Fact 2 is answered by projecting the `ORDER BY` expressions into the select list
 **Generalises to:** when two explanations produce identical symptoms and only one is your fault, the rule that tells them apart is worth more than the rule that handles either. Building only the cheap check is how a defect gets reclassified as someone else's ambiguity.
 
 **Revisit:** if a benchmark ships orderedness or answer-uniqueness metadata per question, which would replace the inference entirely.
+
+## ADR-030 — The eval runs the gold SQL verification produced, and never re-derives it
+
+**Status:** accepted · **Date:** 2026-08-02 · **Stage:** 2
+
+**Context.** The split files hold Spider's own SQL, which is SQLite. The eval runs against PostgreSQL. Something has to bridge them, and [ADR-026](#adr-026--gold-sql-is-repaired-for-sqlites-quoted-literal-rule-and-dialect-gaps-are-not-conversion-faults) already built the bridge: `transpile_to_postgres`, plus the quoted-literal repair and the `LIKE`→`ILIKE` rule. Calling it again at eval time is one import and looks obviously right.
+
+**Decision.** The harness does not transpile. `benchmark.load verify --emit-gold` writes a JSONL of `{question_id, db_id, schema, outcome, scoreable, sql}` — the statement each gold query actually became, plus the result of comparing its output against SQLite — and `evals.run --gold` is **required**, not optional.
+
+**Why re-deriving would be wrong even though it produces the same string today.** Verification's claim is not "this transpiles" but "this transpiles *and the two engines agreed on the rows*". That claim attaches to a specific statement. Re-transpiling at eval time means an edit to the transpiler silently changes every reference answer with nothing re-checking it — and a wrong gold query does not raise, it lowers an accuracy number, and the investigation that follows looks at the model. It is the same failure [ADR-022](#adr-022--the-conversion-is-verified-by-the-eval-harnesss-own-comparator) exists to prevent, one layer up.
+
+**The denominator falls out of this, and that is the larger half.** `COMPARABLE` — `match`, `mismatch`, `ambiguous_order` — is defined once in `benchmark.verify` and used twice: conversion fidelity is *matched / comparable*, and execution accuracy is measured over exactly the questions `comparable` counts. On Spider dev that is **921 of 1034**; the other 113 are 97 `dialect_error`, 16 `undetermined_limit`, and the gold errors. Without this the harness would score against all 1034 and report a number depressed by roughly eleven points of questions that have no PostgreSQL answer at all.
+
+**A question with no entry stops the run.** Not dropped, not scored. An unverified question is one nobody has checked the conversion behind, so scoring it reports a number about data of unknown fidelity, and dropping it shrinks a denominator for a reason that never appears anywhere. Both look exactly like a correct measurement.
+
+**A `mismatch` stays scoreable.** The six `wta_1.players.birth_date` questions run on PostgreSQL and return *an* answer — just not SQLite's. Scoring against the converted copy stays internally consistent; what it is not is comparable to a published Spider number, which is [R-04](../project/RISKS.md#r-04--spiderbird--postgres-conversion-corrupts-the-benchmark)'s residual and is stated rather than excluded. Excluding them would delete the finding.
+
+**Alternatives.**
+- *Import `transpile_to_postgres` into the harness.* One line, and it makes `evals` depend on `benchmark` — the harness is meant to run against any corpus that can produce this file shape. It also loses the verification claim, above.
+- *Rewrite the split files with PostgreSQL gold.* Tempting, and it conflates two things that change at different rates: the split is an assignment of databases, stable across conversions; the gold is an output of one conversion of one archive.
+- *Make `--gold` optional and fall back to the split's SQL.* The fallback would run, produce a number, and be wrong by hundreds of quoted-literal failures — indistinguishable in the summary from a model that is bad at SQL.
+
+**Tradeoff.** Two files must be kept in step, and a stale gold file against a re-converted database is a real operating hazard. Mitigated by the file being an output of the command that does the conversion check, and by an unverified question raising rather than passing. Not mitigated by a digest — that is the honest gap here, and the fix if it bites is to record the conversion report's hash in both.
+
+**Generalises to:** a claim that took work to establish attaches to an artifact, not to a procedure. Re-running the procedure produces something that looks identical and carries no claim.
+
+**Revisit:** if conversion becomes cheap enough to run inside the eval, at which point the gold file and the verification are the same pass.
+
+## ADR-031 — One database, one schema, one catalog namespace, resolved per question
+
+**Status:** accepted · **Date:** 2026-08-02 · **Stage:** 2
+
+**Context.** Every component built in Stage 1 assumes a single schema: the retriever filters on one `dataset`, `SchemaCatalog` is loaded for one `dataset`, `SQLValidator` holds one catalog, and `EXPLAIN` resolves bare names through one session `search_path`. Spider dev is 20 databases, converted into 20 schemas, and questions from all of them sit in one split file — frequently with the same table names.
+
+**Decision.** A `DatabaseScope` per `db_id`, built lazily and cached, bundling the schema name, the catalog, a retriever bound to that dataset, and a validator holding that catalog. The catalog namespace **is** the PostgreSQL schema name — `dataset = f"{prefix}{db_id}"`, the same string `schema_name_for` produced at conversion — rather than a second naming scheme.
+
+**Why one name rather than two.** Two naming schemes have exactly one interesting failure: they disagree, retrieval returns another database's columns, the model writes plausible SQL against them, and `EXPLAIN` accepts it because those tables exist somewhere. Nothing raises. The conversion already chose a name and validated it as an identifier; reusing it makes the disagreement unrepresentable.
+
+**Why the components are bundled rather than passed separately.** The failure mode is a *mismatch between two of them* — a catalog for one database while the session's `search_path` points at another — which produces SQL that validates and then reads the wrong tables. Grouping them means a question resolves one object and cannot half-switch.
+
+**`search_path` is set twice, deliberately, at two different scopes.** The query runner sets it **per transaction** (`set_config(..., true)`), so one question cannot leak into the next. Validation sets it **per session** (`false`), because the validator opens its own transaction and a transaction-scoped setting would be reverted before `EXPLAIN` ran inside it. Both take the value as a bound parameter rather than composing a `SET`, since it derives from a benchmark-supplied `db_id`.
+
+**Consequence worth stating: without the session-scoped set, the validation baseline measures nothing.** `EXPLAIN` on `SELECT id FROM concert` fails identically for correct SQL and for a hallucinated table if the session points elsewhere — so the invalid-query rate the baseline exists to measure would be 100% and entirely an artifact of wiring. It is asserted by a test that validates the *same statement* against two schemas and requires opposite answers.
+
+**Alternatives.**
+- *One catalog spanning all 20 databases.* Offers the model twenty databases of tables, and `singer` means two different things.
+- *Qualify every generated table name with its schema.* Requires the model to know a naming convention that has nothing to do with the question, and gold SQL is unqualified anyway.
+- *One PostgreSQL database per benchmark database.* Twenty connection strings and twenty pools to answer one split file.
+
+**Tradeoff.** A run touching all 20 databases holds 20 catalogs and 20 retrievers. Small for Spider (a few hundred elements each); it is the first thing to reconsider on BIRD, where schemas are far larger. Lazy construction is what keeps a single-database run cheap.
+
+**Generalises to:** when a component's single-instance assumption meets a plural corpus, scope it explicitly rather than widening it. Widening turns a would-be error into a wrong answer.
+
+**Revisit:** on BIRD, where per-database catalog memory becomes measurable.
+
+## ADR-032 — The eval's query runner is not the production executor
+
+**Status:** accepted · **Date:** 2026-08-02 · **Stage:** 2
+
+**Context.** `SQLExecutor` already runs SQL under a row limit, a statement timeout, an audit write and a re-validation. The eval needs something that runs SQL. Reusing it is the obvious move, and [EVALUATION.md](../ml/EVALUATION.md) §3 requires gold and predicted to go through the *same* runner.
+
+**Decision.** A separate `SchemaScopedQueryRunner`: read-only role, statement timeout, per-transaction `search_path`, and a row cap that **refuses rather than truncates**. No re-validation, no `LIMIT` injection, no audit row.
+
+**Why not the executor.** Its controls are for *model output*, and the runner's rule is that gold goes through the identical path. Applying them to gold breaks the measurement in two specific ways. A reference query rejected by the cost ceiling would be recorded as a gold error, which it is not. And `apply_row_limit` injecting `LIMIT 500` into both sides is worse than it looks: two queries returning the same rows in an unspecified order, cut at the same length, are cut in **different places** — so the comparison reports a value mismatch for a correct answer. That is the failure the whole harness exists to avoid, introduced by a control meant to prevent a different one.
+
+**So the cap refuses.** Above `MAX_RESULT_ROWS` (100,000, far above any Spider result) the query raises and the runner records an execution failure — which is what actually happened — instead of silently producing a comparison of two arbitrary prefixes.
+
+**What is *not* dropped: the read-only role and the timeout.** Those are controls about the database rather than about the query's authorship, and a benchmark run is the run most likely to execute a statement nobody has read.
+
+**Security consequence, stated rather than discovered later.** In the `full-schema` and `retrieval-only` baselines, model-authored SQL reaches the database **with no validation tier in front of it** — that absence is the ablation. Containment is unchanged, because the validation tier was never the boundary ([SECURITY.md](../operations/SECURITY.md) §5): the role holds, and an integration test asserts an `INSERT` through this runner is refused by PostgreSQL. Recorded in SECURITY.md §14.2.11 with severity and scenario.
+
+**Alternatives.**
+- *Use `SQLExecutor` for both.* Truncation-induced false mismatches, and gold subject to the agent's cost ceiling.
+- *Use `SQLExecutor` for predicted, plain execution for gold.* Two paths, which is precisely the `Decimal('1')` vs `1.0` failure EVALUATION.md §3 forbids.
+- *Truncate at the cap instead of refusing.* Cheaper, and produces wrong verdicts that look like model errors.
+
+**Tradeoff.** The eval does not exercise the production executor, so nothing in a benchmark run would catch a regression in row limiting or audit writing. Those have their own integration tests; what is genuinely lost is that the number is measured through a slightly different path than the one the API will serve, and the difference is exactly the two controls named above.
+
+**Generalises to:** a safety control and a measurement control are not interchangeable, and the one that quietly changes the data is the dangerous one to reuse.
+
+**Revisit:** at Stage 4, when self-correction needs the executor's structured errors — the retry loop may want the executor's taxonomy even where the scoring path does not.

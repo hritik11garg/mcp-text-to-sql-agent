@@ -180,6 +180,15 @@ Two engines returning the *same rows* in a different order because the gold `ORD
 **Undetermined limit**
 Two engines returning *different rows* because a `LIMIT` cut through a tie in the `ORDER BY` — several answers are equally correct and no comparison can score the question. Excluded from the denominator. **Not the same as an ambiguous order**, and the difference decides the counting: there the rows match, here they do not, so nothing about the data follows. Establishing it requires proving the key at the cut is genuinely tied — two engines can also disagree about a prefix because they *order the same key differently*, which is a conversion defect wearing the same symptoms.
 
+**Verified gold**
+The PostgreSQL statement a benchmark's reference query became, carried out of conversion verification together with the outcome of comparing its results against the original SQLite. The eval runs it rather than re-transpiling, because verification's claim — *these two engines agreed on these rows* — attaches to that statement and not to the procedure that produced it. See [ADR-030](architecture/DECISIONS.md#adr-030--the-eval-runs-the-gold-sql-verification-produced-and-never-re-derives-it).
+
+**Database scope**
+The bundle of components a question is answered with: one converted schema, one catalog namespace, one retriever, one validator, resolved from the question's `db_id`. Exists because a benchmark is many databases and every component was built for one — and because Spider's databases share table names, so the failure mode of getting it wrong is a plausible answer rather than an error.
+
+**Answerer**
+Anything that turns a question into candidate SQL. The seam the eval harness varies at: each baseline in [EVALUATION.md](ml/EVALUATION.md) §4 is a different answerer over one orchestration, which is why adding one changes nothing in the runner.
+
 **Trust on first use**
 Recording an artifact's digest the first time it is seen, then requiring every later copy to match. Used for benchmark archives because neither Spider nor BIRD publishes a stable checksum. Safe only when it is *visible* — it requires a flag, logs a warning, and what it records is committed.
 

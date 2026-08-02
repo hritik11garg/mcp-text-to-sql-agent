@@ -4,7 +4,7 @@ Deliberately thin. Everything it does is available as a library call, because a
 harness whose logic lives in its argument parser cannot be tested and cannot be
 driven from anywhere else.
 
-Two behaviours worth knowing before spending a token budget on it:
+Three behaviours worth knowing before spending a token budget on it:
 
 **It resumes.** Re-running the same ``--run-id`` skips questions already
 recorded, so a spent daily cap costs the questions still outstanding rather
@@ -14,6 +14,14 @@ changes the configuration fingerprint and the resume is *refused* -- see
 
 **It writes progress to stderr.** stdout carries the summary JSON, so the
 command composes: ``python -m evals.run ... | jq .execution_accuracy``.
+
+**``--gold`` is required, and that is a correctness control rather than a
+convenience.** A split file holds the benchmark's own SQLite SQL; the target is
+PostgreSQL. The file named here is what ``benchmark.load verify`` produced --
+the statement each gold query became *and* whether comparing its results
+against SQLite succeeded. Making it optional would allow a run whose reference
+answers nobody had checked, and that run would report a number about the loader
+while looking like a number about the model. See :mod:`evals.gold`.
 """
 
 from __future__ import annotations
@@ -23,10 +31,26 @@ import json
 import logging
 import sys
 from pathlib import Path
+from typing import Any
 
+import psycopg
+
+from adapters.embedding.factory import build_embedder
+from adapters.llm.factory import build_llm_client
+from core.dsn import libpq_dsn, redact_dsn
+from core.exceptions import ConfigurationError
+from core.settings import Settings
 from evals.artifacts import QuestionArtifact, RunManifest, RunStore, current_commit, new_run_id
-from evals.dataset import Split, load_questions
-from evals.runner import Answerer, EvalRunner, QueryRunner
+from evals.dataset import Question, Split, load_questions
+from evals.gold import Applied, apply_verified_gold, load_verified_gold
+from evals.pipeline import (
+    Baseline,
+    PipelineAnswerer,
+    SchemaScopedQueryRunner,
+    ScopeRegistry,
+)
+from evals.runner import EvalRunner
+from generation.generator import SQLGenerator
 
 logger = logging.getLogger(__name__)
 
@@ -62,6 +86,34 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Stop after this many questions. For smoke-testing the harness itself",
     )
+    parser.add_argument(
+        "--gold",
+        type=Path,
+        required=True,
+        help=(
+            "Verified gold SQL from `benchmark.load verify --emit-gold`. Required: "
+            "the split holds the benchmark's own SQLite SQL, and scoring against "
+            "an unverified conversion measures the loader, not the model"
+        ),
+    )
+    parser.add_argument(
+        "--baseline",
+        type=Baseline,
+        choices=list(Baseline),
+        default=Baseline.RETRIEVAL_ONLY,
+        help="Which EVALUATION.md section 4 configuration to run",
+    )
+    parser.add_argument(
+        "--prefix",
+        default="",
+        help="Schema-name prefix used at conversion time, e.g. spider_",
+    )
+    parser.add_argument(
+        "--top-k",
+        type=int,
+        default=None,
+        help="Schema elements retrieved per question. Defaults to RETRIEVAL_TOP_K",
+    )
     return parser
 
 
@@ -74,58 +126,163 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = build_parser().parse_args(argv)
 
-    questions = load_questions(args.questions, split=args.split)
-    if args.limit is not None:
-        questions = questions[: args.limit]
+    try:
+        questions, applied = prepare_questions(args)
+    except (ValueError, OSError) as exc:
+        logger.error("%s", exc)
+        return 2
     if not questions:
-        logger.error("no questions in %s for split %s", args.questions, args.split)
+        logger.error("no scoreable questions in %s for split %s", args.questions, args.split)
+        return 2
+
+    try:
+        settings = Settings.load()
+    except ConfigurationError as exc:
+        logger.error("%s", exc)
         return 2
 
     manifest = RunManifest(
         run_id=args.run_id or new_run_id(f"{args.dataset}-{args.split.value}"),
         dataset=args.dataset,
         split=args.split.value,
-        model=args.model,
+        model=args.model or settings.llm.llm_model,
         retriever_model_version=args.retriever,
         prompt_version=args.prompt_version,
         commit=current_commit(),
         seed=args.seed,
         notes=args.notes,
+        baseline=args.baseline.value,
     )
     store = RunStore(args.out, manifest)
 
     try:
-        answerer, run_query = build_pipeline(args)
-    except NotImplementedError as exc:
+        owner, readonly = _connections(settings)
+    except ConfigurationError as exc:
         logger.error("%s", exc)
         return 3
 
-    runner = EvalRunner(store, answerer, run_query, on_progress=progress_line)
-    summary = runner.run(questions)
-    emit_summary({**summary.to_dict(), "run_id": manifest.run_id, "out": str(store.root)})
+    try:
+        answerer, run_query = build_pipeline(
+            args, settings, owner=owner, readonly=readonly, schemas=applied.schemas
+        )
+        with answerer:
+            runner = EvalRunner(store, answerer, run_query, on_progress=progress_line)
+            summary = runner.run(questions)
+    finally:
+        owner.close()
+        readonly.close()
+
+    emit_summary(
+        {
+            **summary.to_dict(),
+            "run_id": manifest.run_id,
+            "out": str(store.root),
+            "baseline": args.baseline.value,
+            # The exclusions travel with the score, always. A denominator that
+            # 113 questions were removed from is not the same measurement as
+            # one they were never in, and only one of those is honest to
+            # compare against a published number.
+            "questions": applied.to_dict(),
+        }
+    )
     return 0
 
 
-def build_pipeline(args: argparse.Namespace) -> tuple[Answerer, QueryRunner]:
+def prepare_questions(args: argparse.Namespace) -> tuple[list[Question], Applied]:
+    """Load the split, swap in verified gold, and drop what cannot be scored.
+
+    ``--limit`` is applied **after** the exclusions, so a smoke run of twenty
+    questions is twenty scoreable ones rather than twenty rows off the top of a
+    file, some of which quietly vanish.
+    """
+    questions = load_questions(args.questions, split=args.split)
+    applied = apply_verified_gold(questions, load_verified_gold(args.gold))
+
+    kept = applied.questions
+    if args.limit is not None:
+        kept = kept[: args.limit]
+    return kept, applied
+
+
+def build_pipeline(
+    args: argparse.Namespace,
+    settings: Settings,
+    *,
+    owner: psycopg.Connection[Any],
+    readonly: psycopg.Connection[Any],
+    schemas: dict[str, str],
+) -> tuple[PipelineAnswerer, SchemaScopedQueryRunner]:
     """Construct the thing under test and the thing that runs SQL.
 
-    The single wiring point, and the only part of this module that will change
-    when the pipeline is connected. Everything above it -- loading, the
-    manifest, resumption, the summary -- is complete and exercised by tests.
+    The single wiring point. Everything above it -- loading, the manifest,
+    resumption, the summary -- was complete and tested before this existed,
+    which is what kept this function to a composition rather than a rewrite.
 
-    Raises:
-        NotImplementedError: until a dataset exists to run against. Refusing is
-            the honest failure. The alternative is a harness that runs happily,
-            records every question as unanswered, and reports 0% in a format
-            indistinguishable from a measurement.
+    Two roles, not one. The answerer reaches ``agent_meta`` for the catalog and
+    the vectors, which requires the owner; everything that touches *benchmark*
+    data goes through the read-only role. A benchmark run is not a reason to
+    relax the boundary -- it is the run most likely to execute a query nobody
+    has read.
     """
-    raise NotImplementedError(
-        "no pipeline is wired up yet, so there is nothing to measure. The "
-        "harness itself -- result comparison, Recall@k, artifacts, resumable "
-        "runs -- is built and tested; loading a benchmark and connecting the "
-        f"retriever/generator/executor is the next slice. (Would have run "
-        f"{len(load_questions(args.questions, split=args.split))} question(s).)"
+    baseline: Baseline = args.baseline
+    needs_retrieval = baseline is not Baseline.FULL_SCHEMA
+
+    scopes = ScopeRegistry(
+        owner,
+        readonly,
+        settings=settings.retrieval,
+        execution=settings.execution,
+        # Built only when something will embed with it. Loading a
+        # sentence-transformer for the full-schema baseline would spend a
+        # minute and several hundred megabytes to produce vectors nothing reads.
+        embedder=build_embedder(settings.retrieval) if needs_retrieval else None,
+        needs_retrieval=needs_retrieval,
+        needs_validation=baseline is Baseline.WITH_VALIDATION,
+        prefix=args.prefix,
     )
+
+    generator = SQLGenerator(
+        build_llm_client(settings.llm),
+        max_rows=settings.execution.max_rows_default,
+    )
+    answerer = PipelineAnswerer(scopes, generator, baseline=baseline, top_k=args.top_k)
+
+    run_query = SchemaScopedQueryRunner(
+        readonly,
+        schema_for=schemas,
+        statement_timeout_ms=settings.execution.clamp_timeout_ms(None),
+        prefix=args.prefix,
+    )
+    return answerer, run_query
+
+
+def _connections(
+    settings: Settings,
+) -> tuple[psycopg.Connection[Any], psycopg.Connection[Any]]:
+    """Open both roles, failing before any question is attempted."""
+    owner = _connect(settings.database.database_url, "DATABASE_URL", settings=settings)
+    try:
+        readonly = _connect(settings.database.database_ro_url, "DATABASE_RO_URL", settings=settings)
+    except ConfigurationError:
+        owner.close()
+        raise
+    return owner, readonly
+
+
+def _connect(url: object, variable: str, *, settings: Settings) -> psycopg.Connection[Any]:
+    if url is None:
+        raise ConfigurationError(f"{variable} is required to run an evaluation")
+    try:
+        return psycopg.connect(
+            libpq_dsn(url),
+            autocommit=True,
+            connect_timeout=max(1, settings.database.db_connect_timeout_ms // 1000),
+        )
+    except psycopg.Error as exc:
+        # psycopg quotes the DSN back on a parse error, password included.
+        raise ConfigurationError(
+            f"could not connect using {variable}: {redact_dsn(str(exc)).strip()}"
+        ) from None
 
 
 def progress_line(artifact: QuestionArtifact) -> None:

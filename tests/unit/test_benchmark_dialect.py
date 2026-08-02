@@ -350,3 +350,75 @@ class TestOutcomes:
         assert report.comparable == 1
         assert report.unscoreable == 1
         assert report.verified is True
+
+
+class TestGoldEntries:
+    """What verification hands the eval harness.
+
+    This is the join between two numbers that must not drift apart: conversion
+    fidelity is *matched / comparable*, and execution accuracy is measured over
+    the questions `comparable` counts. One definition, exported once.
+    """
+
+    def report(self) -> VerificationReport:
+        report = VerificationReport(db_id="concert_singer", schema="spider_concert_singer")
+        report.checks = [
+            QueryCheck("q1", Outcome.MATCH, postgres_sql="SELECT 1"),
+            QueryCheck("q2", Outcome.AMBIGUOUS_ORDER, postgres_sql="SELECT 2"),
+            QueryCheck("q3", Outcome.MISMATCH, postgres_sql="SELECT 3"),
+            QueryCheck("q4", Outcome.UNDETERMINED_LIMIT, postgres_sql="SELECT 4"),
+            QueryCheck("q5", Outcome.DIALECT_ERROR, postgres_sql="SELECT 5"),
+            QueryCheck("q6", Outcome.GOLD_ERROR),
+            QueryCheck("q7", Outcome.TRANSPILE_ERROR),
+        ]
+        return report
+
+    def test_every_checked_question_gets_an_entry(self) -> None:
+        """Including the unusable ones.
+
+        Emitting only the scoreable questions would leave the harness unable to
+        distinguish "verified and excluded, for this reason" from "never
+        verified at all" -- and those demand opposite responses: report the
+        first, refuse to start on the second.
+        """
+        entries = self.report().gold_entries()
+
+        assert [entry["question_id"] for entry in entries] == [f"q{n}" for n in range(1, 8)]
+
+    def test_scoreable_matches_the_comparable_set_exactly(self) -> None:
+        report = self.report()
+
+        scoreable = [entry["question_id"] for entry in report.gold_entries() if entry["scoreable"]]
+
+        assert scoreable == ["q1", "q2", "q3"]
+        assert len(scoreable) == report.comparable
+
+    def test_an_excluded_entry_still_carries_its_reason(self) -> None:
+        entries = {entry["question_id"]: entry for entry in self.report().gold_entries()}
+
+        assert entries["q4"]["outcome"] == "undetermined_limit"
+        assert entries["q5"]["outcome"] == "dialect_error"
+
+    def test_the_statement_carried_across_is_the_one_that_was_verified(self) -> None:
+        """Not re-transpiled later.
+
+        A change to the transpiler would otherwise alter every reference answer
+        with nothing re-checking it against SQLite, which is the one thing
+        verification exists to prevent.
+        """
+        entries = {entry["question_id"]: entry for entry in self.report().gold_entries()}
+
+        assert entries["q1"]["sql"] == "SELECT 1"
+
+    def test_a_query_that_never_reached_postgres_carries_no_sql(self) -> None:
+        entries = {entry["question_id"]: entry for entry in self.report().gold_entries()}
+
+        assert entries["q6"]["sql"] == ""
+        assert entries["q6"]["scoreable"] is False
+
+    def test_the_schema_travels_with_every_entry(self) -> None:
+        # The query runner needs it to set search_path; deriving it a second
+        # time from db_id is how the two names come to disagree.
+        assert all(
+            entry["schema"] == "spider_concert_singer" for entry in self.report().gold_entries()
+        )

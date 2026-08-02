@@ -304,6 +304,16 @@ class TestResumption:
         with pytest.raises(ValueError, match="different configuration"):
             RunStore(tmp_path, manifest(commit="bbb")).resume()
 
+    def test_resuming_a_different_baseline_is_refused(self, tmp_path: Path) -> None:
+        """The baselines exist to be *compared*, so mixing two is the one
+        blend nobody would ever mean to make -- and `model` does not catch it,
+        because two baselines share a model and differ in whether the schema
+        was retrieved or handed over whole."""
+        RunStore(tmp_path, manifest(baseline="retrieval-only")).start()
+
+        with pytest.raises(ValueError, match="different configuration"):
+            RunStore(tmp_path, manifest(baseline="full-schema")).resume()
+
     def test_a_different_run_id_is_not_a_conflict(self, tmp_path: Path) -> None:
         RunStore(tmp_path, manifest(run_id="one")).start()
 
