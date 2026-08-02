@@ -428,10 +428,17 @@ class PipelineAnswerer:
             # The model said the schema cannot answer this. A distinct outcome
             # from a malformed answer: retrying generation will not help, and
             # recording it as one would hide a retrieval failure as a model one.
+            #
+            # The cost still counts. A refusal is a completed call, and on the
+            # first real run these were half the questions -- so dropping their
+            # tokens halved the reported bill.
             return Attempt(
                 error_type="unanswerable",
                 error_message=str(exc),
                 retrieved=retrieved,
+                input_tokens=exc.usage.input_tokens,
+                output_tokens=exc.usage.output_tokens,
+                answering_model=exc.model,
             )
         except LLMError as exc:
             return Attempt(

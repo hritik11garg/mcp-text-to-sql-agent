@@ -11,7 +11,7 @@ import pytest
 
 from adapters.llm.fake import FakeLLMClient, text_response
 from core.exceptions import LLMResponseError
-from core.ports.llm import Role
+from core.ports.llm import LLMResponse, Role, Usage
 from generation.generator import SQLGenerator, UnanswerableQuestionError, strip_formatting
 from generation.prompts import (
     MAX_QUESTION_CHARS,
@@ -204,3 +204,49 @@ class TestGenerator:
         )
 
         assert 'column "revenu" does not exist' in llm.calls[0][1].content
+
+
+class TestRefusalCarriesItsCost:
+    """A refusal is a completed call, and it is billed like one.
+
+    Found on the first real run: half of 150 questions came back
+    `CANNOT_ANSWER`, and because the cost was attached only to the success path
+    the reported token bill was roughly half of what had been spent.
+    """
+
+    async def test_the_usage_is_attached(self) -> None:
+        llm = FakeLLMClient(
+            [
+                LLMResponse(
+                    text="CANNOT_ANSWER",
+                    usage=Usage(input_tokens=340, output_tokens=6),
+                    model="llama-3.1-8b-instant",
+                )
+            ]
+        )
+
+        with pytest.raises(UnanswerableQuestionError) as caught:
+            await SQLGenerator(llm).generate("who?", RetrievalResult())
+
+        assert caught.value.usage.input_tokens == 340
+        assert caught.value.usage.output_tokens == 6
+
+    async def test_the_answering_model_is_attached(self) -> None:
+        """Which model refused matters when a fallback chain is in play --
+        a weaker model refuses more, and that is a finding rather than noise."""
+        llm = FakeLLMClient(
+            [LLMResponse(text="CANNOT_ANSWER", usage=Usage(), model="llama-3.1-8b-instant")]
+        )
+
+        with pytest.raises(UnanswerableQuestionError) as caught:
+            await SQLGenerator(llm).generate("who?", RetrievalResult())
+
+        assert caught.value.model == "llama-3.1-8b-instant"
+
+    async def test_it_is_still_the_distinct_error_type(self) -> None:
+        # The reason it is separate: retrieving more schema helps, retrying
+        # generation does not. Adding fields must not blur that.
+        llm = FakeLLMClient([text_response("CANNOT_ANSWER")])
+
+        with pytest.raises(UnanswerableQuestionError):
+            await SQLGenerator(llm).generate("who?", RetrievalResult())

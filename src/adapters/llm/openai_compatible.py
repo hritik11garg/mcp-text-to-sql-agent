@@ -135,11 +135,54 @@ class OpenAICompatibleClient:
                 raise LLMQuotaExceededError(
                     f"model {self._model!r} is rate limited or out of quota"
                 ) from exc
-            raise LLMUnavailableError(
-                f"the model provider could not be reached ({type(exc).__name__})"
-            ) from exc
+            raise LLMUnavailableError(_unavailable_message(exc, self._model)) from exc
 
         return _from_wire(response, fallback_model=self._model)
+
+
+_STATUS_HINTS = {
+    400: "the provider rejected the request as malformed",
+    401: "the API key was rejected. Check LLM_API_KEY",
+    403: "the key is valid but not permitted to use this model",
+    404: "no such model at this endpoint. Check LLM_MODEL and LLM_BASE_URL",
+    413: (
+        "the request was too large for this endpoint. On a free tier this is "
+        "almost always LLM_MAX_TOKENS above the model's completion cap rather "
+        "than an oversized prompt -- lower it"
+    ),
+    500: "the provider failed internally",
+    503: "the provider is overloaded",
+}
+"""What each status actually means to an operator, keyed by what the wire said.
+
+Deliberately keyed on **HTTP status rather than exception class**, for the same
+reason :func:`_is_quota_error` is: the class name is SDK-specific and the status
+is part of the protocol every compatible provider implements.
+"""
+
+
+def _unavailable_message(exc: Exception, model: str) -> str:
+    """Say what the provider did, without quoting what was sent to it.
+
+    "The model provider could not be reached" is wrong for every status in the
+    table above -- the provider was reached, and it answered. That phrasing sent
+    a real investigation to the network layer when the cause was a
+    ``max_tokens`` above the free tier's cap, and it cost three probes to find.
+
+    **The response body is never included**, which is why this is a lookup
+    rather than a passthrough: several SDKs echo the failing request back in the
+    error payload, and the request carries the API key. A status code and a
+    fixed sentence cannot leak a credential.
+    """
+    status = getattr(exc, "status_code", None)
+    hint = _STATUS_HINTS.get(status) if isinstance(status, int) else None
+    if hint is not None:
+        return f"{model!r}: HTTP {status} -- {hint}"
+    if isinstance(status, int):
+        return f"{model!r}: the provider returned HTTP {status}"
+    # No status at all: a DNS failure, a refused connection, a timeout. This is
+    # the only case where "could not be reached" is the truth.
+    return f"the model provider could not be reached ({type(exc).__name__})"
 
 
 def _is_quota_error(exc: Exception) -> bool:

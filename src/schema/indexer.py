@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import logging
 import re
+from collections.abc import Sequence
 from dataclasses import asdict, dataclass
 from typing import Any
 
@@ -31,7 +32,7 @@ from psycopg import Connection
 
 from core.exceptions import EmbeddingModelMismatchError
 from core.ports.embedder import Embedder
-from schema.models import SchemaSnapshot
+from schema.models import ForeignKey, SchemaSnapshot
 from schema.sensitivity import DEFAULT_SENSITIVE_PATTERNS
 from schema.serialization import serialize_column, serialize_table
 
@@ -161,7 +162,8 @@ class SchemaIndexer:
             # Join paths are not model-specific, so they are replaced wholesale
             # rather than upserted per model version.
             cur.execute("DELETE FROM agent_meta.foreign_keys WHERE dataset = %s", (self._dataset,))
-            for fk in snapshot.foreign_keys:
+            edges = _distinct_edges(snapshot.foreign_keys)
+            for fk in edges:
                 cur.execute(
                     _INSERT_FK_SQL,
                     (
@@ -180,7 +182,10 @@ class SchemaIndexer:
             columns=snapshot.column_count,
             elements_written=len(written_ids),
             elements_removed=removed,
-            foreign_keys=len(snapshot.foreign_keys),
+            # Edges written, not constraints read. A schema declaring one edge
+            # twice would otherwise report a number no row in the catalog
+            # supports -- and the report is what an operator checks the run by.
+            foreign_keys=len(edges),
         )
         # asdict, not vars: IndexReport uses slots=True and so has no __dict__.
         logger.info("schema catalog indexed", extra={"dataset": self._dataset, **asdict(report)})
@@ -250,6 +255,29 @@ class SchemaIndexer:
                 f"vectors but agent_meta.schema_elements.embedding is vector({expected}). "
                 f"Changing the retriever's width is a migration, not a config change."
             )
+
+
+def _distinct_edges(foreign_keys: Sequence[ForeignKey]) -> list[ForeignKey]:
+    """One row per join path, keeping the first constraint that declared it.
+
+    **A schema can declare the same edge twice.** Spider's `dog_kennels` does:
+    `dogs_fk_0` and `dogs_fk_1` are both `dogs.owner_id -> owners.owner_id`,
+    and the conversion reproduces both because they really are two constraints
+    in the source. The snapshot is right to carry them.
+
+    The catalog is not a list of constraints, though -- it answers *"what can
+    be joined to what"*, which is why `foreign_keys_unique` is on the edge and
+    not on the constraint name. Two rows for one edge would offer the model the
+    same join path twice, spending prompt budget to imply a second relationship
+    that does not exist.
+
+    First-seen wins, and introspection orders by constraint name, so which name
+    survives is deterministic rather than whatever the planner returned.
+    """
+    seen: dict[tuple[str, str, str, str], ForeignKey] = {}
+    for fk in foreign_keys:
+        seen.setdefault((fk.from_table, fk.from_column, fk.to_table, fk.to_column), fk)
+    return list(seen.values())
 
 
 def assert_catalog_ready(

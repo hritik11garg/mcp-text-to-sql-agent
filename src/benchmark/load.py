@@ -276,16 +276,32 @@ def command_index(args: argparse.Namespace, settings: LoaderSettings) -> int:
     **The catalog namespace is the schema name.** One database, one schema, one
     ``dataset`` -- rather than a second naming scheme that could disagree with
     the first and let one database's columns answer another's questions.
+
+    **An unconverted database is skipped; an unreadable one refuses.** They look
+    the same from here -- no tables come back either way -- and they need
+    opposite responses. Spider's archive ships 166 databases and a split
+    converts 20 of them, so "not converted" is the ordinary case and demanding a
+    hand-maintained list of names would make this command tedious enough to
+    script around. "Converted, and the read-only role cannot see it" is a broken
+    ``GRANT``, and indexing around it would build a catalog whose every hit
+    generates SQL the database then refuses. Telling them apart costs one
+    ``pg_namespace`` lookup.
     """
     found = readers.find_databases(args.databases)
     selected = _select(found, only=args.only, limit=args.limit)
 
     embedder = build_embedder(settings.retrieval)
     reports: list[dict[str, Any]] = []
+    skipped: list[str] = []
 
     with _connect(settings) as owner, _connect_readonly(settings) as readonly:
         for db_id in selected:
             schema = convert.schema_name_for(db_id, prefix=args.prefix)
+            if not _schema_exists(readonly, schema):
+                logger.debug("%s is not converted; nothing to index", db_id)
+                skipped.append(db_id)
+                continue
+
             # Introspection runs as the read-only role: it is the role the
             # agent will use, so a table it cannot SELECT must not be indexed.
             # Cataloguing one would produce retrieval hits that always generate
@@ -301,8 +317,10 @@ def command_index(args: argparse.Namespace, settings: LoaderSettings) -> int:
             snapshot = introspector.snapshot()
             if not snapshot.tables:
                 raise BenchmarkError(
-                    f"schema {schema!r} has no tables the read-only role can read. "
-                    f"Convert {db_id} first, or check the GRANT the conversion issued."
+                    f"schema {schema!r} exists but the read-only role can read no "
+                    f"table in it. That is a GRANT problem, not a missing conversion "
+                    f"-- re-run `convert --replace` for {db_id}, or check "
+                    f"DB_READONLY_ROLE."
                 )
 
             indexer = SchemaIndexer(owner, embedder, dataset=schema)
@@ -310,18 +328,36 @@ def command_index(args: argparse.Namespace, settings: LoaderSettings) -> int:
             reports.append({"db_id": db_id, "dataset": schema, **asdict(report)})
             logger.info("indexed %s -> %s (%d elements)", db_id, schema, report.elements_written)
 
-    _write_report(args.report, {"indexed": reports})
+    _write_report(args.report, {"indexed": reports, "skipped": skipped})
     print(
         json.dumps(
             {
                 "databases": len(reports),
+                "skipped": len(skipped),
                 "elements": sum(int(r["elements_written"]) for r in reports),
                 "model_version": embedder.model_version,
             },
             indent=2,
         )
     )
+    if not reports:
+        # Skipping everything and exiting 0 is how a typo'd --prefix becomes a
+        # clean pass that indexed nothing, followed by an eval that fails on
+        # every question for a reason naming neither.
+        logger.error(
+            "no database was indexed -- all %d were unconverted. Check --prefix "
+            "and that `benchmark.load convert` has run.",
+            len(skipped),
+        )
+        return EXIT_ERROR
     return EXIT_OK
+
+
+def _schema_exists(connection: psycopg.Connection[Any], schema: str) -> bool:
+    row = connection.execute(
+        "SELECT EXISTS (SELECT 1 FROM pg_namespace WHERE nspname = %s)", (schema,)
+    ).fetchone()
+    return bool(row and row[0])
 
 
 # --- splits ----------------------------------------------------------------

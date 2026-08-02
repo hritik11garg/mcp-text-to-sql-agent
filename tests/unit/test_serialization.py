@@ -8,7 +8,8 @@ from __future__ import annotations
 
 import pytest
 
-from schema.models import Column, Table
+from schema.indexer import _distinct_edges
+from schema.models import Column, ForeignKey, Table
 from schema.serialization import MAX_SERIALIZED_CHARS, serialize_column, serialize_table
 
 
@@ -98,3 +99,52 @@ class TestSerializeTable:
 
     def test_table_without_comment_or_columns(self) -> None:
         assert serialize_table(Table(name="empty")) == "empty (table)"
+
+
+class TestDistinctEdges:
+    """A schema can declare the same join twice, and Spider's `dog_kennels` does.
+
+    `dogs_fk_0` and `dogs_fk_1` are both `dogs.owner_id -> owners.owner_id`.
+    The conversion reproduces both because they really are two constraints; the
+    catalog stores join *paths*, which is why `foreign_keys_unique` is on the
+    edge and not on the constraint name. Found by indexing the real corpus,
+    where it aborted the run with a unique-violation on database six of twenty.
+    """
+
+    def edge(self, name: str, from_col: str = "owner_id") -> ForeignKey:
+        return ForeignKey(
+            from_table="dogs",
+            from_column=from_col,
+            to_table="owners",
+            to_column="owner_id",
+            constraint_name=name,
+        )
+
+    def test_one_edge_declared_twice_is_written_once(self) -> None:
+        kept = _distinct_edges([self.edge("dogs_fk_0"), self.edge("dogs_fk_1")])
+
+        assert len(kept) == 1
+
+    def test_the_first_constraint_name_survives(self) -> None:
+        # Introspection orders by constraint name, so first-seen is
+        # deterministic rather than whatever the planner happened to return.
+        kept = _distinct_edges([self.edge("dogs_fk_0"), self.edge("dogs_fk_1")])
+
+        assert kept[0].constraint_name == "dogs_fk_0"
+
+    def test_two_genuinely_different_edges_both_survive(self) -> None:
+        kept = _distinct_edges([self.edge("dogs_fk_0"), self.edge("dogs_fk_2", "breed_code")])
+
+        assert len(kept) == 2
+
+    def test_order_is_preserved(self) -> None:
+        # The catalog is read back in insertion order for the prompt, so a
+        # reshuffle here would change what the model sees between runs.
+        kept = _distinct_edges(
+            [self.edge("b", "size_code"), self.edge("a"), self.edge("c", "size_code")]
+        )
+
+        assert [fk.from_column for fk in kept] == ["size_code", "owner_id"]
+
+    def test_no_edges_is_not_an_error(self) -> None:
+        assert _distinct_edges([]) == []

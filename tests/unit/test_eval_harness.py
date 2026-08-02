@@ -15,7 +15,14 @@ from typing import Any
 
 import pytest
 
-from evals.artifacts import MAX_PERSISTED_ROWS, QuestionArtifact, RunManifest, RunStore
+from evals.artifacts import (
+    MAX_FILENAME_STEM,
+    MAX_PERSISTED_ROWS,
+    QuestionArtifact,
+    RunManifest,
+    RunStore,
+    artifact_filename,
+)
 from evals.comparison import Comparison, Verdict
 from evals.dataset import Question, Split, load_questions, write_questions
 from evals.recall import RecallResult, aggregate, compute_recall, extract_gold_elements
@@ -451,3 +458,83 @@ def _rows(table: dict[str, list[list[Any]]]) -> Any:
         return table[sql]
 
     return run
+
+
+class TestArtifactFilenames:
+    """A question id is benchmark data, not a path component.
+
+    Found by the first real corpus: Spider's ids are `spider:dev:00000`, and a
+    colon is illegal in a Windows filename, so the run died at question one.
+    """
+
+    def test_a_colon_does_not_reach_the_filesystem(self) -> None:
+        assert ":" not in artifact_filename("spider:dev:00000")
+
+    @pytest.mark.parametrize(
+        "hostile",
+        [
+            "../../../../etc/cron.d/payload",
+            r"..\..\windows\system32\x",
+            "/etc/passwd",
+            "..",
+            "C:relative-to-drive",
+        ],
+    )
+    def test_a_hostile_id_cannot_escape_the_directory(self, tmp_path: Path, hostile: str) -> None:
+        """The security half of the same fact. BIRD ships its own ids, and a
+        corpus is a file someone downloaded.
+
+        Asserted by resolving the path rather than by checking for substrings:
+        containment is the property that matters, and a substring check passes
+        for reasons that can stop being true."""
+        resolved = (tmp_path / artifact_filename(hostile)).resolve()
+
+        assert resolved.parent == tmp_path.resolve()
+
+    def test_two_ids_that_sanitise_alike_still_get_different_files(self) -> None:
+        """Sanitising alone is lossy -- `a:b` and `a/b` both become `a-b`.
+
+        One file for two questions means the run reports fewer questions than
+        it was given, and the difference looks like questions that were skipped.
+        """
+        assert artifact_filename("a:b") != artifact_filename("a/b")
+
+    def test_the_readable_part_survives(self) -> None:
+        # An artifact directory nobody can skim is an artifact directory nobody
+        # reads, which defeats the point of writing one file per question.
+        assert artifact_filename("spider:dev:00042").startswith("spider-dev-00042-")
+
+    def test_a_very_long_id_is_bounded(self) -> None:
+        name = artifact_filename("x" * 500)
+
+        assert len(name) <= MAX_FILENAME_STEM + len("-12345678.json")
+
+    def test_it_is_deterministic(self) -> None:
+        # Resume depends on writing the same question to the same file.
+        assert artifact_filename("spider:dev:1") == artifact_filename("spider:dev:1")
+
+
+class TestResumeReadsIdsFromContent:
+    def test_a_sanitised_filename_still_resumes(self, tmp_path: Path) -> None:
+        """Resume must not infer an id from a name that went through a
+        substitution -- that is how it comes to believe the wrong question is
+        done."""
+        store = RunStore(tmp_path, manifest())
+        store.start()
+        store.record(
+            QuestionArtifact(question_id="spider:dev:00000", question="?", gold_sql="SELECT 1")
+        )
+
+        assert RunStore(tmp_path, manifest()).resume() == {"spider:dev:00000"}
+
+    def test_an_unreadable_artifact_is_skipped_not_fatal(self, tmp_path: Path) -> None:
+        """Re-answering one question is the cheap, correct response to a file
+        written mid-crash. Refusing the whole resume is not."""
+        store = RunStore(tmp_path, manifest())
+        store.start()
+        store.record(QuestionArtifact(question_id="q1", question="?", gold_sql="SELECT 1"))
+        (tmp_path / manifest().run_id / "questions" / "truncated.json").write_text(
+            '{"question_id":', encoding="utf-8"
+        )
+
+        assert RunStore(tmp_path, manifest()).resume() == {"q1"}

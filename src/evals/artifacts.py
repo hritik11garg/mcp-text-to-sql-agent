@@ -24,6 +24,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import re
 import subprocess
 from dataclasses import asdict, dataclass, field, replace
 from datetime import UTC, datetime
@@ -160,6 +161,54 @@ class QuestionArtifact:
         )
 
 
+_UNSAFE_IN_FILENAME = re.compile(r"[^A-Za-z0-9_-]")
+"""Everything outside this set is replaced, **including the dot**.
+
+Keeping `.` would be harmless on the evidence -- `..` cannot traverse without a
+separator, and separators are already gone. But that is an argument a reader has
+to reconstruct, and a rule whose safety depends on a second rule holding is the
+kind that breaks when one of them is relaxed. Dropping the dot makes `..`
+unrepresentable rather than merely inert, at the cost of `bird.dev.1` reading as
+`bird-dev-1`.
+"""
+
+MAX_FILENAME_STEM = 80
+
+
+def artifact_filename(question_id: str) -> str:
+    """A legal, unique filename for one question's artifact.
+
+    **A question id is benchmark-supplied data, not a path component.** Spider's
+    ids are synthesised as ``spider:dev:00000``, and a colon is not a legal
+    filename character on Windows -- it is the drive separator and the alternate
+    data stream marker, so ``open()`` fails with ``Invalid argument`` and the
+    run dies at question one. That is how this was found: the first real corpus
+    to reach this code aborted immediately.
+
+    The security half is the same fact from the other side. BIRD ships its own
+    ids, and a corpus is a file an operator downloaded. An id of
+    ``../../../../etc/cron.d/x`` used verbatim as a path component writes
+    outside the results directory entirely *(CWE-22, path traversal;
+    Integrity)*. Substituting every character outside
+    :data:`_UNSAFE_IN_FILENAME`'s set removes the separators and the ``..``
+    both -- the same position :mod:`benchmark.acquire` already takes for
+    archive members.
+
+    **The hash suffix is what makes the substitution safe.** Sanitising alone is
+    lossy: ``a:b`` and ``a/b`` both become ``a-b``, so two questions would write
+    to one file, the run would report fewer questions than it was given, and the
+    difference would look like questions that were skipped. Eight hex characters
+    of the *original* id restore uniqueness, and truncating the readable stem
+    stays safe for the same reason.
+
+    Names are not reversible, so :meth:`RunStore.resume` reads ids from inside
+    the files instead of off their names.
+    """
+    stem = _UNSAFE_IN_FILENAME.sub("-", question_id)[:MAX_FILENAME_STEM]
+    digest = hashlib.sha256(question_id.encode("utf-8")).hexdigest()[:8]
+    return f"{stem}-{digest}.json"
+
+
 class RunStore:
     """One directory per run: a manifest, and a file per question.
 
@@ -218,13 +267,25 @@ class RunStore:
                 f"the directory if the earlier run is not worth keeping."
             )
 
-        done = frozenset(p.stem for p in self._questions.glob("*.json"))
+        # Read the id out of each file rather than off its name. The filename
+        # is sanitised (see `artifact_filename`) and therefore not reversible,
+        # and inferring an id from a name that has been through a substitution
+        # is how a resume comes to believe the wrong question is done.
+        done: set[str] = set()
+        for path in self._questions.glob("*.json"):
+            try:
+                done.add(str(json.loads(path.read_text(encoding="utf-8"))["question_id"]))
+            except (OSError, ValueError, KeyError):
+                # A file written mid-crash. Re-answering that question is the
+                # cheap, correct response; refusing the whole resume is not.
+                logger.warning("ignoring unreadable artifact %s", path.name)
+
         if done:
             logger.info("resuming %s: %d question(s) already recorded", self._root, len(done))
-        return done
+        return frozenset(done)
 
     def record(self, artifact: QuestionArtifact) -> None:
-        path = self._questions / f"{artifact.question_id}.json"
+        path = self._questions / artifact_filename(artifact.question_id)
         payload = asdict(artifact.bounded())
         path.write_text(json.dumps(payload, indent=2, default=str) + "\n", encoding="utf-8")
 

@@ -219,13 +219,25 @@ class TestQueryRunner:
     ) -> None:
         """A benchmark run is not a reason to relax the boundary.
 
-        It is the run most likely to execute a statement nobody has read.
+        It is the run most likely to execute a statement nobody has read, and
+        in two of three baselines nothing has validated what it is about to run.
+
+        **Two refusals, and which one fires first is not this runner's
+        business.** Migration 002 sets `default_transaction_read_only` on the
+        role, so the transaction refuses the write (`25006`) before privileges
+        are consulted at all; strip that and the missing `INSERT` grant refuses
+        it (`42501`). Asserting one exact class would make this test fail when
+        the *outer* of two controls is what caught it -- which is what happened
+        the first time it ran. `SQLExecutor._translate` already maps both to
+        `PermissionDeniedError` for exactly this reason.
         """
         runner = SchemaScopedQueryRunner(
             ro_connection, schema_for={"alpha": ALPHA}, statement_timeout_ms=10_000
         )
 
-        with pytest.raises(psycopg.errors.InsufficientPrivilege):
+        with pytest.raises(
+            (psycopg.errors.InsufficientPrivilege, psycopg.errors.ReadOnlySqlTransaction)
+        ):
             runner("INSERT INTO singer (id, name) VALUES (99, 'Mallory')", db_id="alpha")
 
     def test_an_oversized_result_is_refused(self, ro_connection: Conn, two_databases: None) -> None:

@@ -44,7 +44,19 @@ class UnanswerableQuestionError(LLMResponseError):
     A distinct type because the correct response differs from every other
     failure: retrying generation will not help, but retrieving more schema
     might. See docs/ml/PROMPTS.md.
+
+    **It carries the usage and the model**, because a refusal is a completed
+    call. The first real run made this concrete: half of 150 questions came back
+    ``CANNOT_ANSWER``, and with the cost attached only to the success path the
+    reported token bill was roughly half of what had actually been spent. A cost
+    figure that omits the refusals understates by exactly the questions worth
+    investigating.
     """
+
+    def __init__(self, message: str, *, usage: Usage | None = None, model: str = "") -> None:
+        super().__init__(message)
+        self.usage = usage or Usage()
+        self.model = model
 
 
 @dataclass(frozen=True, slots=True)
@@ -172,7 +184,9 @@ class SQLGenerator:
             raise LLMResponseError("the model returned an empty response")
         if sql.upper().startswith(CANNOT_ANSWER):
             raise UnanswerableQuestionError(
-                "the model reported that the retrieved schema cannot answer this question"
+                "the model reported that the retrieved schema cannot answer this question",
+                usage=response.usage,
+                model=response.model,
             )
 
         return Generated(sql=sql, usage=response.usage, model=response.model)
