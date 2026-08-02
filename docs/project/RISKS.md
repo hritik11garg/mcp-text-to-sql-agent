@@ -25,14 +25,18 @@ Scored `likelihood × impact`, both low/medium/high. Reviewed at each stage boun
 
 **What actually reduced this risk most** was building the servers *last*, over components that had been designed without any knowledge of MCP. Every bound already lived where all callers pass, so the servers had nothing left to enforce — which is what makes them thin rather than what makes them wrappers. A protocol wrapper is what you get when the protocol layer is where the thinking happens.
 
-**Residual.** The Stage 3 gate — re-run the eval, accuracy unchanged — is still open. The harness and the loader both exist now; what is missing is the pipeline wired into the answerer seam and a benchmark actually loaded. Thin adapters plus contract tests are an argument that behaviour is preserved; they are not a measurement of it.
+**Residual.** The Stage 3 gate — re-run the eval, accuracy unchanged — is still open. The harness, the loader and now a verified benchmark all exist; the one thing missing is the pipeline wired into the answerer seam. Thin adapters plus contract tests are an argument that behaviour is preserved; they are not a measurement of it, and the measurement is now blocked on exactly one connection.
 
 ### R-04 · Spider/BIRD → Postgres conversion corrupts the benchmark
 **Medium × High.** Dynamic vs static typing, identifier case-folding, date-as-text columns. A silent conversion difference invalidates every number downstream.
 
 **Mitigation — implemented.** Conversion is verified, not assumed: every gold query executes against both the SQLite original and the Postgres copy, result sets compared with the eval harness's *own* comparator ([ADR-022](../architecture/DECISIONS.md#adr-022--the-conversion-is-verified-by-the-eval-harnesss-own-comparator)). A database is verified only if **every** comparable query agrees, and `benchmark.load verify` exits 3 otherwise, so a CI step cannot pass while reporting the data is wrong. Gold errors — reference queries that fail on their own SQLite database — are counted separately and never blamed on the conversion.
 
-**Residual.** No archive has been put through it yet, so this is a control that is built and tested rather than one that has been exercised on real data. The dirty-data cases it is most needed for are in BIRD, which is also where it is least proven.
+**Exercised, and it caught things.** Spider dev has now been through it: 20 of 20 databases converted, **915 of 921 comparable gold results reproduced, 19 of 20 databases reproducing every one**. The control did its job in the way that matters — it found defects that were *not* obvious, including a foreign key joining two types in 35 of 769 cases and a column whose type was inferred from a sample that could not reach the one value that broke it. The full record is [BENCHMARKS.md](../ml/BENCHMARKS.md) §0, which keeps both measurements rather than only the better one.
+
+**Residual, and it is now specific rather than hypothetical.** Six questions still differ, all of them `wta_1.players.birth_date` — 20,144 integers and 518 empty strings, a column no static type is faithful to. That is the risk materialising in its mildest form: bounded, named, and reported instead of silent. It is unfixable without changing what the data *is*, so any number computed over `wta_1` carries it.
+
+**Still least proven where it matters most.** BIRD has not been downloaded. Spider is the *clean* benchmark, and mixed-storage columns like the one above are BIRD's common case rather than its rare one — so the residual above is a preview, not a total.
 
 ### R-05 · Self-correction burns budget without recovering
 **Medium × Medium.** The loop can look busy while never converging — a plausible-looking feature that adds cost and latency for nothing.

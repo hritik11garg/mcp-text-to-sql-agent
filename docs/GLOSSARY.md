@@ -168,6 +168,18 @@ SQLite's rule for what a declared column type *suggests*, given that SQLite does
 **Conversion verification**
 Executing every gold query against both the original SQLite database and the converted PostgreSQL copy and comparing the results, using the eval harness's own comparator. A conversion defect never raises; it lowers an accuracy number, and the investigation that follows looks at the model.
 
+**Conversion fidelity**
+The share of comparable gold queries the converted copy reproduces. It is the ceiling on any accuracy measured against that copy, which is why [BENCHMARKS.md](ml/BENCHMARKS.md) §0 records it before any accuracy row exists.
+
+**Dialect error**
+A gold query PostgreSQL rejects for a reason no conversion could fix — a `GROUP BY` rule SQLite does not enforce, or a comparison relying on type affinity. It would fail identically against a perfect conversion, so it is excluded from the denominator like a gold error, and the exclusion is reported.
+
+**Ambiguous order**
+Two engines returning the *same rows* in a different order because the gold `ORDER BY` never determined one — three employees tied at the same age. Counted as agreement, since the data is provably identical.
+
+**Undetermined limit**
+Two engines returning *different rows* because a `LIMIT` cut through a tie in the `ORDER BY` — several answers are equally correct and no comparison can score the question. Excluded from the denominator. **Not the same as an ambiguous order**, and the difference decides the counting: there the rows match, here they do not, so nothing about the data follows. Establishing it requires proving the key at the cut is genuinely tied — two engines can also disagree about a prefix because they *order the same key differently*, which is a conversion defect wearing the same symptoms.
+
 **Trust on first use**
 Recording an artifact's digest the first time it is seen, then requiring every later copy to match. Used for benchmark archives because neither Spider nor BIRD publishes a stable checksum. Safe only when it is *visible* — it requires a flag, logs a warning, and what it records is committed.
 

@@ -8,23 +8,23 @@ Working checklist: [TASKS.md](TASKS.md).
 
 ## Progress
 
-Percentages are checkbox counts, not confidence. **Stages have not been built in order**, and the two that jumped the queue each carry an explicit cost recorded in their section below.
+Percentages are checkbox counts from [TASKS.md](TASKS.md), not confidence — a half-done item counts half. **Stages have not been built in order**, and the two that jumped the queue each carry an explicit cost recorded in their section below.
 
 | Stage | Output | Status | % |
 |---|---|---|---|
 | 0 | Scaffolding — docs, deps, interpreter pin | ✅ Done | 100% |
-| 1 | **Core loop** — retrieval, generation, validation, execution, profiling, API, demo UI | 🚧 In progress | 58% |
-| 2 | **Eval harness** — comparison, Recall@k, artifacts, resumption, benchmark loading | 🚧 In progress | 71% |
-| 3 | **MCP servers + client refactor** | 🚧 In progress | 81% |
+| 1 | **Core loop** — retrieval, generation, validation, execution, profiling, API, demo UI | 🚧 In progress | 59% |
+| 2 | **Eval harness** — comparison, Recall@k, artifacts, resumption, benchmark loading | 🚧 In progress | 74% |
+| 3 | **MCP servers + client refactor** | 🚧 In progress | 84% |
 | 4 | **Agent layer** — decomposition, session memory, self-correction | ⬜ Not started | 0% |
 | 5 | **Fine-tuned schema linker** | ⬜ Not started | 0% |
 | 6 | **Hardening** — limits, tracing, tests | ⬜ Not started | 0% |
 
 **What is genuinely blocking, in order:** wiring the pipeline into the harness's answerer seam (blocks every number in Stages 2, 3 and 5 — the loader now exists, so this is one connection rather than a slice of work), then the HTTP API and the demo UI it serves (blocks the Stage 1 close-out and any visual demo), then the agent loop.
 
-**Stage 1 dropped from ~75% to 58%** when the demo UI was added to its scope. The percentage got worse because the plan got more honest, which is the direction it should move.
+**Stage 1 dropped from ~75% to 59%** when the demo UI was added to its scope. The percentage got worse because the plan got more honest, which is the direction it should move.
 
-**Stage 1 is not "the core loop works end to end".** Every component is built and tested; nothing has been run against a real dataset from a clean checkout. The loader that would produce one now exists — what is missing is that no benchmark archive has been put through it, and that the pipeline is not yet connected to the harness. That distinction is the difference between the percentage above and a working demo.
+**Stage 1 is not "the core loop works end to end".** Every component is built and tested, and there is now a real dataset in the database — Spider's dev split, converted and verified. What is still missing is the pipeline connected to the harness, so no question has been answered by the system itself from end to end. That distinction is the difference between the percentage above and a working demo, and it is now a single connection wide.
 
 ---
 

@@ -1,6 +1,6 @@
 # Evaluation
 
-> **Status: the harness is built; no benchmark is loaded yet.** Result comparison, Recall@k, the failure taxonomy, per-question artifacts and resumable runs ship in `src/evals/` and are covered by 84 tests. What is missing is a dataset to point them at, and a pipeline wired into the answerer seam — `python -m evals.run` refuses with that message rather than reporting 0%. **No results appear here until both exist.** Results live in [BENCHMARKS.md](BENCHMARKS.md); this page defines what the numbers mean.
+> **Status: the harness is built and the benchmark is loaded; the pipeline seam is still open.** Result comparison, Recall@k, the failure taxonomy, per-question artifacts and resumable runs ship in `src/evals/` and are covered by 84 tests. Spider's dev split is converted and verified — 19 of 20 databases reproduce every gold result (§2). What is still missing is the pipeline wired into the answerer seam; `python -m evals.run` refuses with that message rather than reporting 0%. **No accuracy results appear here until it exists.** Results live in [BENCHMARKS.md](BENCHMARKS.md); this page defines what the numbers mean.
 
 The eval harness is Stage 2 — deliberately before the MCP refactor, the agent layer, and the fine-tune. Without a baseline, every later change is an unfalsifiable claim of improvement.
 
