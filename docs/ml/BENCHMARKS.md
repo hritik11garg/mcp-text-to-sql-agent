@@ -42,7 +42,7 @@ Fidelity is `(match + ambiguous_order) / (questions − gold_error − transpile
 | Date | Commit | Dataset | Databases | Questions | Fidelity | Excluded | Verified | Command |
 |---|---|---|---|---|---|---|---|---|
 | 2026-08-02 | `5551fb5` | Spider `dev.json`, digest `00636695…c85b121b` | 20 / 20 converted | 1034 | **912 / 937 = 97.3%** — 896 match, 16 ambiguous order, 25 mismatch, 0 postgres error | 97 dialect error (56 `GROUP BY`, 41 type affinity) | **10 / 20 databases** | `python -m benchmark.load verify --databases data/spider/spider_data/database --questions data/spider/spider_data/dev.json --benchmark spider --prefix spider_` |
-| 2026-08-02 | `3242dc1` | Spider `dev.json`, digest `00636695…c85b121b` | 20 / 20 converted | 1034 | **915 / 921 = 99.3%** — 899 match, 16 ambiguous order, 6 mismatch, 0 postgres error | 97 dialect error · 16 undetermined limit | **19 / 20 databases** | *as above* |
+| 2026-08-02 | `579e312` | Spider `dev.json`, digest `00636695…c85b121b` | 20 / 20 converted | 1034 | **915 / 921 = 99.3%** — 899 match, 16 ambiguous order, 6 mismatch, 0 postgres error | 97 dialect error · 16 undetermined limit | **19 / 20 databases** | *as above* |
 
 **The two rows differ by diagnosis, not by conversion.** Nothing about the data changed between them. 3 of the 25 mismatches were SQLite's case-insensitive `LIKE`, a transpilation gap; 16 were `LIMIT` cutting a tie, which is a question with no single correct answer and now leaves the denominator. Both rows stay, per the append-only rule — a number that improved because the measurement got more accurate is exactly the kind of change worth being able to see.
 
