@@ -125,12 +125,14 @@ That creates the `agent_meta` schema, the pgvector extension and the HNSW index,
 Verify the install — the security suite is the one that matters, and it passes by being **refused**:
 
 ```powershell
-pytest                    # 1062 tests; integration, security and contract need Docker
-pytest -m security        # the read-only containment suite, on its own
+pytest                    # ~1,070 tests; integration, security and contract need Docker
+pytest -m security        # the containment suite, on its own — 206 tests
 ruff check . ; mypy
 ```
 
 The Postgres-backed tests skip cleanly without a running Docker daemon. In CI that is not good enough: *skipped* and *passed* look alike, so the pipeline must fail if the security suite did not actually run.
+
+**There is a third state, and it is worse than either.** A test carrying no marker is not skipped — it is silently *deselected* by any `-m` run and reported by nothing. Thirteen files had drifted that way, including the archive-extraction and DSN-redaction suites, so the security gate was running 156 tests while believing it covered the layer. Layer markers are now derived from the directory a test lives in (`tests/conftest.py`), because `tests/security/` **is** the security layer and a hand-written marker can disagree with the path while a derived one cannot. A test outside the known layers fails collection rather than disappearing.
 
 **A container runtime is needed for the tests, not to run the project.** `testcontainers` talks to any Docker-compatible socket, so **Podman**, **Rancher Desktop**, **colima** or plain **Docker Engine** all work — worth knowing because Docker Desktop is free for personal use but its licence requires a paid subscription for larger commercial organisations, and it is the one dependency here that is not free for everybody. Running the project itself needs a PostgreSQL 16 with pgvector from anywhere: a system install, a container, or a hosted free tier.
 
@@ -188,6 +190,8 @@ Directories marked *(stub)* exist with a docstring stating which stage fills the
 │   ├── generation/             # sql_gen prompt + generator (pure prompt building)
 │   ├── validation/             # sqlglot AST stages + EXPLAIN, no I/O below stage 5
 │   ├── execution/              # row limits, timeouts, audit trail
+│   ├── answering/              # retrieve → generate, shared by the eval and the API
+│                               # so a benchmark number describes the served system
 │   ├── profiling/              # column statistics under a disclosure budget
 │   ├── mcp_servers/            # four servers + the shared error contract
 │   ├── evals/                  # comparison, Recall@k, artifacts, resumable runs

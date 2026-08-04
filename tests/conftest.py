@@ -39,6 +39,52 @@ RO_PASSWORD = "test-ro-password"  # ephemeral container, never a real credential
 
 type Conn = psycopg.Connection[tuple[object, ...]]
 
+TEST_LAYERS = frozenset({"unit", "integration", "security", "contract", "e2e"})
+"""The directories under ``tests/``, which are also the marker names."""
+
+
+# --- layer markers ---------------------------------------------------------
+
+
+def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
+    """Apply each test's layer marker from the directory it lives in.
+
+    Markers were applied by hand, per module, and **13 files had drifted
+    without one** -- including two under ``tests/security/``: the archive
+    extraction suite and the DSN-redaction suite for the credential leak in
+    SECURITY.md section 14.2.10. Both are release-gate tests.
+
+    That is not a cosmetic gap. `pytest -m security` is what CI is told to run
+    as a gate, and an unmarked test is silently deselected, so the gate reports
+    green over tests it never ran. The README already warns that *skipped* and
+    *passed* look alike; this is the same failure one level up, where the test
+    is not even skipped -- it is invisible.
+
+    Deriving the marker from the path rather than re-adding 13 declarations,
+    because ``tests/security/`` **is** the security layer. A hand-written
+    marker can disagree with the directory; a derived one cannot. Modules that
+    already declare ``pytestmark`` keep it -- a duplicate marker is harmless,
+    and removing them would make the layer invisible when reading one file.
+    """
+    for item in items:
+        layer = _layer_of(item)
+        if layer is None:
+            raise pytest.UsageError(
+                f"{item.nodeid} is not under any of {sorted(TEST_LAYERS)}. "
+                f"Every test belongs to exactly one layer -- a test outside them "
+                f"is one no marker-selected run, including the security gate, "
+                f"would ever execute."
+            )
+        item.add_marker(getattr(pytest.mark, layer))
+
+
+def _layer_of(item: pytest.Item) -> str | None:
+    try:
+        relative = Path(str(item.fspath)).resolve().relative_to(REPO_ROOT / "tests")
+    except ValueError:
+        return None
+    return next((part for part in relative.parts if part in TEST_LAYERS), None)
+
 
 # --- environment isolation -------------------------------------------------
 

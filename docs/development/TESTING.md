@@ -166,6 +166,12 @@ Coverage is a floor, not a goal. The security suite would contribute a handful o
 | E2E | Fake LLM |
 | Smoke eval | ~20 questions, real LLM, **release only** |
 
+**Each row above selects by marker, which is why markers cannot be optional.** An unmarked test is not skipped — it is *deselected*, so it runs in none of these rows and appears in no report. That drifted: thirteen files had no marker, two of them under `tests/security/`, and the security row was gating on **156 of 206** tests while reporting green.
+
+Markers are therefore derived from the directory in `tests/conftest.py` rather than declared per module: `tests/security/` **is** the security layer, a hand-written marker can disagree with the path, and a derived one cannot. A test outside the known layers fails collection instead of vanishing. Layers overlap where they should — a security test needing a real database carries both `security` and `integration`, so it runs in both rows.
+
+The general rule this is an instance of: **a selection mechanism needs a way to fail, or "nothing matched" and "everything passed" are the same output.**
+
 ## 12. What is not tested
 
 Stated so the gap is deliberate rather than accidental:
