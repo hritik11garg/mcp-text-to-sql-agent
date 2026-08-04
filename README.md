@@ -125,7 +125,7 @@ That creates the `agent_meta` schema, the pgvector extension and the HNSW index,
 Verify the install — the security suite is the one that matters, and it passes by being **refused**:
 
 ```powershell
-pytest                    # 958 tests; integration, security and contract need Docker
+pytest                    # 1062 tests; integration, security and contract need Docker
 pytest -m security        # the read-only containment suite, on its own
 ruff check . ; mypy
 ```
@@ -162,7 +162,7 @@ Still planned:
 
 ## Folder structure
 
-Directories marked *(stub)* exist with a docstring stating which stage fills them, so the intended shape is visible without pretending the code is there.
+Directories marked *(stub)* exist with a docstring stating which stage fills them, so the intended shape is visible without pretending the code is there. Ones marked *(planned)* do **not** exist yet — they are in this tree to show where something will go, and the distinction is drawn because a listing that implies a directory is present when it is not is the same defect as a doc claiming work that was not done.
 
 ```
 .
@@ -194,7 +194,9 @@ Directories marked *(stub)* exist with a docstring stating which stage fills the
 │   ├── benchmark/              # acquire, SQLite→Postgres, verify the conversion, splits
 │   ├── agent/                  # tools/list discovery; planner and memory — Stage 4
 │   └── api/                    # (stub) FastAPI + SSE
-├── web/                        # (stub) React + TypeScript demo UI — Stage 1
+├── web/                        # (planned) React + TypeScript demo UI — Stage 1
+├── .github/
+│   └── pull_request_template.md
 ├── tests/
 │   ├── unit/                   # no I/O, fakes throughout
 │   ├── integration/            # real Postgres via testcontainers
@@ -270,7 +272,9 @@ Each document is **filled in as its stage lands** — one that would otherwise c
 
 ## Future improvements
 
-Ideas deliberately out of scope for v1 are tracked in [FUTURE.md](docs/project/FUTURE.md) — GraphRAG over the schema, hybrid retrieval, a fine-tuned generator, distributed execution, result caching.
+Ideas deliberately out of scope for v1 are tracked in [FUTURE.md](docs/project/FUTURE.md) — GraphRAG over the schema, hybrid retrieval, a fine-tuned generator, result caching.
+
+It also carries the **scale and concurrency path**, which is worth reading before deploying this for more than one person: everything in v1 is bounded for a *single caller*, deliberately, and that section records what changes when there is more than one — a real connection pool, two-tier interactive/batch execution, per-user admission control, and why tenant isolation has to reach the retrieval layer rather than stopping at the database role.
 
 ## License
 
