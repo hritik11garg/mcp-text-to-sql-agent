@@ -37,6 +37,7 @@ from typing import Any, Protocol, Self
 
 from psycopg import Connection
 
+from answering import QuestionAnswerer, retrieved_columns
 from core.exceptions import LLMError, RetrievalError
 from core.ports.embedder import Embedder
 from core.settings import ExecutionSettings, RetrievalSettings
@@ -374,12 +375,41 @@ class SchemaScopedQueryRunner:
         return [list(row) for row in fetched]
 
 
+@dataclass(frozen=True, slots=True)
+class _ScopeContext:
+    """Adapts a :class:`DatabaseScope` to the shared answerer's ``ContextSource``.
+
+    The baseline decision -- retrieve, or hand over the whole schema -- lives
+    here because it is an *eval* concept. The answering path only needs a
+    question in and a context out, and keeping the baseline out of it is what
+    stops the API growing a `full-schema` mode it has no use for.
+    """
+
+    scope: DatabaseScope
+    baseline: Baseline
+    top_k: int | None
+
+    def context(self, question: str) -> RetrievalResult:
+        if self.baseline is Baseline.FULL_SCHEMA:
+            return self.scope.full_schema
+        if self.scope.retriever is None:  # pragma: no cover - guarded at construction
+            raise RetrievalError("retrieval baseline selected without a retriever")
+        return self.scope.retriever.search(question, k=self.top_k)
+
+
 class PipelineAnswerer:
     """Retrieval, generation and optionally validation, per question.
 
     Implements the runner's ``Answerer`` protocol: it returns an
     :class:`~evals.runner.Attempt` rather than raising, because a failure to
     produce SQL is a *result* for a benchmark and belongs in the taxonomy.
+
+    Retrieval and generation themselves are delegated to
+    :class:`~answering.QuestionAnswerer`, which the HTTP API also uses. That is
+    the point: if the two composed those steps even slightly differently, the
+    measured accuracy would describe a system nobody queries. What stays here
+    is everything a benchmark needs and a request does not -- the baseline, the
+    per-database scope, and flattening every failure into a category.
 
     Args:
         scopes: Resolves the per-database components.
@@ -411,19 +441,25 @@ class PipelineAnswerer:
         except (RetrievalError, ValueError) as exc:
             return Attempt(error_type="scope_unavailable", error_message=str(exc))
 
+        answerer = QuestionAnswerer(
+            _ScopeContext(scope, self._baseline, self._top_k),
+            self._generator,
+        )
+
+        # The phases are called separately rather than via `candidate()`,
+        # because every failure below still has to report what was retrieved:
+        # recall is a data point whether or not the model went on to answer,
+        # and dropping it on failure would measure recall and accuracy over
+        # different question sets.
         try:
-            context = self._context(scope, question.question)
+            context = answerer.retrieve(question.question)
         except RetrievalError as exc:
             return Attempt(error_type="retrieval_failed", error_message=str(exc))
 
-        retrieved = tuple(
-            (element.table, element.column) for element in context.elements if element.column
-        )
+        retrieved = retrieved_columns(context)
 
         try:
-            generated = self._loop.run_until_complete(
-                self._generator.generate_detailed(question.question, context)
-            )
+            candidate = self._loop.run_until_complete(answerer.generate(question.question, context))
         except UnanswerableQuestionError as exc:
             # The model said the schema cannot answer this. A distinct outcome
             # from a malformed answer: retrying generation will not help, and
@@ -459,17 +495,17 @@ class PipelineAnswerer:
             return Attempt(
                 sql=sql,
                 retrieved=retrieved,
-                input_tokens=generated.usage.input_tokens,
-                output_tokens=generated.usage.output_tokens,
-                answering_model=generated.model,
+                input_tokens=candidate.usage.input_tokens,
+                output_tokens=candidate.usage.output_tokens,
+                answering_model=candidate.model,
                 **rest,
             )
 
         if scope.validator is None:
-            return answered(generated.sql)
+            return answered(candidate.sql)
 
         self._scopes.activate(scope)
-        result = scope.validator.validate(generated.sql)
+        result = scope.validator.validate(candidate.sql)
         if not result.valid:
             # A `None` sql is what stops the runner executing it, which is the
             # entire behavioural difference this baseline measures. The text is
@@ -482,7 +518,7 @@ class PipelineAnswerer:
                 validation_attempts=1,
             )
 
-        return answered(generated.sql, validation_attempts=1)
+        return answered(candidate.sql, validation_attempts=1)
 
     def _context(self, scope: DatabaseScope, question: str) -> RetrievalResult:
         if self._baseline is Baseline.FULL_SCHEMA:
