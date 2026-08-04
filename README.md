@@ -215,16 +215,18 @@ Directories marked *(stub)* exist with a docstring stating which stage fills the
 
 ## Benchmarks
 
-> **TBD — Stage 2 onward.** No accuracy numbers are claimed until the pipeline is wired to the eval harness. Every measurement is recorded in [BENCHMARKS.md](docs/ml/BENCHMARKS.md) with the commit it came from.
+> **First accuracy numbers recorded — and they are smoke rows, not a benchmark result.** Every accuracy figure below covers **150 of 921 scoreable questions**, which in file order is **3 of 20 databases**. A full-split run does not exist yet. Each is single-database execution accuracy, *not* Spider's stricter Test Suite Accuracy, and 113 questions are excluded with reasons. Every measurement is recorded in [BENCHMARKS.md](docs/ml/BENCHMARKS.md) with the commit and command it came from; nothing appears here that is not traceable to a row there.
 
 | Metric | Baseline | Current | Stage |
 |---|---|---|---|
 | **Conversion fidelity** (Spider dev, 1034 questions) | — | **99.3%** — 915 / 921, 19 of 20 databases fully verified | 2 |
-| Execution accuracy (held-out Spider/BIRD subset) | TBD | TBD | 2 |
-| Schema-linking Recall@5 | TBD | TBD | 5 |
-| Schema-linking Recall@10 | TBD | TBD | 5 |
-| Invalid-query rate | TBD | TBD | 4 |
+| Execution accuracy (Spider dev, 3 of 20 DBs, `k=30`) | 42.7% @ `k=10` | **72.7%** — single model, `retrieval-only` | 2 |
+| Schema-linking Recall@5 | — | **0.889** (R@1 0.605, R@10 0.960, R@20 1.000) | 5 |
+| Schema-linking Recall@10 | — | **0.960** — the fine-tune's target is R@1, not coverage | 5 |
+| Invalid-query rate | 20.7% | **2.7%** — pre-correction; the retry loop is Stage 4 | 4 |
 | Multi-step task success | TBD | TBD | 4 |
+
+**Recall@20 = 1.0 bounds what Stage 5 can buy on Spider.** A retriever that already finds every needed element by rank 20 can only be improved into finding them *sooner* — which is the argument for BIRD, and the null result [R-01](docs/project/RISKS.md) predicted the shape of.
 
 ## Documentation
 

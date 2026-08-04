@@ -68,6 +68,43 @@ Cut reasons: `scope` (good, doesn't fit 6 weeks) · `unproven` (needs a measurem
 
 ---
 
+## Scale and concurrency
+
+Everything in v1 is bounded for a **single caller**. That is a deliberate consequence of the deployment model rather than an oversight, and this section records what changes when there is more than one.
+
+**The deployment shape is already decided, and it is not per-machine.** A desktop install needs `DATABASE_RO_URL` and `LLM_API_KEY` on every workstation, which distributes the credentials the entire containment argument in [../operations/SECURITY.md](../operations/SECURITY.md) rests on, with no revocation story and an audit table written by clients nobody controls. The intended shape is one centrally deployed service holding the credentials, reached over HTTP/SSE — which is why [../architecture/MCP.md](../architecture/MCP.md) §2 puts Streamable HTTP with the API layer, "which is where a network-reachable endpoint first needs authentication anyway." The stdio transport keeps one legitimate audience: a developer pointing the tools at their own database from their own MCP host. Both configurations run the same code because the tool boundary is a protocol ([ADR-003](../architecture/DECISIONS.md#adr-003--mcp-for-the-tool-boundary)).
+
+### A real connection pool
+`blocked` · Hand each concurrent query its own connection.
+
+**Why not v1.** No concurrent caller exists — the API layer is Stage 1 and the MCP servers are stdio, one subprocess per client. The seam is cut and waiting: `SQLExecutor` depends on `ConnectionSource`, whose only method is `connection() -> AbstractContextManager[Connection]`, which is exactly `psycopg_pool.ConnectionPool.connection()`'s signature. Introducing a pool is a wiring change rather than a rewrite, and until then "a pool with one client is machinery without a job." **Until it lands, two concurrent `execute_sql` calls would contend on a single connection** — a real bug, currently unreachable.
+
+### Two-tier execution: interactive and batch
+`scope` · Route a query to a background job when its planned cost says it cannot finish interactively.
+
+**Why not v1.** v1 has one tier and hard ceilings — `STATEMENT_TIMEOUT_CEILING_MS` 60 s, `AGENT_TIMEOUT_MS` 120 s, both clamps rather than defaults — so an hour-long join cannot happen. That is correct for a synchronous API, where one slow query holds a pool slot and a handful of them are an outage. It is also insufficient for real analytics, where some questions are legitimately slow and "narrow your query" is not always an available answer.
+
+**The routing signal already exists and is currently thrown away.** `SQLValidator` computes `estimated_cost` from `EXPLAIN` on every query and uses it only to *reject* — `cost_exceeded` above `MAX_ESTIMATED_COST`. The same number routes: below the ceiling, today's synchronous path; above it, offer a job rather than a refusal, run it on a **separate worker pool** with its own much larger timeout, and notify on completion. The separate pool is the point — it is what stops one user's long job from consuming an interactive slot.
+
+There is a third answer worth building before either: the plan is already parsed, so the agent can say *"this is a full scan of 40M rows because there is no index on `orders.created_at`"*, which is more useful than running it or refusing it.
+
+### Per-user admission control
+`scope` · Cap in-flight queries and request rate per user, not just globally.
+
+**Why not v1.** No users to distinguish. It is nonetheless **the highest-value concurrency control**, above any amount of pool tuning: total simultaneous queries is `replicas × DB_POOL_MAX_SIZE`, and with no per-user cap one client firing twenty questions holds every slot. A per-user in-flight limit converts "one user degrades everyone" into "one user degrades themselves." [../architecture/API.md](../architecture/API.md) already specifies the `429 rate_limited` response and [../operations/DEPLOYMENT.md](../operations/DEPLOYMENT.md) has the unchecked box; neither is built.
+
+### Provider-side rate budgeting
+`unproven` · Treat the model provider's tokens-per-minute as the scarce resource and schedule against it.
+
+**Why not v1.** Because it was assumed to be a scale problem and turned out to be a *v1* problem — measured, not predicted. The eval harness is sequential and single-user, and it still hit HTTP 429s against a free tier's daily cap. With concurrent users the provider saturates well before ten database connections do, and the fallback chain then changes *which model answers*, which [../ml/BENCHMARKS.md](../ml/BENCHMARKS.md) §1 shows changes accuracy by tens of points. Any concurrency design has to budget the provider, not just the pool — and [../operations/PERFORMANCE.md](../operations/PERFORMANCE.md) §4 currently asks only about the pool.
+
+### Role-level resource limits
+`scope` · Set the timeout on the database role as well as the session.
+
+**Why not v1.** `ALTER ROLE sql_agent_ro SET statement_timeout = '60s'` means an application bug cannot exceed the ceiling either. Defence in depth, and the pattern is already proven here: migration 002 sets `default_transaction_read_only` on the role, and a Stage 2 test confirmed it fires *ahead* of the privilege check — two independent controls, outer one first. Cut from v1 only because the session-level clamp is sufficient for a single caller.
+
+---
+
 ## Agent
 
 ### Clarifying-question loop
@@ -103,6 +140,13 @@ Cut reasons: `scope` (good, doesn't fit 6 weeks) · `unproven` (needs a measurem
 `scope` · Redact PII columns from retrieval and results.
 
 **Why not v1.** Same reason, and it interacts with retrieval: a masked column should arguably not be retrievable at all, or the model will write SQL against something it cannot read.
+
+### Tenant-aware retrieval
+`scope` · Scope the schema catalog to what the caller is entitled to see, not just what they may execute against.
+
+**Why not v1.** Single-tenant, so there is nothing to scope to. Recording it because it is the part of multi-tenancy that is easy to miss: **the catalog is itself a disclosure surface.** Row-level security and per-tenant roles constrain *execution*, and retrieval happens before execution — so a user can learn that a `salaries` table exists, and what its columns are called, from a search that never runs a query. The model will describe it helpfully before anything refuses it.
+
+Isolation therefore has to reach the retrieval layer, which is a filter on `schema_elements` and an authorization input the search path does not currently take. Much cheaper to design now than to retrofit: `dataset` is already the scoping column, and [../operations/SECURITY.md](../operations/SECURITY.md) §14.2.10 already notes that if `dataset` ever becomes a per-request value it turns into a tenant-isolation control and needs authorization behind it. This is that control, named.
 
 ### Query approval workflow
 `scope` · Human review before expensive or sensitive queries execute.
@@ -144,3 +188,12 @@ If the project continued, roughly in order of value per unit of effort:
 3. **Query plan feedback** — natural extension of the self-correction loop that already exists.
 4. **Cross-encoder reranking** — *if and only if* A5 shows retrieval precision is the bottleneck.
 5. **Visualization** — cheap, high demo value.
+
+If instead the goal is to put this in front of more than one person, the order is different and mostly cheaper:
+
+1. **A real connection pool** — the seam exists; without it, concurrency is a correctness bug rather than a performance one.
+2. **Per-user admission control** — largest effect per line of code, and it is what makes the service *operable* under load rather than merely fast.
+3. **Tenant-aware retrieval** — decide before the catalog schema hardens further, because retrofitting an authorization filter is much more expensive than designing one.
+4. **Two-tier execution** — the routing signal is already computed; this is mostly a worker and a job table.
+
+Note that only the last is about making anything faster. The first three are about a slow or hostile query staying one person's problem.

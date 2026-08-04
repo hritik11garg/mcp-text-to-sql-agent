@@ -15,6 +15,7 @@ from typing import Any, ClassVar
 
 import pytest
 
+from evals import artifacts as artifacts_module
 from evals.artifacts import (
     MAX_FILENAME_STEM,
     MAX_PERSISTED_ROWS,
@@ -22,6 +23,7 @@ from evals.artifacts import (
     RunManifest,
     RunStore,
     artifact_filename,
+    current_commit,
 )
 from evals.comparison import Comparison, Verdict
 from evals.dataset import Question, Split, load_questions, write_questions
@@ -691,3 +693,51 @@ class TestModelMixIsVisible:
 
         assert summary.answered_by == {}
         assert summary.single_model is True
+
+
+class TestCommitProvenance:
+    """The commit field is the reproducibility record, so it must not overstate.
+
+    Found by reading the five recorded runs back: every one was made while its
+    fixes were still uncommitted, so every manifest names the commit *before*
+    the code that produced the number.
+    """
+
+    def test_a_dirty_tree_is_marked(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(
+            artifacts_module,
+            "_git",
+            lambda *args: "abc1234\n" if args[0] == "rev-parse" else " M src/x.py\n",
+        )
+
+        assert current_commit() == "abc1234-dirty"
+
+    def test_a_clean_tree_is_not_marked(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(
+            artifacts_module,
+            "_git",
+            lambda *args: "abc1234\n" if args[0] == "rev-parse" else "",
+        )
+
+        assert current_commit() == "abc1234"
+
+    def test_an_unknown_status_does_not_pass_as_clean(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Failing the status check must not silently downgrade to a bare hash.
+
+        A bare hash is a positive claim that the tree was clean, which is the
+        one claim this function exists to stop making without evidence.
+        """
+        monkeypatch.setattr(
+            artifacts_module,
+            "_git",
+            lambda *args: "abc1234\n" if args[0] == "rev-parse" else None,
+        )
+
+        assert current_commit() == "abc1234-unverified"
+
+    def test_no_repository_is_unknown(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(artifacts_module, "_git", lambda *args: None)
+
+        assert current_commit() == "unknown"

@@ -15,7 +15,7 @@ Each row records:
 | Field | Why |
 |---|---|
 | Date | Ordering |
-| Commit | The only way to reproduce it |
+| Commit | The only way to reproduce it. **The commit that contains the code that ran** — which is not always what the run's own manifest says, see below |
 | Split | `dev` / `held-out` / `smoke` — **never mix them in one table** |
 | Dataset | Spider / BIRD / both, with subset size |
 | Metric | `execution accuracy (single DB)` unless stated. **Not** Spider's official Test Suite Accuracy, which is stricter — see [EVALUATION.md](EVALUATION.md) §2 |
@@ -30,6 +30,10 @@ Each row records:
 | Command | The exact invocation |
 
 A row missing any of these is not a benchmark; it is an anecdote.
+
+**On the commit field, and why the rows here differ from the manifests.** `manifest.json` records `git rev-parse HEAD` at the moment the run started. Every run in §1 was made from a working tree whose fixes were not yet committed, so each manifest names the *parent* of the commit that reproduces it — `063502d` where the table says `38f6457`, and `38f6457` where it says `12cd3d5`. The table is the useful attribution: a reader wanting to reproduce a number needs the commit containing the code, not the commit it was written on top of.
+
+Runs from this point forward mark it themselves — `current_commit()` appends `-dirty` when the tree has uncommitted changes, and `-unverified` when the check could not run. A bare hash is now a positive claim that the tree was clean, which is what it always read as and never guaranteed.
 
 ---
 

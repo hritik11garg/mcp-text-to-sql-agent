@@ -117,9 +117,11 @@ Scored `likelihood × impact`, both low/medium/high. Reviewed at each stage boun
 ### R-17 · Documentation drifts from implementation
 **High × Medium.** 28 documents written before the code is a lot of surface to keep honest.
 
-**Mitigation.** Per-stage fill-in with explicit `TBD — Stage N` markers ([ADR-012](../architecture/DECISIONS.md#adr-012--documentation-written-per-stage-not-up-front)), so a `TBD` is a real signal rather than filler. Stage close-out checklists include the doc updates. The PR template requires them.
+**Mitigation.** Per-stage fill-in with explicit `TBD — Stage N` markers ([ADR-012](../architecture/DECISIONS.md#adr-012--documentation-written-per-stage-not-up-front)), so a `TBD` is a real signal rather than filler. Stage close-out checklists include the doc updates. The PR template at `.github/pull_request_template.md` requires them.
 
-**The honest read:** this risk is real and partly accepted. A document describing intent that the code later contradicts is worse than no document. The `TBD` markers and stage gates are what keep it manageable.
+**Where the mitigation is now enforced rather than asked for:** `tests/unit/test_settings.py` fails if a setting exists in code and not in `.env.example` and CONFIG.md. That is the only part of this risk that is *checkable*, and it was added after an audit found 18 of 50 settings undocumented — the drift happened, silently, exactly as this risk predicted.
+
+**The honest read:** this risk is real and partly accepted, and it has now materialised three times — the undocumented settings, a README claiming no accuracy numbers existed while a table above it reported them, and this very sentence having described the PR template as a control while nothing populated one. A document describing intent that the code later contradicts is worse than no document. The `TBD` markers and stage gates keep it manageable; only assertions keep it honest, and most of this surface cannot be asserted.
 
 ---
 

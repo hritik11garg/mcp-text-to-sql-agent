@@ -90,6 +90,8 @@ Rules:
 
 Even solo, open a PR per branch — it forces a diff review before merge.
 
+Committed at [`.github/pull_request_template.md`](.github/pull_request_template.md), so GitHub prefills it rather than relying on anyone copying the block below. It was a copy-paste block for long enough that [RISKS.md](docs/project/RISKS.md) came to describe it as a control that "requires" its checklist, which it could not do while nothing populated it.
+
 ```markdown
 ## What
 One-paragraph summary of the change.

@@ -47,7 +47,20 @@ All configuration comes from environment variables, loaded and validated by `pyd
 | `MAX_ESTIMATED_COST` | float | `1000000` | Bail out on `EXPLAIN` cost before executing |
 | `WORK_MEM` | str | `32MB` | Per-connection sort memory. **Not an environment variable** — set as a role attribute by migration 002, so it cannot be raised by a caller |
 
-`MAX_ESTIMATED_COST` is the cheap defence against expensive queries: the planner has already estimated cost during validation, so an obviously catastrophic query can be rejected without spending the execution budget on it. Calibrating the threshold is empirical — see [../architecture/DATABASE.md](../architecture/DATABASE.md) §9.
+`MAX_ESTIMATED_COST` is the cheap defence against expensive queries: the planner has already estimated cost during validation, so an obviously catastrophic query can be rejected without spending the execution budget on it.
+
+**Calibrate it for your database. The shipped default is sized for benchmark data and will refuse ordinary work on a real one.** Planner cost units are not seconds, do not convert to seconds, and do not transfer between machines, datasets, or PostgreSQL versions — so there is no default that is correct everywhere, and `1000000` is correct for tables of thousands of rows. Against millions, a single sequential scan can approach it and an ordinary analytical join exceeds it, so legitimate questions come back as `cost_exceeded` and the operator sees a system that refuses to answer.
+
+The procedure, which takes about five minutes:
+
+1. Write the slowest query you consider acceptable to run interactively.
+2. `EXPLAIN (FORMAT JSON) <query>` and read `Total Cost` from the top plan node.
+3. Set the ceiling above it, with headroom for a plan that changes when statistics do.
+4. Re-check after any significant change in data volume — the ceiling is absolute while the plans it judges are not.
+
+Setting it *too high* is not free either: the ceiling is what stops a query from occupying a connection until `STATEMENT_TIMEOUT_CEILING_MS` fires. Both bounds are real, which is the same shape as `LLM_MAX_TOKENS` in §4 — a limit with a failure mode on each side, where only one of them was documented.
+
+A cost ceiling is a blunt instrument by design. Routing an expensive query to a background job instead of refusing it is [FUTURE.md](../project/FUTURE.md) § *Two-tier execution*; the estimate this setting compares against is already the signal that would do the routing.
 
 ## 4. Agent
 
@@ -303,4 +316,8 @@ If `MCP_CALL_TIMEOUT_MS` is below the statement-timeout ceiling, the MCP call gi
 
 ## 10. `.env.example`
 
-> **TBD — Stage 1.** Committed at the repo root with every variable above, placeholder values, and inline comments. Never contains a real secret.
+> **Implemented.** Committed at the repo root with placeholder values and inline comments. Never contains a real secret.
+
+**Its coverage of this document is asserted, not reviewed.** `tests/unit/test_settings.py` enumerates every field on every settings class and fails if one is absent from either `.env.example` or this file. A commented-out `# NAME=value` counts as documented — several settings are shown that way precisely because their default should not be edited casually. What is refused is silence.
+
+The test exists because this drifted: **18 of 50 settings had reached the code without reaching the template**, including `RETRIEVAL_TOP_K`, which is worth 30 points of execution accuracy, and `PROFILE_ALLOW_VALUE_SAMPLING` and `LLM_ALLOWED_HOSTS`, which are security controls. Safe defaults are what made the gap invisible — nothing broke, so nothing complained. A control an operator cannot discover is a control they cannot reason about, which is a weaker property than being correctly configured by accident.

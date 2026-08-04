@@ -176,15 +176,19 @@ Attributing a gain to the fine-tuned retriever requires knowing what the rest of
 
 ## 6. Comparison table
 
-> **TBD — Stage 2 onward.** Filled from BENCHMARKS.md as stages land. Shape:
+> **One row measured, on a 3-of-20-database sample. The rest are TBD as their stages land.** Filled from [BENCHMARKS.md](BENCHMARKS.md) — this table restates rows recorded there and never introduces a number of its own.
 
 | Configuration | Exec. acc. | Recall@5 | Invalid (pre) | Invalid (post) | p95 latency | $/query |
 |---|---|---|---|---|---|---|
-| Full schema, no retrieval | TBD | — | TBD | TBD | TBD | TBD |
-| Baseline retriever | TBD | TBD | TBD | TBD | TBD | TBD |
-| Baseline + validation | TBD | TBD | TBD | TBD | TBD | TBD |
-| Baseline + validation + self-correction | TBD | TBD | TBD | TBD | TBD | TBD |
-| **Fine-tuned retriever (full pipeline)** | TBD | TBD | TBD | TBD | TBD | TBD |
+| Full schema, no retrieval | TBD — Stage 2 | — | TBD | TBD | TBD — Stage 6 | TBD |
+| Baseline retriever (`retrieval-only`, `k=30`) | **72.7%** | **0.889** | **2.7%** | — | TBD — Stage 6 | TBD |
+| Baseline + validation | TBD — Stage 2 | TBD | TBD | TBD | TBD — Stage 6 | TBD |
+| Baseline + validation + self-correction | TBD — Stage 4 | TBD | TBD | TBD | TBD — Stage 6 | TBD |
+| **Fine-tuned retriever (full pipeline)** | TBD — Stage 5 | TBD | TBD | TBD | TBD — Stage 6 | TBD |
+
+**The single measured row is not a benchmark result and the table must not be read as one.** It covers 150 of 921 scoreable questions — 3 of 20 databases — at a `k` chosen for this sample. `k` belongs to the row: the same configuration at `k=10` scores 42.7%. The invalid-query figure comes from a later run than the accuracy figure (the `<think>` fix sits between them), which is why they are two rows in BENCHMARKS §1 and §3 rather than one.
+
+**`full-schema` and `with-validation` are wired and unrun**, so their TBDs mean "not yet executed" rather than "not yet built" — which is the more interesting kind of gap, because the comparison is one command away and the answer is not predictable. On a schema averaging 26 elements, `retrieval-only` at `k=30` and `full-schema` are close to the same configuration; the sample that would separate them is BIRD, not Spider.
 
 ## 7. Reporting rules
 

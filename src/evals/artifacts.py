@@ -29,7 +29,7 @@ import subprocess
 from dataclasses import asdict, dataclass, field, replace
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Final
 
 logger = logging.getLogger(__name__)
 
@@ -305,25 +305,72 @@ class RunStore:
         return path
 
 
-def current_commit() -> str:
-    """The commit under test, or ``unknown`` outside a repository.
+_GIT_COMMANDS: Final = frozenset(
+    {
+        ("rev-parse", "--short", "HEAD"),
+        ("status", "--porcelain"),
+    }
+)
 
-    Failing softly rather than raising: a benchmark run from a tarball is
-    unusual but not wrong, and refusing to run at all would be a poor trade for
-    one provenance field. It is recorded as ``unknown`` so a reader can see the
-    number is unattributable rather than assume it was never checked.
+
+def _git(*args: str) -> str | None:
+    """Run one of the fixed git commands, or ``None`` if it is unavailable.
+
+    Restricted to an allowlist rather than accepting any argument sequence.
+    Nothing here takes a caller's value today, so the allowlist defends against
+    a future edit rather than a current caller -- which is the only moment a
+    subprocess argument built from request data would ever be introduced, and
+    the moment it is cheapest to refuse.
     """
+    if args not in _GIT_COMMANDS:
+        raise ValueError(f"refusing to run an unlisted git command: {args!r}")
+
     try:
-        result = subprocess.run(
-            ["git", "rev-parse", "--short", "HEAD"],  # noqa: S607 - dev tool, PATH is fine here
+        result = subprocess.run(  # noqa: S603 - argv is allowlisted above, never caller data
+            ["git", *args],  # noqa: S607 - dev tool, PATH is fine here
             capture_output=True,
             text=True,
             timeout=10,
             check=False,
         )
     except (OSError, subprocess.TimeoutExpired):
+        return None
+    if result.returncode != 0:
+        return None
+    return result.stdout
+
+
+def current_commit() -> str:
+    """The commit under test, or ``unknown`` outside a repository.
+
+    Suffixed ``-dirty`` when the working tree has uncommitted changes, and that
+    suffix is the load-bearing part. A run made while a fix is still uncommitted
+    records the commit *before* the code that produced the number -- so a bare
+    hash silently names a tree that reproduces something else. Every run in
+    BENCHMARKS.md section 1 was made this way, which is how the gap was found.
+
+    ``-dirty`` cannot say what the changes were, only that the hash is a lower
+    bound rather than an answer. That is the honest amount of information, and
+    it is the difference between a reader re-running it and a reader knowing
+    they cannot.
+
+    Failing softly rather than raising: a benchmark run from a tarball is
+    unusual but not wrong, and refusing to run at all would be a poor trade for
+    one provenance field. It is recorded as ``unknown`` so a reader can see the
+    number is unattributable rather than assume it was never checked.
+    """
+    head = _git("rev-parse", "--short", "HEAD")
+    if head is None or not head.strip():
         return "unknown"
-    return result.stdout.strip() or "unknown"
+
+    commit = head.strip()
+
+    # A failed status check must not silently downgrade to "clean" -- an
+    # unmarked hash is the exact claim this function exists to stop making.
+    status = _git("status", "--porcelain")
+    if status is None:
+        return f"{commit}-unverified"
+    return f"{commit}-dirty" if status.strip() else commit
 
 
 def new_run_id(prefix: str = "run") -> str:

@@ -66,8 +66,18 @@ Questions to answer with numbers rather than intuition:
 - Behaviour past saturation — graceful queueing or collapse.
 - Memory per replica with the embedding model loaded.
 - Cost of one expensive query on concurrent request latency.
+- **Concurrency at which the model provider rate-limits, which is probably lower than any of the above.**
 
 **Graceful degradation past saturation matters more than peak throughput.** A system that queues predictably is operable; one that collapses is not.
+
+**The last question was added because the assumption behind the other five is already known to be wrong.** Every one of them treats the database as the scarce resource. In practice the *model provider* saturated first, and it did so under conditions that should have been the safest possible: the eval harness is sequential, single-user, and one question at a time, and it still hit HTTP 429s against a free tier's daily cap.
+
+Two consequences for any load test:
+
+- **Rate-limit behaviour is a correctness concern, not only a latency one.** The fallback chain responds to a 429 by switching model, so the system under sustained load is answering with a *different model* than the one under light load — worth tens of accuracy points, per [../ml/BENCHMARKS.md](../ml/BENCHMARKS.md) §1. A load test measuring only latency would report this as success.
+- **Parallelism does not help here and probably hurts.** The binding constraint is tokens per minute, not wall-clock, so more concurrency reaches the cap sooner and produces more blended runs. This is why the eval harness is deliberately sequential.
+
+Provider quota therefore belongs in the capacity model alongside `DB_POOL_MAX_SIZE` — see [../project/FUTURE.md](../project/FUTURE.md) § *Provider-side rate budgeting*.
 
 ## 5. Measured results
 

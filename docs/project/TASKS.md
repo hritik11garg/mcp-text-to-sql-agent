@@ -83,7 +83,9 @@ Convention: `[ ]` open · `[x]` done · `[~]` in progress · `[!]` blocked
 - [ ] SSE event types per API.md
 - [ ] `/health` and `/ready`
 - [ ] Sanitized error envelope
-- [ ] `.env.example`
+- [x] `.env.example` — committed, and its coverage of CONFIG.md is asserted by `tests/unit/test_settings.py` rather than reviewed. An audit found 18 of 50 settings had reached the code without reaching it, including two security controls whose safe defaults are exactly what made the omission invisible
+- [ ] **Inject a connection pool** — `SQLExecutor` already depends on `ConnectionSource`, which `psycopg_pool.ConnectionPool` satisfies structurally. Until this lands, two concurrent `execute_sql` calls contend on one connection: a real bug, unreachable while the only transport is stdio
+- [ ] **Per-user admission control** — an in-flight cap per caller, not just the global pool bound. Without it one client's twenty questions hold every slot; API.md already specifies the `429` and nothing emits it
 
 ### Demo UI
 - [ ] Vite + React + TypeScript app under `web/`, no server-side rendering
@@ -121,7 +123,8 @@ Convention: `[ ]` open · `[x]` done · `[~]` in progress · `[!]` blocked
 - [x] **Run it** — Spider dev indexed (20 databases, 519 catalog elements) and answered against. The first runs found five more defects, two worth 30 accuracy points each: a `<think>` block submitted as SQL, and `RETRIEVAL_TOP_K=10` starving a schema that has 10–67 elements
 - [~] Baseline runs: no-retrieval, retrieval-only, +validation — `retrieval-only` measured at k=10 and k=30 over **150 of 921 questions / 3 of 20 databases**; `full-schema` and `with-validation` are wired and unrun
 - [ ] **A full-split run** — every number so far is a 3-database smoke sample, and two of the four rows are a blend of two models because the free tier's daily cap moved the fallback chain mid-run
-- [~] BENCHMARKS rows + DATASETS/EVALUATION filled in — §0 fidelity, §1 execution accuracy, §2 recall and §3 invalid-query rate all carry measured values; every §1 row states the 3-database bound that stops it being a benchmark result
+- [~] BENCHMARKS rows + DATASETS/EVALUATION filled in — §0 fidelity, §1 execution accuracy, §2 recall and §3 invalid-query rate all carry measured values; every §1 row states the 3-database bound that stops it being a benchmark result. EVALUATION §6 and the README table now restate them instead of contradicting them
+- [x] **Make a run's commit trustworthy** — every recorded run named the commit *before* the code that produced it, because all five were made from working trees whose fixes were not yet committed. `current_commit()` now marks `-dirty` and `-unverified`
 - [ ] CHANGELOG v0.2
 
 ## Stage 3 — MCP servers + client refactor

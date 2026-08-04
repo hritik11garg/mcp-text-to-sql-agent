@@ -2,9 +2,15 @@
 
 from __future__ import annotations
 
+import inspect
+import re
+
 import pytest
 from pydantic import ValidationError
+from pydantic_settings import BaseSettings
+from tests.conftest import REPO_ROOT
 
+from core import settings as settings_module
 from core.exceptions import ConfigurationError
 from core.settings import (
     DatabaseSettings,
@@ -104,3 +110,51 @@ class TestRetrievalSettings:
     def test_ef_search_outside_its_range_is_refused(self, ef_search: int) -> None:
         with pytest.raises(ValidationError):
             RetrievalSettings(hnsw_ef_search=ef_search)
+
+
+def _settings_env_names() -> list[str]:
+    """Every environment variable any settings class reads."""
+    names: set[str] = set()
+    for member in vars(settings_module).values():
+        if (
+            inspect.isclass(member)
+            and issubclass(member, BaseSettings)
+            and member is not BaseSettings
+        ):
+            names |= {field.upper() for field in member.model_fields}
+    return sorted(names)
+
+
+class TestEverySettingIsDocumented:
+    """A setting an operator cannot discover is a setting they cannot apply.
+
+    This matters most for the ones that are security controls with safe
+    defaults -- ``PROFILE_ALLOW_VALUE_SAMPLING`` and ``LLM_ALLOWED_HOSTS`` are
+    correct out of the box, which is exactly why nobody notices they are
+    missing from the file operators actually edit.
+
+    It matters second-most for the ones that silently change what a measured
+    number means: ``RETRIEVAL_TOP_K`` moved execution accuracy 30 points and
+    ``LLM_MODEL_FALLBACKS`` turns a run into a blend of two models.
+
+    Asserted rather than reviewed, because this drifted once already: 18 of 50
+    settings had reached the code without reaching the template.
+    """
+
+    @pytest.mark.parametrize("name", _settings_env_names())
+    def test_it_appears_in_the_env_template(self, name: str) -> None:
+        template = (REPO_ROOT / ".env.example").read_text(encoding="utf-8")
+
+        # Commented-out is documentation too -- several settings are shown as
+        # `# NAME=value` precisely because their default should not be edited
+        # casually. What is refused is absence.
+        assert re.search(rf"^#?\s*{name}=", template, re.MULTILINE), (
+            f"{name} is read from the environment but absent from .env.example. "
+            f"Add it, with a comment saying what happens if it is wrong."
+        )
+
+    @pytest.mark.parametrize("name", _settings_env_names())
+    def test_it_appears_in_the_configuration_reference(self, name: str) -> None:
+        reference = (REPO_ROOT / "docs" / "operations" / "CONFIG.md").read_text(encoding="utf-8")
+
+        assert name in reference, f"{name} is undocumented in docs/operations/CONFIG.md"

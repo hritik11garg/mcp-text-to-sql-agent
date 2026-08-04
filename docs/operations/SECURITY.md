@@ -47,6 +47,7 @@ The unusual entry is database *values*. Retrieved sample rows and column comment
 Stated so the boundary is honest rather than implied:
 
 - **Multi-tenant row-level isolation.** One read-only role sees the whole target schema. Per-user data restriction needs RLS or per-tenant roles — see [../project/FUTURE.md](../project/FUTURE.md).
+  - **And it would not be sufficient on its own.** RLS and per-tenant roles constrain *execution*, while retrieval runs before execution: `schema_search` answers from the catalog, so a caller can learn that a table exists and what its columns are named without any query reaching the database. Schema names are frequently sensitive by themselves. Isolation would have to reach the retrieval layer as an authorization filter over `schema_elements` — recorded as [FUTURE.md](../project/FUTURE.md) § *Tenant-aware retrieval*, and named here so "add RLS" is not mistaken for a complete answer.
 - **Inference attacks.** A user who may see aggregates but not individual rows can sometimes reconstruct rows through repeated narrow queries. Not defended against.
 - **Model extraction / prompt stealing.**
 
