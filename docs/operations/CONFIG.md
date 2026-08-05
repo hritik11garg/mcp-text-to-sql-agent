@@ -274,6 +274,8 @@ To deploy: publish the port from your container runtime (`-p 8000:8000`) or put 
 ## 7. Observability — planned (Stage 6)
 
 > None of these exist yet. Logging today is `logging.basicConfig` at the server entrypoints, forced onto stderr.
+>
+> They are **not** in `.env.example` as assignments, only named in a comment there — see §10. Until Stage 6, setting any of them has no effect.
 
 | Variable | Type | Default | Notes |
 |---|---|---|---|
@@ -335,3 +337,11 @@ If `MCP_CALL_TIMEOUT_MS` is below the statement-timeout ceiling, the MCP call gi
 **Its coverage of this document is asserted, not reviewed.** `tests/unit/test_settings.py` enumerates every field on every settings class and fails if one is absent from either `.env.example` or this file. A commented-out `# NAME=value` counts as documented — several settings are shown that way precisely because their default should not be edited casually. What is refused is silence.
 
 The test exists because this drifted: **18 of 50 settings had reached the code without reaching the template**, including `RETRIEVAL_TOP_K`, which is worth 30 points of execution accuracy, and `PROFILE_ALLOW_VALUE_SAMPLING` and `LLM_ALLOWED_HOSTS`, which are security controls. Safe defaults are what made the gap invisible — nothing broke, so nothing complained. A control an operator cannot discover is a control they cannot reason about, which is a weaker property than being correctly configured by accident.
+
+**And the reverse is asserted too, because the reverse is worse.** A second test refuses any `NAME=` in `.env.example` that no settings class reads. A missing setting is invisible; a **dead** one is worse than invisible, because an operator sets it, gets no error, and concludes it took effect.
+
+That had also happened. `LOG_LEVEL`, `LOG_FORMAT` and `LOG_RESULT_VALUES` sat in the template uncommented, with values, while nothing in the codebase read any of them — and §7 of this document correctly called them planned. The two files disagreed in the dangerous direction: the one operators actually edit was the one implying the controls worked.
+
+`LOG_RESULT_VALUES=false` is why that is a security finding rather than untidiness. It carried a comment describing what it protects, so a reader would conclude result logging was off **by policy**. It is off because the feature does not exist — a different fact, and one that stops being true the moment somebody adds one.
+
+Planned settings are therefore named in `.env.example` **in prose only**, never as an assignment. There is nothing to uncomment. Five variables legitimately appear in the template while no settings class reads them — four `POSTGRES_*` consumed by `docker-compose.yml` and `SQL_AGENT_RO_PASSWORD` read by migration 002 via `os.environ`; they sit in an explicit allowlist that names each consumer, and a second test fails if an allowlist entry stops appearing in the template, so the list cannot quietly outlive its reason.

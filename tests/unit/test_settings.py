@@ -158,3 +158,74 @@ class TestEverySettingIsDocumented:
         reference = (REPO_ROOT / "docs" / "operations" / "CONFIG.md").read_text(encoding="utf-8")
 
         assert name in reference, f"{name} is undocumented in docs/operations/CONFIG.md"
+
+
+def _env_template_names() -> list[str]:
+    """Every ``NAME=`` in `.env.example`, commented or not."""
+    template = (REPO_ROOT / ".env.example").read_text(encoding="utf-8")
+    return sorted(
+        {m.group(1) for m in re.finditer(r"^#?\s*([A-Z][A-Z0-9_]*)=", template, re.MULTILINE)}
+    )
+
+
+NOT_SETTINGS = {
+    # docker-compose reads these directly; they configure the container, not
+    # the application, and never reach pydantic-settings.
+    "POSTGRES_DB",
+    "POSTGRES_PASSWORD",
+    "POSTGRES_PORT",
+    "POSTGRES_USER",
+    # migrations/versions/002_readonly_role.py reads this via os.environ. It
+    # cannot be a setting: alembic runs without the application's Settings, and
+    # the password must not sit in a settings object that gets logged.
+    "SQL_AGENT_RO_PASSWORD",
+}
+"""Variables that legitimately appear in `.env.example` while no settings class
+reads them, each with the consumer named.
+
+An explicit set rather than a pattern, so adding one is a deliberate act that
+shows up in a diff. The whole point of the test below is that the default
+answer is *no*.
+"""
+
+
+class TestTheTemplateHasNothingDead:
+    """`.env.example` must not offer a variable nothing reads.
+
+    The reverse of :class:`TestEverySettingIsDocumented`, and it catches a
+    worse failure. A missing setting is invisible; a **dead** one is worse than
+    invisible, because an operator sets it, sees no error, and concludes it
+    took effect.
+
+    It had already happened. `LOG_LEVEL`, `LOG_FORMAT` and `LOG_RESULT_VALUES`
+    sat uncommented with values while nothing in the codebase read any of them
+    -- and CONFIG.md section 7 correctly called them planned, so the two files
+    disagreed in the dangerous direction: the one operators actually edit was
+    the one implying the controls worked.
+
+    `LOG_RESULT_VALUES=false` is the reason this is a security test and not a
+    tidiness one. It carried a comment describing what it protects, so a reader
+    would conclude result logging was off *by policy*. It is off because the
+    feature does not exist -- a different fact, and one that stops being true
+    the moment somebody adds one.
+    """
+
+    @pytest.mark.parametrize("name", _env_template_names())
+    def test_every_variable_is_read_by_something(self, name: str) -> None:
+        if name in NOT_SETTINGS:
+            pytest.skip(f"{name} is consumed outside pydantic-settings; see NOT_SETTINGS")
+
+        assert name in _settings_env_names(), (
+            f"{name} is offered in .env.example but no settings class reads it. "
+            f"An operator who sets it gets no error and no effect. Either wire "
+            f"it up, comment it out with a note saying it is not read yet, or "
+            f"add it to NOT_SETTINGS naming what does consume it."
+        )
+
+    def test_the_allowlist_itself_is_not_stale(self) -> None:
+        """An entry that is no longer in the template is an entry nobody rechecked."""
+        unused = NOT_SETTINGS - set(_env_template_names())
+        assert not unused, (
+            f"NOT_SETTINGS names {sorted(unused)}, which .env.example no longer "
+            f"contains. Remove them -- an allowlist nobody prunes stops being read."
+        )
