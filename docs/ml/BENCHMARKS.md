@@ -77,6 +77,17 @@ python -m evals.run --questions <spider dev.json as JSONL> --split dev `
 
 **⚠️ marks a run more than one model answered.** The free tier's daily cap moves the chain mid-run, so a single accuracy figure is a weighted average of two systems — 96% and 59% in row 4. The summary carries `answered_by` and `single_model` for this reason, and **no row marked ⚠️ may be quoted as a model's score**.
 
+**A full-split run was attempted on 2026-08-05 and produced no row.** It is recorded here because a failed measurement attempt is evidence about the measurement setup, and discarding it would leave the impression that nothing had been tried.
+
+| Attempted | Recorded | Answered | Infrastructure | Why no row |
+|---|---|---|---|---|
+| 1034 | 777 (stopped) | 395 | **382** — 308 `llm_failed`, 74 `scope_unavailable` | Two independent causes, one of them a defect |
+
+- **308 `llm_failed`** — the free tier's daily token cap, with the fallback chain deliberately disabled so the run could not silently become a blend. The run was stopped rather than allowed to finish, because `resume()` skips any question already recorded *including a failed one*, so every further failure would have permanently consumed a question this run could never retry.
+- **74 `scope_unavailable`** — a real defect, found only because the run reached a database the 3-database sample never touches. See the CHANGELOG entry for `cre_Doc_Template_Mgt`. Fixed.
+
+The accuracy over what was answered was **79.0% (312/395), single model** — and it is not a row, because 395 of 921 with one database missing entirely is a narrower sample than the 150-question smoke rows above, not a wider one.
+
 **None of these are comparable to a published Spider number**, for three independent reasons: a 3-database sample, single-database execution accuracy rather than Test Suite Accuracy, and 113 excluded questions. The first is fixable by running more; the other two are stated on every row by design.
 
 ## 2. Schema-linking recall

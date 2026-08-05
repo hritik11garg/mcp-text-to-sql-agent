@@ -38,6 +38,7 @@ from typing import Any, Protocol, Self
 from psycopg import Connection
 
 from answering import QuestionAnswerer, retrieved_columns
+from benchmark.convert import schema_name_for
 from core.exceptions import LLMError, RetrievalError
 from core.ports.embedder import Embedder
 from core.settings import ExecutionSettings, RetrievalSettings
@@ -239,12 +240,23 @@ class ScopeRegistry:
     def _dataset_for(self, db_id: str) -> str:
         """The catalog namespace, which is also the PostgreSQL schema name.
 
-        One name, not two. The conversion already chose a schema name for this
-        database and validated it as an identifier; inventing a second naming
-        scheme for the catalog would create exactly one bug, and it would be the
-        kind where retrieval quietly returns another database's columns.
+        One name, not two -- and this function used to say that while
+        computing the name a second time. It concatenated prefix and ``db_id``
+        directly, which is what :func:`schema_name_for` does *before* folding
+        the result to lower case, so the two agreed for every ``db_id`` that
+        was already lower case and disagreed for the one that was not.
+
+        Spider dev has exactly one: ``cre_Doc_Template_Mgt``, 84 questions.
+        The loader created ``spider_cre_doc_template_mgt`` and the eval asked
+        for ``spider_cre_Doc_Template_Mgt``, so every question against that
+        database failed as ``scope_unavailable`` -- an infrastructure error,
+        which leaves the scored denominator, so the run reported a clean
+        accuracy over 9% fewer questions than it claimed to cover.
+
+        Calling the loader's function is the fix, and it is what the paragraph
+        above was always asking for. ADR-031.
         """
-        return f"{self._prefix}{db_id}" if self._prefix else db_id
+        return schema_name_for(db_id, prefix=self._prefix)
 
     def _build_retriever(self, dataset: str) -> SchemaRetriever:
         """One retriever per database, because ``dataset`` is fixed at construction.
