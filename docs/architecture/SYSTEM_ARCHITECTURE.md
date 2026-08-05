@@ -1,6 +1,6 @@
 # System Architecture
 
-> **Status: mostly built.** §2.3–§2.6 (MCP servers, retrieval, database, profiling) describe code that exists. §2.1 (the API layer) and §2.2 (the agent loop) are still design intent — the agent's *client* half exists, the loop that drives it does not. The diagram image and every measured latency remain `TBD`.
+> **Status: mostly built.** §2.1 (the API layer) is built as far as its probes, error envelope and startup assertions — `POST /v1/query` is not, so the part of §3.1 that runs through the agent has no HTTP entry point yet. §2.3–§2.8 describe code that exists. **§2.2 (the agent loop) is the one component still entirely design intent** — its *client* half exists, the loop that drives it does not. The diagram image and every measured latency remain `TBD`.
 
 ---
 
@@ -11,7 +11,7 @@
 ```
                     ┌──────────────────────────────────────┐
    NL question ───▶ │           FastAPI (HTTP)             │ ───▶ SSE progress
-                    │  POST /query  ·  GET /health         │
+                    │  POST /v1/query · /health · /ready   │
                     └───────────────┬──────────────────────┘
                                     │
                     ┌───────────────▼──────────────────────┐
@@ -48,6 +48,20 @@
 Thin. Accepts a question, opens an SSE stream, delegates to the agent, streams progress events, returns the final answer. Holds no business logic — everything meaningful is in the agent or behind an MCP boundary, so the same agent runs unchanged when an MCP host drives it instead of HTTP.
 
 Responsibilities: request validation, session correlation, SSE framing, rate limiting, health/readiness probes.
+
+**Built:** `create_app()`, `GET /health`, `GET /ready`, the error envelope, request correlation, and the startup sequence. **Not built:** `POST /v1/query`, SSE, sessions. [API.md](API.md) carries the per-route table.
+
+This is the project's **first surface reachable by someone who does not already have the machine** — every other component runs as a local process an operator started, so "who can call this" was answered by the operating system. Three consequences shape the layer rather than sit beside it:
+
+| Property | Why it is a property of this layer specifically |
+|---|---|
+| **Startup either proves the deployment is safe or the process does not start** | The lifespan opens every dependency eagerly. Opening the read-only connection runs `assert_read_only` (§2.5), so a configuration error is a failed deploy rather than a discovery a week later |
+| **Defaults are closed, and the open positions are validators** | There is no authentication yet, so a non-loopback bind and a `*` CORS origin are startup errors. A default is something you change; a validator is something you argue with |
+| **No message reaches a caller that was not written for one** | Domain errors from `core.exceptions` pass through; everything else becomes one fixed string. Same rule as `mcp_servers.common`, worse audience — there the leak reached a model on the operator's machine |
+
+`/health` and `/ready` are separated by what an orchestrator *does* with the answer: a failing `/ready` stops traffic, a failing `/health` restarts the pod. So `/health` deliberately checks nothing — a liveness probe that touched the database would fail every replica at once during a blip and turn a self-resolving incident into a fleet restart.
+
+Full analysis in [../operations/SECURITY.md](../operations/SECURITY.md) §13, including §13.9 — the controls that must land *before* `POST /v1/query`.
 
 ### 2.2 Agent (MCP client)
 
@@ -101,6 +115,10 @@ Both are exercised by the same eval harness so the Recall@k delta is a clean abl
 
 PostgreSQL 16 with pgvector. Two roles: an owner role used by migrations and the embedding indexer, and a `SELECT`-only role used by `execute_sql`. Details in [DATABASE.md](DATABASE.md).
 
+**That the second role is genuinely read-only is now proved at startup, not assumed.** `composition.assert_read_only` asks PostgreSQL's own privilege functions — writes on every user relation, `CREATE` on every schema, and the four role attributes that bypass grants entirely — and refuses to open the connection otherwise. It asks rather than attempting a write, because the misconfiguration it exists to catch is exactly the one where a probe `INSERT` would be *accepted*.
+
+It runs on first open of that connection rather than in each entrypoint's startup, so all five processes inherit it. See [../operations/SECURITY.md](../operations/SECURITY.md) §13.2 for why the thirty existing negative tests could not catch this: they build the role from the migration and never look at the one the application connects as.
+
 ### 2.6 Profiling subsystem
 
 Retrieval answers *which columns might be relevant*. It cannot answer the question that actually blocks a correct query: given two plausible columns, or a column storing `'FI'` rather than `'Finland'`, what is really in there? `TableProfiler` answers that, and it is the one component in the system whose **output is row data by design** — everywhere else, values either stay in the database or stay in a store the operator controls.
@@ -120,11 +138,37 @@ Every number a profile reports is computed over at most `PROFILE_SCAN_LIMIT` row
 
 See [ADR-016](DECISIONS.md#adr-016--a-frequency-threshold-not-a-pii-regex-decides-which-values-a-profile-may-reveal) for why a frequency threshold rather than a PII regex, and [../operations/SECURITY.md](../operations/SECURITY.md) §14.2.6 for the full analysis including what it does **not** solve.
 
+### 2.7 The answering path — shared by the API and the eval harness
+
+`src/answering/` is retrieve-then-generate, and it exists because **two callers doing the same thing differently makes a benchmark number describe a system nobody queries.** The eval harness answers a question by retrieving schema context and generating SQL against it; so does the API. If they compose those two steps differently — a different `k`, foreign-key edges included in one prompt and not the other — the published accuracy is still correct and is about something else.
+
+That is not hypothetical here: `RETRIEVAL_TOP_K=10` against schemas holding 10–67 elements was worth **thirty points of execution accuracy**, so a divergence between two paths is not a rounding difference.
+
+```
+QuestionAnswerer
+├── retrieve(question)            → RetrievalResult
+├── generate(question, context)   → Candidate
+└── candidate(question)           → Candidate          both, composed
+```
+
+Both phases are public *and* so is the composition, for two different reasons:
+
+- The **eval needs the intermediate.** Recall@k is computed from the retrieved elements whether or not generation succeeded. Dropping them on a generation failure would measure recall and accuracy over different question sets, and the correlation between them is the entire argument for the Stage 5 fine-tune.
+- The **composition needs to be assertable.** A test runs both routes with identical fakes and asserts they produce equal objects. A caller that sequences the phases itself is a caller that can sequence them wrongly, and a comment saying "keep these in sync" has never kept anything in sync.
+
+**Two things are deliberately not shared.** Execution cannot be — injecting a row limit into gold *and* prediction cuts two unordered result sets in different places and reports a correct answer as a value mismatch ([ADR-032](DECISIONS.md)). Error flattening must not be — an exception converts to the eval's `Attempt` cleanly, but an `Attempt` cannot be recovered back into an HTTP status code, so the shared layer raises and each caller flattens in its own vocabulary.
+
+### 2.8 The composition root
+
+`src/composition/` builds the dependency graph once per process: both connections, the catalog, the retriever. It is the one package allowed to know about every layer at once, and nothing depends on it.
+
+It exists as its own package rather than living under `mcp_servers/` because the API and the MCP servers are **peers** — both adapters over the same components. An entrypoint reaching into a sibling entrypoint's package to open a database connection is a dependency in the wrong direction, and it would have made `mcp_servers` un-deletable.
+
 ## 3. Data flow
 
 ### 3.1 Single-query path
 
-1. `POST /query` with a natural-language question; SSE stream opens.
+1. `POST /v1/query` with a natural-language question; SSE stream opens.
 2. Agent connects to MCP servers, discovers tools.
 3. Agent calls `schema_search` → top-k tables/columns.
 4. *(Conditional)* Ambiguity detected → `profile_table` on the contested tables.
@@ -175,3 +219,5 @@ Planned analysis:
 - **Embedding index** — HNSW build time and memory grow with schema size; measured on the largest BIRD schema.
 - **Bottleneck ranking** — expected order: LLM generation latency ≫ query execution > retrieval > validation. To be confirmed rather than assumed.
 - **Backpressure** — SSE streams hold connections open for the request's lifetime; concurrent-stream limits are needed before this is production-shaped.
+
+**What is true today, stated plainly:** every limit in this system is calibrated for a *single caller*. There is one read-only connection, not a pool, so two concurrent `execute_sql` calls contend — a real bug that is unreachable over stdio and becomes reachable the moment `POST /v1/query` exists. The upgrade path from one caller to many, including why per-machine installation is the wrong deployment shape, is [../project/FUTURE.md](../project/FUTURE.md) § Scale and concurrency.

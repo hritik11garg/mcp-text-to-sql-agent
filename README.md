@@ -56,15 +56,15 @@ The agent is an **MCP client** that discovers these tools at runtime. It decompo
 
 A fine-tuned schema-linking retriever (contrastive training on question→table/column pairs) sits inside the retrieval step, with Recall@k measured against the off-the-shelf embedding baseline.
 
-> Those two paragraphs describe the finished system. **Today**: the four servers and runtime discovery are built and tested; decomposition, session memory, self-correction, SSE and the fine-tune are not. The status block at the top of this file is the authority on what exists.
+> Those two paragraphs describe the finished system. **Today**: the four servers and runtime discovery are built and tested, and the HTTP layer serves `/health`, `/ready` and a sanitized error envelope. Decomposition, session memory, self-correction, SSE, `POST /v1/query` and the fine-tune are not built. The status block at the top of this file is the authority on what exists.
 
 Why validation and execution are separate capabilities, how blast radius is bounded on the read-only role, and why the linker was fine-tuned rather than over-retrieved are all recorded in [DECISIONS.md](docs/architecture/DECISIONS.md).
 
 ## Demo
 
-> **TBD — Stage 1.** A React UI over the SSE stream, plus a GIF and screenshots, land with the API. Exact commands and expected output: [DEMO_SCRIPT.md](docs/project/DEMO_SCRIPT.md).
+> **TBD — Stage 1.** A React UI over the SSE stream, plus a GIF and screenshots, land with `POST /v1/query`. Exact commands and expected output: [DEMO_SCRIPT.md](docs/project/DEMO_SCRIPT.md).
 >
-> The MCP servers run today and any MCP host can drive them ([MCP.md](docs/architecture/MCP.md) §9) — but that needs a host configured against a live database, so it is how the project is *used*, not how it is *seen*.
+> The MCP servers run today and any MCP host can drive them ([MCP.md](docs/architecture/MCP.md) §9) — but that needs a host configured against a live database, so it is how the project is *used*, not how it is *seen*. `python -m api` starts and answers its probes, which proves the wiring and is not a demo.
 
 ## Architecture
 
@@ -84,7 +84,12 @@ Why validation and execution are separate capabilities, how blast radius is boun
       | SSE progress                                          v
       v                                              PostgreSQL (read-only role,
    FastAPI                                            pgvector, row + time limits)
+   /health /ready                                     ^
+   error envelope                                     |
+   request correlation            startup proves this role cannot write
 ```
+
+Everything in that sketch exists except the two things it is drawn around: the **agent loop** and **`POST /v1/query`**. The MCP servers, the database layer and the FastAPI process are built; what is missing is the path between a request and a tool call.
 
 ## Features
 

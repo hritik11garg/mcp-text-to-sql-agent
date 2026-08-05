@@ -11,7 +11,9 @@ Two deployment shapes, with different security postures:
 
 The MCP-host shape is the one that makes this project runnable by other people, so it gets the more polished setup path.
 
-**The first shape works today.** The four servers run over stdio and the host configuration is in [../architecture/MCP.md](../architecture/MCP.md) §9 — no Docker image and no HTTP endpoint required, because the host launches them as subprocesses with the environment it is given. The rest of this page is about the second shape, which needs the Streamable HTTP transport and the API layer, neither of which is built.
+**The first shape works today.** The four servers run over stdio and the host configuration is in [../architecture/MCP.md](../architecture/MCP.md) §9 — no Docker image and no HTTP endpoint required, because the host launches them as subprocesses with the environment it is given.
+
+**The second shape is not deployable yet, and the process enforces that rather than documenting it.** The HTTP layer exists — `python -m api` serves `/health` and `/ready` — but it has **no authentication**, so `APISettings` refuses any `API_HOST` that is not loopback ([ADR-034](../architecture/DECISIONS.md#adr-034--the-api-refuses-to-bind-beyond-loopback-while-it-has-no-authentication)). A container can still publish the port, which is the supported path below; what it cannot do is bind `0.0.0.0` inside the container and pretend that is the same thing.
 
 There is a reason that ordering is not accidental: an HTTP-reachable `execute_sql` is a different risk class from a subprocess a host launched, and it needs authentication before it needs a Dockerfile.
 
@@ -62,13 +64,19 @@ Production-specific requirements:
 
 | Variable | Production value | Reason |
 |---|---|---|
-| `HOST` | `0.0.0.0` | Container networking |
-| `API_KEY` | **Set** | Startup fails without it when not on loopback |
+| `API_HOST` | `127.0.0.1` | **Not `0.0.0.0`** — see below. The container runtime publishes the port |
+| `API_PORT` | `8000` | Whatever the runtime maps to |
+| `API_DOCS_ENABLED` | `false` (the default) | OpenAPI is a complete map of the attack surface, served unauthenticated |
+| `API_CORS_ORIGINS` | Named origins, or empty | `*` is refused at startup |
 | `LOG_FORMAT` | `json` | Machine-parseable |
 | `LOG_RESULT_VALUES` | `false` | Never log result data outside local debugging |
 | `OTEL_ENABLED` | `true` | |
 | `OTEL_TRACES_SAMPLER_ARG` | `<1.0` | Full sampling is a dev setting |
-| `DATABASE_RO_URL` | Read-only role | Verified at startup, not assumed |
+| `DATABASE_RO_URL` | Read-only role | **Verified at startup, not assumed** — `assert_read_only` refuses to open a connection whose role can write ([ADR-033](../architecture/DECISIONS.md#adr-033--the-read-only-role-is-proved-at-startup-by-asking-rather-than-by-writing)) |
+
+**`API_HOST=0.0.0.0` is a startup error, including inside a container.** That looks inconvenient and is deliberate: this service has no authentication, so binding all interfaces makes an endpoint that runs model-generated SQL against the target database reachable by anything that can route to it. Publishing the port (`-p 8000:8000`, or a Kubernetes Service) forwards to loopback inside the network namespace and works unchanged — the difference is that exposing the service becomes something a deployment declares rather than something a default does.
+
+**`API_KEY` does not exist yet.** Earlier revisions of this page listed it as required in production. It is Stage 6 work; until it lands, "front it with something that authenticates" is the whole of the answer, and the loopback refusal is what stops that being optional.
 
 Secrets come from the orchestrator's secret store, not from a `.env` file baked into the image.
 
@@ -78,9 +86,9 @@ Secrets come from the orchestrator's secret store, not from a `.env` file baked 
 
 Checklist to be verified, not just written:
 
-- [ ] `DATABASE_RO_URL` role cannot write — proven by the negative tests in [../development/TESTING.md](../development/TESTING.md)
+- [x] **`DATABASE_RO_URL` role cannot write** — no longer a checklist item an operator ticks. `assert_read_only` refuses to open the connection otherwise, so a deployment that gets this wrong does not start. The negative tests in [../development/TESTING.md](../development/TESTING.md) prove the *migration* produces a correct role; this proves the *deployment* connects as one, and the difference is the whole of [SECURITY.md](SECURITY.md) §13.2
 - [ ] `agent_meta` not readable by the read-only role
-- [ ] `API_KEY` set; unauthenticated access impossible
+- [ ] **Authentication in front of the service** — there is none in the application. Until `API_KEY` exists this means a proxy, a gateway, or a network boundary that does the work
 - [ ] Rate limits active (request, token, and concurrent-stream)
 - [ ] Statement timeout set on the role *and* per transaction
 - [ ] Connection pool sized against database capacity, not application concurrency
@@ -113,12 +121,22 @@ Detail in [OBSERVABILITY.md](OBSERVABILITY.md). Minimum for a deployment to be c
 
 ## 7. Health checks
 
-| Endpoint | Checks | Orchestrator action on failure |
-|---|---|---|
-| `/health` | Process alive. No dependencies. | Restart |
-| `/ready` | Database reachable, MCP servers connected, embedding model loaded, vectors present for the configured model version | Remove from load balancer |
+Both are **built**. Contract in [../architecture/API.md](../architecture/API.md).
 
-Keeping them distinct matters: a database outage should stop traffic, not trigger a restart loop that makes recovery slower.
+| Endpoint | Checks today | Orchestrator action on failure |
+|---|---|---|
+| `/health` | Process alive. **No dependencies** — asserted by a test that fails if it issues a query | Restart |
+| `/ready` | `database`, `database_readonly` — a `SELECT 1` on each held connection | Remove from load balancer |
+
+Keeping them distinct matters: a database outage should stop traffic, not trigger a restart loop that makes recovery slower. That is not a stylistic preference — a `/health` that touched the database would fail every replica's liveness probe at the same moment, and the orchestrator would answer a self-resolving incident by restarting the fleet, adding a cold start, a connection storm and a catalog reload per replica.
+
+Three properties an orchestrator config should know about:
+
+- **`/ready` reports `up`/`down` per dependency and never a reason.** Both probes are unauthenticated — a kubelet cannot hold a credential — and a driver message carries the DSN, the internal hostname and the role name. The cause is in the process log, keyed by `request_id`.
+- **The verdict is cached for 5 seconds**, so probe frequency does not become database load. A 10-second probe period sees at most one real check per probe.
+- **Before startup completes, `/ready` answers `503` with `{"startup": "down"}`.** An unconfigured readiness checker must not answer yes.
+
+The catalog, the retriever and the MCP servers are **not** probed. All are loaded or resolved at startup and held in memory, so a probe would assert that the process still has its own attributes — a check that cannot fail reports nothing. Earlier revisions of this page listed them; that was design intent rather than behaviour.
 
 ## 8. Backup and recovery
 

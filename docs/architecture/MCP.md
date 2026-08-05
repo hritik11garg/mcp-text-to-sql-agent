@@ -1,6 +1,8 @@
 # MCP Design
 
 > **Status: implemented.** All four servers ship, and the schemas below are the ones they publish — asserted against a committed snapshot in `tests/contract/tool_schemas.json`, so this page and the code cannot drift. The client half (`tools/list` discovery) ships too. Still open: Streamable HTTP transport, and re-running the eval to confirm accuracy is unchanged, which waits on the Stage 2 harness.
+>
+> **One change reached these servers from outside.** `Resources` moved to `src/composition/` so the HTTP API could share it without importing from this package ([ADR-035](DECISIONS.md#adr-035--the-composition-root-is-its-own-package-because-entrypoints-are-peers)), and it gained a startup assertion that the read-only role genuinely cannot write ([ADR-033](DECISIONS.md#adr-033--the-read-only-role-is-proved-at-startup-by-asking-rather-than-by-writing)). All four servers inherited that check without being modified — including `execute_sql`, which is the one that runs generated SQL and therefore needed it most.
 
 This is the document that decides whether this project reads as "MCP-native" or as "three functions in a protocol wrapper." The substance is in the contracts, not the transport.
 
@@ -21,7 +23,7 @@ The `validate_sql` / `execute_sql` split is the central design decision. Validat
 
 ## 2. Transport and lifecycle
 
-- **Transport:** stdio for local/host-driven use (the host launches the server as a subprocess) — **implemented**. Streamable HTTP for the deployed configuration — not yet; it lands with the API layer, which is where a network-reachable endpoint first needs authentication anyway.
+- **Transport:** stdio for local/host-driven use (the host launches the server as a subprocess) — **implemented**. Streamable HTTP for the deployed configuration — not yet. It was deferred on the grounds that "a network-reachable endpoint first needs authentication", and the HTTP API has since landed **without** authentication, so that reasoning now has a date attached: the API refuses to bind beyond loopback until authentication exists ([ADR-034](DECISIONS.md#adr-034--the-api-refuses-to-bind-beyond-loopback-while-it-has-no-authentication)), and an HTTP MCP transport would need the same treatment or it would be the way around it.
 
 > ⚠️ **Over stdio, stdout *is* the protocol.** One stray `print` — in this code, in a dependency, or in a debugging session somebody forgot to undo — writes a line the host cannot parse, and the session dies reporting a JSON decode error that names nothing about the cause. Each server therefore hands the real stdout to the transport and repoints `sys.stdout` at stderr at startup, so a stray write is noise instead of a protocol violation. Logging is forced onto stderr for the same reason, with `force=True` so an earlier `basicConfig` by a library cannot leave the root logger pointed at stdout.
 - **Protocol:** JSON-RPC 2.0 per the MCP specification.

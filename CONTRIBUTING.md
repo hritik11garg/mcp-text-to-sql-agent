@@ -133,7 +133,7 @@ Before / after numbers, or "N/A — no measurable surface touched".
 A stage is done when:
 
 1. It runs end to end from a clean checkout following the README.
-2. Its tests pass in CI.
+2. Its tests pass in CI. **There is no CI pipeline yet** — it is Stage 6 work ([TASKS.md](docs/project/TASKS.md)). Until it exists this rule means the local gate: `ruff check` · `ruff format --check` · `mypy src/` · `pytest`, with the marker rows in [TESTING.md](docs/development/TESTING.md) §11 as the shape CI will take. Stating that rather than leaving the line to imply a pipeline that would enforce it.
 3. Its documentation section is filled in with real content.
 4. Its demo path is verified in [DEMO_SCRIPT.md](docs/project/DEMO_SCRIPT.md).
 5. Its numbers, if any, are in BENCHMARKS.md and reproducible.

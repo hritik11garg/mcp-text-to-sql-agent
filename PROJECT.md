@@ -1,5 +1,11 @@
 Text-to-SQL Analytics Agent (MCP-native) (AI + SDE; ML with the fine-tuned schema linker) — 5–6 weeks
 
+> **This is the original PRD, kept as written.** It is the spec the build is measured against, not a status page — [ROADMAP.md](docs/project/ROADMAP.md) and the README status block are the authority on what exists. Where the build has deliberately diverged, the reason is recorded rather than the text edited:
+>
+> - **"point Claude Desktop or any MCP host"** — desktop hosts are now listed *third* in [MCP.md](docs/architecture/MCP.md) §9, behind the project's own client and the open-source Inspector. Making a core capability contingent on one vendor's product decisions conflicts with the constraint in the next paragraph.
+> - **Scope grew twice.** A React demo UI was added to Stage 1 after noticing the project had no surface a reader could see; the eval harness gained resumability, which the PRD does not mention and which the free-tier token cap made mandatory.
+> - **Stages have not been built in order.** Stage 3 (MCP servers) and much of Stage 2 landed before Stage 1 closed. The cost of that ordering is recorded per stage in ROADMAP.md.
+
 **Constraint: everything required to run, evaluate and demo this project is free and open source.** No paid tier, no proprietary application, no vendor account is a *requirement* at any point. Free-tier hosted models and proprietary local runtimes may be *supported* — they must never be the only path. This is why the LLM sits behind a port with Ollama as a first-class option (ADR-014), why the eval harness is resumable around free-tier token caps, and why the MCP servers are driven by the project's own client rather than by anyone's desktop app.
 
 Stack: Python, MCP SDK (servers + client), FastAPI, PostgreSQL with a read-only sandbox role, sqlglot for AST validation, pgvector for schema retrieval, sentence-transformers (fine-tuned schema linker), SSE streaming, React + TypeScript (demo UI), OpenTelemetry, Spider/BIRD benchmark, pytest
@@ -26,3 +32,12 @@ Built an MCP-native text-to-SQL agent exposing schema search, validation, execut
 Raised schema-linking Recall@5 from X% to Y% by fine-tuning a sentence-transformer with contrastive learning on question→column pairs, measured on a committed eval harness.
 Reduced invalid-query rate X%→Y% via a side-effect-free validation tier (sqlglot AST + EXPLAIN) and an error-feedback self-correction loop, with execution confined to a read-only role under row limits and statement timeouts.
 Implemented multi-step decomposition with session memory, scoring X% task success on compound analytical questions; SSE streaming and OpenTelemetry tracing across agent steps.
+
+**What is measurable so far, with the bound that stops it being the final number** — see [BENCHMARKS.md](docs/ml/BENCHMARKS.md) for the full rows:
+
+| Bullet | Measured | Why it is not the number yet |
+|---|---|---|
+| Execution accuracy | **72.7%** (`retrieval-only`, k=30) | 150 of 921 scoreable questions — **3 of 20 databases** — and the split is not comparable to published Spider numbers |
+| Recall@5 baseline | **0.889** (R@1 0.605, R@10 0.960, R@20 **1.000**) | This is the *before*. There is no *after* — Stage 5 has not started. Full coverage by rank 20 also bounds what a fine-tune can buy on Spider, which is the argument for BIRD |
+| Invalid-query rate | **2.7%** | Pre-correction only. The self-correction loop is Stage 4, so the "X%→Y%" the bullet promises is a single number today |
+| Multi-step task success | — | Stage 4. Not started |

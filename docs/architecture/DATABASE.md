@@ -115,8 +115,9 @@ Two consequences worth internalising:
 
 The outermost containment boundary. It holds even if prompt defences, AST validation, and every other layer fail — which is why it is the layer to get right first.
 
+**Built** — `migrations/versions/002_readonly_role.py` is the authority; the DDL below is that migration in readable form.
+
 ```sql
--- Design intent; exact DDL lands in Stage 1 migrations.
 CREATE ROLE sql_agent_ro NOLOGIN;
 
 REVOKE ALL ON DATABASE analytics FROM PUBLIC;
@@ -148,7 +149,13 @@ Points that matter:
 - **Functions are not granted.** Without `EXECUTE`, `pg_read_file` and friends are unreachable regardless of what SQL is generated.
 - **`ALTER DEFAULT PRIVILEGES`** means a table added later is readable without re-granting — and, importantly, is the only thing that is automatic. Write access never is.
 
-> Verification is a **test**, not an assertion in a doc. [../development/TESTING.md](../development/TESTING.md) specifies negative tests: the read-only role must fail on `INSERT`, `UPDATE`, `DELETE`, `CREATE TABLE`, `COPY ... TO PROGRAM`, and any `agent_meta` read.
+> Verification is a **test**, not an assertion in a doc. [../development/TESTING.md](../development/TESTING.md) §5 specifies negative tests: the read-only role must fail on `INSERT`, `UPDATE`, `DELETE`, `CREATE TABLE`, `COPY ... TO PROGRAM`, and any `agent_meta` read. Thirty of them, and they gate Stage 1 rather than Stage 6.
+
+> **And verification is also a startup assertion, because the tests could not have caught the likelier failure.** Every one of those thirty builds this role from this migration inside a testcontainer. None of them looks at the role a deployment's `DATABASE_RO_URL` actually names — so they prove the DDL above is correct and say nothing about whether the running system connects as it. The check that existed for that compared the two connection strings for inequality, which two spellings of the same superuser pass.
+>
+> `composition.assert_read_only` now asks PostgreSQL's own privilege functions on first open of the read-only connection, and refuses to hand it out otherwise. It asks rather than attempting a write, because the misconfiguration it catches is exactly the one where a probe `INSERT` would be *accepted*. See [ADR-033](DECISIONS.md#adr-033--the-read-only-role-is-proved-at-startup-by-asking-rather-than-by-writing) and [../operations/SECURITY.md](../operations/SECURITY.md) §13.2.
+>
+> The two verifications answer different questions and both are needed: the tests ask *does this migration produce a safe role*, the assertion asks *is this process using one*.
 
 ## 8. Migrations
 

@@ -170,9 +170,9 @@ The dependency set will grow with the components that have one. MCP server conne
 
 ---
 
-## Error model — **served**
+## Error model
 
-Every error uses this envelope, including the ones no route author writes: a 404 for an unknown path, a framework validation failure, and an unhandled exception. Starlette's own default is `{"detail": ...}`, which would be a second shape for a client to parse on exactly the paths its error handling is least likely to have been tested against.
+**Served.** Every error uses this envelope, including the ones no route author writes: a 404 for an unknown path, a framework validation failure, and an unhandled exception. Starlette's own default is `{"detail": ...}`, which would be a second shape for a client to parse on exactly the paths its error handling is least likely to have been tested against.
 
 ```json
 {

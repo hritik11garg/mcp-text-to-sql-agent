@@ -1,6 +1,8 @@
 # Observability
 
 > **Status: TBD — Stage 6** for implementation and dashboards. Instrumentation design below is decided, and span boundaries are wired in Stage 1 rather than retrofitted — adding tracing to an agent loop afterwards means restructuring the loop.
+>
+> **One piece exists: `request_id`.** Everything below assumes a correlation key, and the API assigns one to every request — including ones that 404 — putting it in the response body, the `X-Request-Id` header, and every log line the request produces. See §2a for the part that is not obvious, which is that the header cannot be trusted verbatim.
 
 The question this has to answer: **when a question produces a wrong or slow answer, where did it go wrong?** With an agent, that is genuinely hard — the failure could be retrieval, generation, validation, execution, or synthesis, and the aggregate latency number tells you none of it.
 
@@ -63,6 +65,27 @@ Rules:
 - **Result values are not** (`LOG_RESULT_VALUES=false`) — see [CONFIG.md](CONFIG.md) §7.
 - **Secrets are redacted at the formatter**, not by remembering not to log them.
 - **Errors log the structured `error_type`**, not just a message string, so failure modes are countable rather than grep-able.
+
+## 2a. `request_id` — implemented, and not trusted from the wire
+
+A caller may supply `X-Request-Id`, and it is honoured: losing a gateway's trace id at this boundary makes a distributed trace stop exactly where the interesting part starts.
+
+But the value arrives from the network and goes to two places where an unchecked string is dangerous:
+
+**Into the log.** A value containing a newline writes a second log line, and an attacker who chooses that line chooses what an operator reads during an incident — a forged `ERROR authentication bypassed for admin`, or enough fabricated entries to bury the real one. That is CWE-117, and it defeats the first two steps of the incident procedure in [SECURITY.md](SECURITY.md) §15, both of which are "read the record".
+
+**Back out**, in a response header and in the error envelope. CR/LF in a header value is response splitting.
+
+So:
+
+| Rule | Why |
+|---|---|
+| Allowlist `[A-Za-z0-9._:-]`, 1–128 chars | A denylist of dangerous characters is bypassed by the encoding nobody thought of |
+| Anchored `\A`…`\Z`, **not** `^`…`$` | In Python `$` also matches before a trailing newline, so `^[\w]+$` accepts `"abc\n"` — precisely the input this rejects |
+| A failing value is **replaced**, not rejected | A `400` on a correlation header would fail requests that were otherwise fine, and would let a prober fingerprint this service |
+| Assigned before routing | A request that 404s still gets an id, so a scan is as correlatable as real traffic |
+
+The consequence for anyone reading logs: **the `request_id` in a log line is always safe to trust as a single token**, and is not always the one the client sent. If a client reports an id you cannot find, they sent something unrepeatable.
 
 ## 3. Metrics
 

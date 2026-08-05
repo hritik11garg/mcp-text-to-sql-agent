@@ -360,6 +360,7 @@ Not deferred findings — prerequisites. Each is unexploitable today because no 
 | **`question` length bound** | API.md specifies 1–2000 chars. Prompt cost and token spend scale with it |
 | **Per-client in-flight cap** | API.md specifies `429 rate_limited` and nothing emits it. One client's twenty questions must not hold every slot |
 | **A real connection pool** | `SQLExecutor` takes `ConnectionSource`; today's single-connection adapter means two concurrent calls contend. Unreachable over stdio, reachable over HTTP |
+| **Query execution off the event loop** | Every connection is sync `psycopg`. A two-second aggregate run directly in a route stalls *every* concurrent request for its duration — a self-inflicted denial of service that one slow query is enough to trigger. `/ready` already uses `asyncio.to_thread`; the query path must |
 | **SSE stream limits** | Concurrent-stream cap, keepalive, and cancellation on disconnect — an abandoned stream that pins a connection is the `idle_in_transaction_session_timeout` case from §5 arriving from outside |
 | **`explain_only` must not become an oracle** | Validating without executing still discloses whether an identifier exists |
 
@@ -580,7 +581,7 @@ The four servers add no new capability. They add a *transport*, and a transport 
 
 **Why the fixes are secure.** Each addresses a property of the transport rather than of the caller, so none depends on the model behaving. The bounds argument is structural: there is nothing to bypass at the protocol layer because the protocol layer enforces nothing.
 
-**Not yet done.** Streamable HTTP is not implemented, and it is where authentication first becomes necessary — an HTTP-reachable `execute_sql` with no auth is a different risk class from a subprocess a host launched. It lands with the API layer for that reason, not by accident.
+**Not yet done, and the reasoning now has an outcome.** Streamable HTTP is not implemented. It was deferred on the grounds that it is “where authentication first becomes necessary” and would land with the API layer — and the API layer has since landed **without** authentication (§13.1). So the deferral was right about the risk and wrong about the schedule: an HTTP-reachable `execute_sql` is still a different risk class from a subprocess a host launched, and what actually holds that line today is the loopback refusal in `APISettings`, not the absence of the transport. An HTTP MCP transport would need the same treatment, or it becomes the way around it.
 
 **CIA impact.** Availability (stream corruption), Confidentiality (failure messages), Integrity is unaffected — the read-only role is unchanged by any of this.
 

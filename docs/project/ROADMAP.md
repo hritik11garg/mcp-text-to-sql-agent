@@ -13,18 +13,18 @@ Percentages are checkbox counts from [TASKS.md](TASKS.md), not confidence — a 
 | Stage | Output | Status | % |
 |---|---|---|---|
 | 0 | Scaffolding — docs, deps, interpreter pin | ✅ Done | 100% |
-| 1 | **Core loop** — retrieval, generation, validation, execution, profiling, API, demo UI | 🚧 In progress | 59% |
-| 2 | **Eval harness** — comparison, Recall@k, artifacts, resumption, benchmark loading, pipeline seam | 🚧 In progress | 80% |
+| 1 | **Core loop** — retrieval, generation, validation, execution, profiling, API, demo UI | 🚧 In progress | 63% |
+| 2 | **Eval harness** — comparison, Recall@k, artifacts, resumption, benchmark loading, pipeline seam | 🚧 In progress | 81% |
 | 3 | **MCP servers + client refactor** | 🚧 In progress | 84% |
 | 4 | **Agent layer** — decomposition, session memory, self-correction | ⬜ Not started | 0% |
 | 5 | **Fine-tuned schema linker** | ⬜ Not started | 0% |
 | 6 | **Hardening** — limits, tracing, tests | ⬜ Not started | 0% |
 
-**What is genuinely blocking, in order:** a full-split run — the pipeline runs end to end and has produced numbers, but every one of them covers 3 of 20 databases and two are a blend of two models. Then the HTTP API and the demo UI it serves (blocks the Stage 1 close-out and any visual demo), then the agent loop.
+**What is genuinely blocking, in order:** a full-split run — the pipeline runs end to end and has produced numbers, but every one of them covers 3 of 20 databases and two are a blend of two models. Then `POST /v1/query` and the demo UI it serves (blocks the Stage 1 close-out and any visual demo), then the agent loop.
 
-**Stage 1 dropped from ~75% to 59%** when the demo UI was added to its scope. The percentage got worse because the plan got more honest, which is the direction it should move.
+**Stage 1 dropped from ~75% to 59%** when the demo UI was added to its scope, and has since recovered to 63% as the API's foundation landed. The percentage got worse because the plan got more honest, which is the direction it should move.
 
-**Stage 1 is not "the core loop works end to end".** Every component is built and tested, there is a real dataset in the database — Spider's dev split, converted and verified — and the pipeline is now connected to the harness. What has still not happened is a *run*: no question has yet been answered by the system itself, because that needs the database up and the catalog built. The distinction between wired and measured is the one this project keeps insisting on, and it applies to its own progress table.
+**Stage 1 is not "the core loop works end to end".** Every component is built and tested, there is a real dataset in the database — Spider's dev split, converted and verified — the pipeline is connected to the harness, and it has now produced measured numbers. What is still missing is the *serving* half: `POST /v1/query` does not exist, so nothing outside the eval harness can ask a question. The distinction between wired and measured is the one this project keeps insisting on, and the distinction between measured and *served* is the one Stage 1 is now waiting on.
 
 ---
 
@@ -48,13 +48,17 @@ Scope: Postgres + pgvector up with roles and migrations; schema ingestion and em
 - [ ] Runs end to end from a clean checkout per the README
 - [x] **The read-only negative test suite is green** — this gates the stage, not Stage 6
 - [x] Row limits and statement timeouts are enforced and tested — at the role level *and* per request, the latter injected into the AST rather than requested in the prompt
-- [~] `.env.example` and [CONFIG.md](../operations/CONFIG.md) match the implementation — CONFIG.md tracks every shipped setting; `.env.example` is still outstanding
+- [x] **`.env.example` and [CONFIG.md](../operations/CONFIG.md) match the implementation** — and it is now *asserted* rather than reviewed. `tests/unit/test_settings.py` enumerates every field on every settings class and fails if one is missing from either file. Added after an audit found 18 of 50 settings had reached the code without reaching the template
 - [ ] Span boundaries are in place (instrumentation added later, structure now)
 - [ ] **A browser can ask a question and watch it being answered.** Added after noticing the project had no surface a reader could see — the MCP servers are a capability, not a demo, and until this exists there is nothing to put in a README GIF either
 
 **Landed so far:** Postgres + pgvector with migrations and the read-only role (30 negative tests, green); the `LLMClient` and `Embedder` ports; typed settings with an SSRF guard; the schema catalog — introspection, serialization, embedding, and an idempotent indexer; retrieval — ANN over pgvector with `table_filter`, join-path expansion and clamped limits; five-stage SQL validation with structured rejections and nearest-match suggestions; sandboxed execution with AST-level row limits, per-statement timeouts and an audit trail on a separate owner connection; SQL generation behind one OpenAI-compatible adapter with a model fallback chain; and table profiling under an explicit disclosure budget.
 
-**Still open:** FastAPI + SSE, `.env.example`, and loading a target dataset — which is what "runs end to end from a clean checkout" is waiting on. Two smaller items are deliberately deferred with the seam already in place: the read-only connection *pool* (`ConnectionSource` exists; a pool with one client is machinery without a job until the API layer creates a second caller), and prompt-cache verification (`cache_read_tokens` is plumbed through but has never been observed non-zero against a real provider). Retrieval latency is guarded against an accidental full scan but not yet measured against the p95 budget, which needs a realistic corpus (Stage 6).
+**The API's foundation landed:** `create_app()`, `/health`, `/ready`, the sanitized error envelope, request correlation, and the startup sequence — including the assertion that **proves** the read-only role cannot write rather than trusting `DATABASE_RO_URL` to name one ([ADR-033](../architecture/DECISIONS.md#adr-033--the-read-only-role-is-proved-at-startup-by-asking-rather-than-by-writing)). That was a finding, not a feature: nothing had ever checked, and the thirty negative tests gating this stage build their own role and never look at the one a deployment connects as.
+
+**Still open:** `POST /v1/query` and SSE, and loading a target dataset — which is what "runs end to end from a clean checkout" is waiting on. The read-only connection *pool* is now genuinely blocking rather than deferred: `ConnectionSource` exists, and two concurrent `execute_sql` calls contend on one connection the moment a second caller can arrive. Prompt-cache verification is still deferred — `cache_read_tokens` is plumbed through but has never been observed non-zero against a real provider. Retrieval latency is guarded against an accidental full scan but not yet measured against the p95 budget, which needs a realistic corpus (Stage 6).
+
+**And the API has no authentication**, which is Stage 6 work. Until then `APISettings` refuses to bind anything but loopback, so the gap is enforced rather than noted ([ADR-034](../architecture/DECISIONS.md#adr-034--the-api-refuses-to-bind-beyond-loopback-while-it-has-no-authentication)). [SECURITY.md](../operations/SECURITY.md) §13.9 lists the controls that must land with the first endpoint that accepts a request body.
 
 **What the last four versions changed about the stage's shape:** validation, execution, generation and profiling all landed as plain components with constructor injection rather than as MCP servers. That is deliberate — Stage 3 wraps them, and the refactor can then be proven behaviour-preserving against a Stage 2 baseline instead of being asserted. It also means every capability is unit-testable without a transport.
 

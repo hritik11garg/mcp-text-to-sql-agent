@@ -76,16 +76,50 @@ Also usually correct — the query was too expensive. The agent should respond b
 
 If legitimate queries are timing out: check whether the target data is far larger than the timeout assumes, whether an index is missing, and whether `MAX_ESTIMATED_COST` should have rejected it before execution.
 
+### `DATABASE_RO_URL can write` at startup — the process refuses to start
+
+**Working as intended, and worth reading rather than working around.**
+
+`assert_read_only` asked PostgreSQL what the role could do and found a write privilege, a `CREATE`, or a grant-bypassing role attribute. The message names what it found:
+
+```
+DATABASE_RO_URL can write. The role it connects as holds INSERT, UPDATE,
+DELETE or TRUNCATE on: public.orders, public.customers. ...
+```
+
+or, for the most common case:
+
+```
+DATABASE_RO_URL connects as a role with: SUPERUSER (bypasses every grant ...)
+```
+
+Almost always, `DATABASE_RO_URL` is pointing at the **owner** role. The check that used to exist only compared the two connection strings for inequality, so `…@localhost/db` and `…@127.0.0.1/db` passed it while being the same superuser. Point it at the login role migration 002 creates (`sql_agent_login`), or revoke the grants.
+
+There is no setting to skip this. See [SECURITY.md](SECURITY.md) §13.2 and [ADR-033](../architecture/DECISIONS.md#adr-033--the-read-only-role-is-proved-at-startup-by-asking-rather-than-by-writing).
+
+### `DATABASE_RO_URL can create objects in: public`
+
+The role holds `CREATE` on a schema. On PostgreSQL before 15, `PUBLIC` gets `CREATE` on `public` by default; migration 002 revokes it, but a database created another way will not have had that done.
+
+```sql
+REVOKE CREATE ON SCHEMA public FROM PUBLIC;
+REVOKE CREATE ON SCHEMA public FROM sql_agent_ro;
+```
+
+CREATE is a write: a role that can add a table can add a trigger.
+
 ### Writes succeed from the read-only role
 
 **Stop and treat this as a security incident, not a bug.**
 
-The role is misconfigured, or `DATABASE_RO_URL` points at the wrong role. Verify:
+This should now be unreachable — `assert_read_only` refuses to open the connection at startup, so a process that is running has already proved it. If you see it anyway, the interesting question is *how the process started*, not what the grants are.
+
+Verify:
 ```sql
 SELECT grantee, privilege_type FROM information_schema.role_table_grants
 WHERE grantee = 'sql_agent_ro';
 ```
-The negative tests in [../development/TESTING.md](../development/TESTING.md) exist to catch this in CI. If they were green and this happened in production, the tests are testing the wrong database.
+The negative tests in [../development/TESTING.md](../development/TESTING.md) prove the *migration* produces a correct role. They build that role in a testcontainer and never look at the one your `.env` names — which is exactly why the startup assertion had to exist as well.
 
 ---
 
@@ -288,6 +322,42 @@ A real possibility, and a publishable result ([ADR-006](../architecture/DECISION
 If all four are ruled out and it is still worse, record it in [../ml/BENCHMARKS.md](../ml/BENCHMARKS.md) and write up why in TRAINING.md.
 
 ---
+
+## HTTP API
+
+### `API_HOST='0.0.0.0' would serve this API beyond this machine`
+
+Working as intended. The API has **no authentication**, so it refuses to bind anything but loopback ([ADR-034](../architecture/DECISIONS.md#adr-034--the-api-refuses-to-bind-beyond-loopback-while-it-has-no-authentication)).
+
+If you are in a container: leave `API_HOST=127.0.0.1` and publish the port from the runtime — `-p 8000:8000`, or a Kubernetes Service. That forwards to loopback inside the network namespace and works unchanged.
+
+If you are trying to reach it from another machine: put something in front that authenticates. There is nothing in the application to turn on.
+
+All four spellings of loopback are accepted, so if you needed `::1` or `localhost` for an unrelated reason, use it.
+
+### `API_CORS_ORIGINS must not contain '*'`
+
+Name the origins. A wildcard on an API that reaches a database makes every page on the internet a client, and the usual mitigation — disabling credentials — is one refactor away from being undone.
+
+### `/ready` returns 503 with `{"startup": "down"}`
+
+The process is serving but its lifespan has not finished. Normal for the first moment after start; persistent means startup is blocked on a dependency, and the reason is on stderr.
+
+### `/ready` returns 503 and says only `"down"`
+
+By design — the reason is never in the response, because both probes are unauthenticated and a driver message carries the DSN, the internal hostname and the role name. **The cause is in the process log**, with the full traceback, correlated by the `request_id` in the response body and the `X-Request-Id` header.
+
+### `/ready` says `up` but queries fail
+
+The verdict is cached for 5 seconds. Also, `/ready` probes the two connections and nothing else — the catalog and retriever are loaded at startup and held, so a stale catalog after a migration to the target database will not show up here. Restart the process; the catalog is a point-in-time snapshot by design.
+
+### The `X-Request-Id` I sent is not the one in the response
+
+It failed the allowlist (`[A-Za-z0-9._:-]`, 1–128 chars) and was replaced rather than rejected. A newline in that header writes a second log line, so a value that cannot be repeated safely is not repeated. Trailing whitespace and newlines are the usual cause.
+
+### `ModuleNotFoundError: No module named 'httpx2'` running the tests
+
+`starlette.testclient` requires `httpx2`; it refuses `httpx` 0.x. `pip install -r requirements-dev.txt`.
 
 ## Container runtime
 

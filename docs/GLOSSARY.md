@@ -195,6 +195,15 @@ Recording an artifact's digest the first time it is seen, then requiring every l
 **Split stability**
 The property that adding databases to a corpus does not move the ones already assigned to a split. Distinct from "deterministic given a seed", which a shuffle also satisfies while silently rearranging everything when the input list changes.
 
+**Composition root**
+The one place in a codebase that constructs the object graph — connections, adapters, components — so every other module receives what it needs rather than building it. `src/composition/` here. It is allowed to know about every layer at once precisely because nothing depends on it.
+
+**Liveness vs readiness**
+Two questions an orchestrator asks for two different reasons. Liveness (`/health`) means *is this process alive* — failing it triggers a **restart**. Readiness (`/ready`) means *can it serve* — failing it **removes the replica from the load balancer** and leaves it running. Conflating them is how a thirty-second database blip becomes a fleet restart.
+
+**Deselected**
+A test that a marker expression did not match. Distinct from *skipped*: a skip is reported on its own line with a reason, a deselection produces no output at all. The third state, and the reason `pytest -m security` was gating on 156 of 206 tests while reporting green.
+
 ---
 
 ## Observability
@@ -207,3 +216,12 @@ One timed unit of work inside a trace — a retrieval call, a validation attempt
 
 **Trace**
 The full tree of spans for one request, showing where the time went across agent, MCP servers, and database.
+
+**`request_id`**
+The correlation key on every log line, response body and `X-Request-Id` header. Honoured from the caller when it matches an allowlist so a gateway's trace survives this hop, and **replaced** when it does not — a newline in that header writes a log line the sender chose. See [operations/OBSERVABILITY.md](operations/OBSERVABILITY.md) §2a.
+
+**Log injection**
+Writing attacker-chosen content into a log by embedding a newline in a value that reaches it (CWE-117). Matters more than it sounds: it defeats the first step of incident response, which is reading the record.
+
+**Fail closed**
+Choosing the restrictive branch when a check cannot decide. `_is_loopback_host` treats an unresolvable address as non-loopback; `Readiness` treats an unconfigured probe set as not-ready. The opposite — failing open — is how a control becomes a formality under exactly the conditions it was written for.

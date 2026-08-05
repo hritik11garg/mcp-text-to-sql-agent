@@ -84,7 +84,7 @@ Point being: the agent has to be testable without a live LLM. If constructing it
 
 ## 6. Async rules
 
-The whole I/O path is async. The rules that matter:
+The HTTP path is async. **The database layer is not** — this project holds sync `psycopg` connections, and that is a real constraint rather than an oversight, so rule 1 has teeth here and a standing exception is not available.
 
 1. **No blocking calls inside `async def`.** No `requests`, no `time.sleep`, no sync `psycopg`. One blocking call stalls the entire event loop, not just that request.
 2. **CPU-bound work goes to a thread.** Embedding inference is CPU-bound: `await asyncio.to_thread(model.encode, texts)`. This is the most likely place to get it wrong, because `model.encode` looks harmless.
@@ -92,6 +92,24 @@ The whole I/O path is async. The rules that matter:
 4. **Concurrent tool calls use `asyncio.gather`** with `return_exceptions=True` — one failing tool must not cancel the others silently.
 5. **Async context managers for resources.** Connections, MCP sessions, HTTP clients. No manual close.
 6. **No fire-and-forget tasks.** A bare `asyncio.create_task` without a reference can be garbage-collected mid-flight; keep the reference and await it.
+
+### Rule 1 and the sync database layer
+
+Every connection this process holds is sync `psycopg`. Anything reached from a route therefore has to cross a thread boundary, and "it is only a small query" is not an exemption — it is how the first genuinely slow one gets through.
+
+`Readiness.status()` is the worked example, and it was written wrong first. A readiness probe runs `SELECT 1` on a held connection: sub-millisecond, cached five seconds, obviously harmless. It was called directly from the route.
+
+**The reasoning fails on the case the probe exists for.** `SELECT 1` is fast when the database is healthy. When the peer has gone away, a write to that socket blocks until the OS gives up — and the moment a readiness probe blocks is exactly the moment every other request needs the loop. A probe whose whole job is to report an outage would, during one, stall the process it was reporting on.
+
+```python
+detail = await asyncio.to_thread(self._probe_all)
+```
+
+One thread for the whole refresh rather than one per probe: they are sequential anyway, and each hop off the loop costs more than the statement it protects.
+
+**This scales up, and is on the list before `POST /v1/query`.** A readiness probe is a `SELECT 1`. A user's query is a two-second analytical aggregate, and running one of those on the loop would stall *every* concurrent request for its whole duration. The endpoint needs the same treatment, and it needs a connection pool for the threads to draw from — see [../operations/SECURITY.md](../operations/SECURITY.md) §13.9 and [../project/TASKS.md](../project/TASKS.md).
+
+**The generalisable rule:** judge a blocking call by its behaviour in the failure it was written to detect, not by its cost in the healthy case.
 
 ## 7. Logging
 

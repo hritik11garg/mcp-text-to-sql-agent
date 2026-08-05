@@ -806,3 +806,103 @@ Fact 2 is answered by projecting the `ORDER BY` expressions into the select list
 **Generalises to:** a safety control and a measurement control are not interchangeable, and the one that quietly changes the data is the dangerous one to reuse.
 
 **Revisit:** at Stage 4, when self-correction needs the executor's structured errors — the retry loop may want the executor's taxonomy even where the scoring path does not.
+
+---
+
+## ADR-033 — The read-only role is proved at startup, by asking rather than by writing
+
+**Status:** accepted · **Date:** 2026-08-05 · **Stage:** 1
+
+**Context.** Every containment claim in [SECURITY.md](../operations/SECURITY.md) rests on `DATABASE_RO_URL` naming a role that cannot write — §2 calls it "the one that actually holds" and says the layers above only reduce how often it is tested. Nothing verified it. The only check compared the two DSN **strings** for inequality, and `postgresql://postgres:pw@localhost/db` and `postgresql://postgres:pw@127.0.0.1/db` are different strings and the same superuser.
+
+Thirty negative tests in `tests/security/test_readonly_role.py` assert what `sql_agent_ro` may do. All thirty build that role from migration 002 inside a testcontainer; none of them looks at the role the application connects as. The suite proves the migration is correct and says nothing about the deployment.
+
+**Decision.** `composition.assert_read_only(connection)` runs on **first open of the read-only connection** and refuses to hand it out otherwise. It asks PostgreSQL's own privilege functions: `has_table_privilege` for INSERT/UPDATE/DELETE/TRUNCATE across every non-system schema, `has_schema_privilege(..., 'CREATE')`, and the four role attributes that bypass grants entirely (`rolsuper`, `rolcreatedb`, `rolcreaterole`, `rolbypassrls`).
+
+**Why ask rather than attempt.** The failure this exists to catch is precisely the one where a probe `INSERT` would be **accepted**. A startup check whose negative result is a mutation of the operator's database is not a check worth running. Two lesser reasons: it needs no table to aim at, so an empty target schema cannot produce a vacuous pass; and `has_table_privilege` accounts for role inheritance, `PUBLIC` grants, column-level grants and superuser bypass in one answer — four rules this code would otherwise reimplement and keep correct across PostgreSQL versions.
+
+**Why on connection open rather than in each entrypoint.** Four MCP servers and an HTTP API is five places to remember, and the one that forgets is the one that ships. A component holding this connection has, by construction, proved it — which is how `execute_sql`, the server that actually runs generated SQL, gained the check without being modified.
+
+**Alternatives.**
+- *`INSERT` inside a rolled-back transaction.* The negative result is a mutation. Rollback does not undo trigger side effects, sequence advances, or WAL.
+- *Check `default_transaction_read_only` only.* Any session can `SET` it off. It is a second barrier, not the boundary — so it is **reported** in the success log rather than enforced, because migration 002 claims two barriers and a check that only ever looked at one should not be the evidence for that claim.
+- *Compare `current_user` to `DB_READONLY_ROLE`.* Name equality is not privilege. A role can be renamed, or granted more later.
+- *An opt-out setting.* Rejected outright: a variable that turned the boundary off would be set in exactly the deployment that needed it most.
+
+**Tradeoff.** Three extra round trips per process start, and a point-in-time snapshot — a `GRANT` issued while the process runs is not detected until restart. Accepted because grants change at migration frequency and processes restart on deploy. Continuous verification is [FUTURE.md](../project/FUTURE.md) work.
+
+**Generalises to:** a control tested only against the fixture that satisfies it has been tested against itself. When a control has tests, the question is not *is it tested* but *what does the fixture hold fixed* — here it held fixed the one thing that could be wrong in production.
+
+**Revisit:** when authentication lands and per-tenant roles become possible, at which point "the role" is no longer a single answer.
+
+---
+
+## ADR-034 — The API refuses to bind beyond loopback while it has no authentication
+
+**Status:** accepted · **Date:** 2026-08-05 · **Stage:** 1
+
+**Context.** [CONFIG.md](../operations/CONFIG.md) §6 has specified since Stage 0 that "binding to `0.0.0.0` without `API_KEY` set is a startup error, not a warning." `API_KEY` does not exist — authentication is Stage 6 — so the condition is vacuously true today, which means the rule as written enforces nothing.
+
+**Decision.** `APISettings` raises `ConfigurationError` for any `API_HOST` that is not loopback. Every loopback spelling is accepted (`127.0.0.1`, `127.0.0.2`, `::1`, `localhost`); anything that does not resolve as an IP literal fails **closed**. The same validator pattern refuses `API_CORS_ORIGINS=*`.
+
+**Why an error and not a warning.** Nobody reads a log line on a service that started successfully. The failure modes are ordinary: a developer sets `0.0.0.0` to test from a phone and then joins a conference network; a compose file publishes the port on a host with a public IP. In both, an endpoint that runs model-generated SQL against the target database and spends the LLM budget is reachable by anyone who can route a packet.
+
+**Why every loopback spelling.** A control that wrongly blocks a legitimate configuration is a control somebody removes. If `::1` were rejected, the fix a frustrated developer reaches for is deleting the validator, not changing the address.
+
+**Why a validator rather than a safe default.** A default is something you change; a validator is something you argue with. The CORS case makes the difference concrete: the dangerous configuration is a wildcard origin *combined with credentials*, and the usual mitigation is to hardcode `allow_credentials=False` and let the wildcard through. That works until someone enables credentials later for a good reason and the two halves recombine. Refusing `*` where it is written means the combination is never representable.
+
+**Alternatives.**
+- *Warn and continue.* The audience for a warning on a working service is nobody.
+- *Allow non-loopback when `API_KEY` is set.* There is no authentication for a key to attach to. A setting that gates nothing is worse than no setting, because it reads like a control.
+- *A `--dev` flag that permits it.* Makes the dangerous configuration and the convenient one the same flag.
+
+**Tradeoff.** Deploying requires publishing the port from a container runtime (`-p 8000:8000`) or fronting the service with an authenticating proxy. That is one line of configuration, and it moves the decision to expose the service to whoever is deploying it rather than to a default.
+
+**Generalises to:** when a documented control is conditioned on something that does not exist yet, the honest implementation is the stricter one — not the vacuous one.
+
+**Revisit:** when authentication lands. At that point the original Stage 0 rule becomes implementable as written, and this validator relaxes to it.
+
+---
+
+## ADR-035 — The composition root is its own package, because entrypoints are peers
+
+**Status:** accepted · **Date:** 2026-08-05 · **Stage:** 1
+
+**Context.** `Resources` — both database connections, the catalog, the retriever, built once per process and injected — lived in `src/mcp_servers/resources.py`. The HTTP API needs the same graph.
+
+**Decision.** Moved to `src/composition/`. The API and the four MCP servers both import it; neither imports the other.
+
+**Why not just import it from `mcp_servers`.** They are **peers** — both adapters over the same components, both entrypoints. An HTTP layer that depends on the MCP layer to open a database connection is a dependency in the wrong direction, and it would make `mcp_servers` un-deletable: removing the MCP servers would break the API for no reason anyone could explain.
+
+**Why not `core/`.** `core` is the innermost layer and holds the ports everything else depends on. It cannot depend on `schema` and `adapters`, which the graph must construct.
+
+**Why not a separate `ApiResources`.** The API needs a superset of what the servers need, not a different thing. Two classes would duplicate connection opening, catalog loading and the retriever build — and would have duplicated `assert_read_only` (ADR-033) or, more likely, omitted it from one of them.
+
+**Consequence.** `composition` is the one package allowed to know about every layer at once, and nothing depends on it. That is what a composition root is: constructing the object graph is the job, and every other module receives what it needs rather than building it.
+
+**Tradeoff.** One more top-level package for one file. Accepted because the alternative encodes a false hierarchy between two things that are the same kind of thing.
+
+---
+
+## ADR-036 — The shared answering path stops at generated SQL, and raises
+
+**Status:** accepted · **Date:** 2026-08-04 · **Stage:** 1→2
+
+**Context.** The eval harness answers a question by retrieving schema context and generating SQL against it. The HTTP API is about to do the same. Two implementations of the same two steps is how a published accuracy number ends up describing a system nobody can query — and the size of that risk is measurable here: `RETRIEVAL_TOP_K=10` against Spider schemas holding 10–67 elements was worth **thirty points** of execution accuracy.
+
+**Decision.** `src/answering/` exposes `retrieve()`, `generate()`, and `candidate()` — the composition of the two. It **raises** rather than returning a failure value, and it stops at generated SQL.
+
+**Why all three are public.** The eval needs the intermediate: Recall@k is computed from the retrieved elements *whether or not generation succeeded*, and dropping them on failure would measure recall and accuracy over different question sets — making the correlation between them, which is the entire argument for the Stage 5 fine-tune, an artefact of the model's success rate. The composition is public so it can be **asserted**: a test runs both routes with identical fakes and requires equal results. A caller that sequences the phases itself is a caller that can sequence them wrongly.
+
+**Why it raises.** The conversion only runs one way. An exception converts to the eval's `Attempt` cleanly; an `Attempt` cannot be recovered back into an HTTP status code. The two callers also need different distinctions — a spent LLM quota is `infrastructure` to the eval and leaves the scored denominator, and a `429` with `Retry-After` to the API. A shared layer that flattened first would have to be unflattened by both.
+
+**Why it stops at generated SQL.** Execution cannot be shared — [ADR-032](#adr-032--the-evals-query-runner-is-not-the-production-executor). This is stated in the package docstring because otherwise the next reader will helpfully "finish" the abstraction.
+
+**Alternatives.**
+- *Return `Result[Candidate, Failure]`.* A third vocabulary neither caller wants, and both would immediately translate out of.
+- *Only expose `candidate()`.* Tried first. Unusable by the caller that already existed, because the eval needs `retrieved` on the generation-*failure* path and the composed call raises before returning anything. The abstraction had been designed from the caller not yet written.
+- *Make the eval's `Attempt` the shared return type.* Puts benchmark concepts — `error_type`, gold comparison — into the request path.
+
+**Tradeoff.** A seam built one commit before its second caller, which is the shape YAGNI warns about. Accepted narrowly: the eval was being refactored anyway, the second caller was the next slice rather than a maybe, and the cost of divergence is a benchmark number that describes nothing. Also two parameters (`feedback`, `previous_sql`) that no caller passes yet — they are the Stage 4 retry shape, and re-retrieving on a retry answers a subtly different question and makes the retry's effect unattributable.
+
+**Generalises to:** share the part where a difference would invalidate the measurement; keep separate the part where sameness would.

@@ -37,6 +37,7 @@ probed does not scale with how often somebody probes.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 from collections.abc import Callable, Sequence
@@ -102,7 +103,7 @@ class Readiness:
         self._probes = tuple(probes)
         self._cached = None
 
-    def status(self) -> tuple[bool, dict[str, str]]:
+    async def status(self) -> tuple[bool, dict[str, str]]:
         """``(ready, {dependency: "up" | "down"})``, possibly from cache.
 
         Unconfigured is **not ready**, and deliberately not "ready with nothing
@@ -110,6 +111,14 @@ class Readiness:
         version answers 200 during startup and again after any refactor that
         drops a probe -- a readiness endpoint whose failure mode is a
         confident yes is worse than not having one.
+
+        Async because the probes are **blocking**: psycopg's sync driver is
+        what this process holds, and running ``SELECT 1`` on it directly inside
+        a route would stall the event loop for every other request. That is
+        cheap when the database is healthy and unbounded when it is not -- a
+        TCP write to a peer that has gone away blocks until the OS gives up,
+        and the moment a readiness probe blocks is precisely the moment
+        everything else needs the loop. See CODE_STYLE.md section 6, rule 1.
         """
         if self._probes is None:
             return False, {"startup": DOWN}
@@ -119,10 +128,18 @@ class Readiness:
             _, ready, detail = self._cached
             return ready, dict(detail)
 
-        detail = {probe.name: self._run(probe) for probe in self._probes}
+        # One thread for the whole refresh rather than one per probe: they are
+        # sequential anyway, and each hop off the loop costs more than the
+        # `SELECT 1` it is protecting.
+        detail = await asyncio.to_thread(self._probe_all)
         ready = all(state == UP for state in detail.values())
         self._cached = (now, ready, detail)
         return ready, dict(detail)
+
+    def _probe_all(self) -> dict[str, str]:
+        """Every probe, in order. Runs off the event loop -- see :meth:`status`."""
+        probes = self._probes or ()
+        return {probe.name: self._run(probe) for probe in probes}
 
     def _run(self, probe: Probe) -> str:
         try:
@@ -157,7 +174,7 @@ def build_router(readiness: Readiness) -> APIRouter:
 
     @router.get("/ready", summary="Dependency readiness")
     async def ready(request: Request) -> JSONResponse:
-        is_ready, dependencies = readiness.status()
+        is_ready, dependencies = await readiness.status()
         request_id = request_id_of(request)
 
         if is_ready:

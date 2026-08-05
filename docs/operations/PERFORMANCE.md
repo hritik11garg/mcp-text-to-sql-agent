@@ -14,6 +14,9 @@
 | Query execution | **< 2 s** p95 | `db_query_duration_seconds` | Analytical aggregates on benchmark-sized data |
 | MCP call overhead | **< 20 ms** p95 | `mcp.call` minus tool duration | Framing plus a local pipe. Anything larger means the cost is in serialization, not the protocol |
 | MCP server startup | **< 3 s** | Process launch → `tools/list` returned | Four subprocesses, each opening two connections and loading the catalog. Paid once per session, and it is why the catalog is a snapshot rather than re-read per call |
+| API startup | **< 5 s** | Process launch → `/ready` returns 200 | Two connections, the read-only assertion (three round trips), the catalog, and the embedder. All eager, deliberately: a lazy startup moves these costs onto the first request and moves configuration errors past the deploy |
+| `/health` | **< 5 ms** p95 | — | Serializes a fixed dict. It touches nothing, so anything larger is framework overhead worth looking at |
+| `/ready` | **< 20 ms** p95 uncached | — | Two `SELECT 1`s on held connections, then cached 5 s. The cache is the control that stops an unauthenticated endpoint being a load generator, not an optimization |
 | SSE first token | **< 500 ms** | Time to first event | Perceived responsiveness |
 | End-to-end (single query) | **< 8 s** p95 | `request_duration_seconds` | Dominated by LLM generation |
 | End-to-end (multi-step) | **< 25 s** p95 | — | N sub-queries plus synthesis |

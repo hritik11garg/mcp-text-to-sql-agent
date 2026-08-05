@@ -113,6 +113,16 @@ Two lessons from the archive tests are worth stating separately, because both ar
 
 A third kind appears here and nowhere else: **source-level assertions**. That no identifier is interpolated into SQL, that raw values are read in exactly one function, that the sensitivity check precedes the statistics call. They check the shape of a module rather than its behaviour, which is unusual and deliberate — the property being protected is that someone changing the file can *see* what they are changing.
 
+**Boundary tests** are the newest kind, and their adversary is different from every other file here: someone with nothing but the ability to send an HTTP request. Every other test in this suite assumes an attacker who already reached the machine.
+
+- `tests/security/test_api_boundary.py` — the service is closed by default (loopback enforced, OpenAPI off, no CORS origin trusted); the probes reveal nothing (a fixed body for `/health`, two words per dependency for `/ready`); the error envelope publishes no exception text; and `X-Request-Id` is replaced rather than echoed. Every I/O boundary is faked through `create_app(resource_factory=...)`, deliberately — a security suite that needed Docker would be the first thing to get skipped.
+- `tests/security/test_readonly_assertion.py` — `assert_read_only` against a real PostgreSQL, in **both directions**. It passes for the read-only role and *fails* for the owner connection, because a check that has only ever been run against a passing case is a check nobody has seen work.
+
+Two more lessons, both about what a test holds fixed rather than what it asserts:
+
+- **A control tested only against the fixture that satisfies it has been tested against itself.** The thirty role tests above are the example. All of them build `sql_agent_ro` from migration 002 in a testcontainer, and none looks at the role a deployment connects as — so they proved the migration was right and said nothing about production, for nineteen versions. The gap is closed by a startup assertion, not by another test ([ADR-033](../architecture/DECISIONS.md#adr-033--the-read-only-role-is-proved-at-startup-by-asking-rather-than-by-writing)). When a control has tests, the question is not *is it tested* but *what does the fixture hold fixed*.
+- **A leak test must plant something identifiable and assert its absence in the whole response**, not check a field. The readiness test raises a probe error containing a password, an internal hostname and an IP, then asserts none of the three appear anywhere in `response.text` — because the failure being guarded against is a *new* path that renders the exception, and a field-level assertion cannot see one.
+
 ## 6. Contract tests (MCP)
 
 Against real servers over the real transport — `python -m mcp_servers.<name>` launched as an actual subprocess, speaking actual JSON-RPC over stdio, against an actual Postgres. Nothing is mocked, because every interesting failure in an MCP integration lives in the parts a mock replaces: process launch, message framing, and whether stdout stayed clean.
@@ -128,9 +138,13 @@ Against real servers over the real transport — `python -m mcp_servers.<name>` 
 
 ## 7. End-to-end tests
 
+> **`tests/e2e/` exists and is empty.** It is a real layer in `TEST_LAYERS` and marker-selectable, so the first file added to it is counted without anyone remembering to do anything. Nothing goes in it until `POST /v1/query` exists — the scenarios below all start with a request.
+
 Full stack, fake LLM with scripted responses. Deterministic.
 
 Scenarios: happy path; validation failure → correction → success; retry budget exhausted; statement timeout; row-limit truncation flagged in the response; multi-step decomposition; MCP server unavailable → documented degradation; client disconnects mid-SSE (no leaked connection or open transaction).
+
+The HTTP tests that exist today are deliberately **not** here. `tests/unit/test_api_health.py` and `tests/security/test_api_boundary.py` drive the app through `TestClient` with every dependency faked, which makes them unit and security tests that happen to speak HTTP. An e2e test is one where the fakes stop at the LLM.
 
 ## 8. Load tests
 
