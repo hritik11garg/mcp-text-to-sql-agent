@@ -22,9 +22,9 @@ from typing import Any
 
 from mcp.server.lowlevel import Server
 
+from composition.resources import Resources
 from core.settings import Settings
 from mcp_servers.common import ToolSpec, build_server, succeeded
-from mcp_servers.resources import Resources
 from validation.validator import DIALECT, MAX_SQL_CHARS, SQLValidator, ValidationResult
 
 logger = logging.getLogger(__name__)

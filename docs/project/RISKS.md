@@ -53,6 +53,8 @@ Scored `likelihood × impact`, both low/medium/high. Reviewed at each stage boun
 
 **Mitigation.** Negative tests that must fail, gating Stage 1 rather than Stage 6. The commonly-missed case is function execution — `pg_read_file` and `COPY ... TO PROGRAM` are reachable from a `SELECT`-only role unless `EXECUTE` is revoked. Explicitly tested.
 
+**The hole this risk missed was one level up.** Every one of those tests asserts what `sql_agent_ro` may do. None of them asserted that `DATABASE_RO_URL` *points at that role* — and the only check that existed compared the two DSN strings, which two spellings of the same superuser pass. A deployment configured that way passes every negative test in the suite, because the suite builds its own role and never looks at the one production connects as. `composition.assert_read_only` now proves it at startup ([SECURITY.md §13.2](../operations/SECURITY.md)). The general shape is worth keeping: **a control tested only against the fixture that satisfies it has been tested against itself.**
+
 **If it materializes:** treat as a security incident, not a bug ([TROUBLESHOOTING.md](../operations/TROUBLESHOOTING.md)).
 
 ### R-08 · Large schemas overwhelm the context budget

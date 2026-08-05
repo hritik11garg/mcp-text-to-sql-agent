@@ -8,9 +8,9 @@ to correct its way out of.
 
 from __future__ import annotations
 
+from composition.resources import Resources
 from core.settings import Settings
 from mcp_servers.common import configure_logging, main
-from mcp_servers.resources import Resources
 from mcp_servers.schema_search.server import build
 
 if __name__ == "__main__":

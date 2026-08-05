@@ -68,10 +68,10 @@ Five layers. Each assumes the ones above it have failed.
 
 ## 3. Authentication
 
-> **TBD — Stage 6** for the deployed configuration.
+**There is none, and the process now refuses to start in any configuration where that would matter.**
 
-- **Local/demo:** none. Binds to localhost only, and the README says so plainly.
-- **Deployed:** API key or OAuth at the edge. **The service must not be exposed publicly without it** — an unauthenticated endpoint that runs LLM-generated SQL and bills tokens is both a data risk and a cost risk.
+- **Local/demo:** none. `API_HOST` defaults to `127.0.0.1`, and `APISettings` raises `ConfigurationError` on any bind address that is not loopback — see §13.1. This page previously said "binds to localhost only"; that was a default, and a default is not a control.
+- **Deployed:** API key or OAuth at the edge, **not yet built**. Until it is, the only supported deployment is loopback plus a reverse proxy or container runtime that authenticates. An unauthenticated endpoint that runs LLM-generated SQL and bills tokens is both a data risk and a cost risk.
 - **MCP host:** the host owns authentication. Servers run as local subprocesses under the user's own privileges via stdio.
 
 ## 4. Authorization
@@ -210,6 +210,158 @@ Properties:
 | LLM06 Sensitive information disclosure | Errors are sanitized; secrets redacted; result values not logged |
 | LLM08 Excessive agency | **The central one.** The agent can only read, only via four tools, only under limits, and validation is separate from execution by design |
 | LLM10 Model theft | Out of scope |
+
+## 13. The HTTP API — the first surface reachable without the machine
+
+Everything before v0.1 ran as a local process an operator started: the MCP servers under a host, the indexer, the eval harness. "Who can call this" was answered by the operating system. The HTTP layer is the first component where it is not, and every finding below follows from that one change.
+
+Reviewed at the point the app skeleton landed (`create_app`, `/health`, `/ready`, the error envelope, request correlation). `POST /v1/query` does not exist yet; §13.9 is the list of controls that must land **before** it does.
+
+### 13.1 No authentication on a network-reachable service — **Critical**
+
+**Vulnerability.** The API has no authentication of any kind. Any caller who can open a TCP connection to the port is a fully authorized user. *(OWASP A01:2021 broken access control; API2:2023 broken authentication; CWE-306, missing authentication for a critical function.)*
+
+**Why it's dangerous.** This is not a service that returns static content. A caller who reaches it will, once `/v1/query` lands, run model-generated SQL against the target database under the read-only role and spend the operator's LLM budget doing it. The read-only role bounds *what* can be read; it does nothing about *who* is reading. §4 already states the consequence — anyone who can call the API can query anything the role can read — and that sentence is only survivable while "anyone who can call the API" means "someone with a shell on this box".
+
+**Attack scenarios.**
+
+1. **The laptop on an untrusted network.** A developer sets `API_HOST=0.0.0.0` to test from their phone, forgets, and joins a cafe or conference network. Every device on that LAN can now query the database the agent is pointed at.
+2. **The container that publishes too much.** A Dockerfile with `CMD ["python", "-m", "api"]` and a compose file with `ports: ["8000:8000"]` on a host with a public IP. Nothing in the stack asks for a credential.
+3. **SSRF from another service.** An unrelated app on the same network with a request-forgery bug becomes a proxy into this one — no credential to steal, because there isn't one.
+4. **Cost exhaustion.** Not a data attack at all: a loop against `/v1/query` spends the daily token cap, which on a free tier is the whole day's budget.
+
+**Secure implementation.** Authentication is Stage 6 work and is not in this slice. What *is* in this slice is refusing the configurations where its absence is exploitable:
+
+| Control | What it does |
+|---|---|
+| `API_HOST` defaults to `127.0.0.1` | The safe configuration is the one you get by doing nothing |
+| **A non-loopback bind is a startup error** | `APISettings._refuse_to_publish_an_unauthenticated_service` raises `ConfigurationError`. Not a warning — nobody reads a log line on a service that started successfully |
+| Every loopback spelling is accepted | `127.0.0.1`, `127.0.0.2`, `::1`, `localhost`. A control that wrongly blocks a legitimate config is a control somebody removes |
+| Unresolvable hosts fail **closed** | A hostname that does not parse as an IP is treated as non-loopback |
+| `python -m api` reads the bind address from settings, never a flag | A CLI flag makes "serve this to the network" something typed once while debugging and left in shell history |
+
+**Why the fix is secure.** It does not attempt to make an unauthenticated service safe. It makes the unsafe deployment impossible to reach by accident, and leaves the deliberate one — publish the port from a container runtime, or front it with a proxy that authenticates — as an explicit act by whoever deploys it. The check is in `pydantic-settings` validation, so it runs before the socket is bound and before any dependency is opened, and it cannot be bypassed by a code path that forgot to call it.
+
+**Residual risk.** Anyone who can reach loopback on the host — another process, another container in the same network namespace, an SSH tunnel — is authenticated by definition. That is the accepted v1 trust model (§4), and it is why the deployed configuration is blocked on real authentication rather than on more configuration.
+
+**CIA impact.** Confidentiality primarily. Availability through cost exhaustion and connection saturation. Integrity is bounded by the read-only role (§5), which is the layer that makes this survivable rather than fatal.
+
+### 13.2 The read-only boundary was assumed and never verified — **High**
+
+**Vulnerability.** Every containment claim in this document rests on `DATABASE_RO_URL` naming a role that cannot write. Until v0.1, nothing checked. The only check that existed compared the two DSN **strings** for inequality — and `postgresql://postgres:pw@localhost/db` and `postgresql://postgres:pw@127.0.0.1/db` are different strings and the same superuser. *(OWASP A05:2021 security misconfiguration; CWE-732, incorrect permission assignment for a critical resource.)*
+
+**Why it's dangerous.** It is the failure with no symptom. A deployment configured this way works perfectly: queries run, results return, tests pass, the audit log fills. Layer 5 of the defence-in-depth stack in §2 — described there as "the one that actually holds" — is simply absent, and the first evidence is a `DROP TABLE` that succeeded because a prompt injection got past layers 2–4, which §2 explicitly says are not to be relied on.
+
+**Attack scenarios.**
+
+1. **Copy-paste during setup.** An operator gets the owner URL working, copies it to `DATABASE_RO_URL` to unblock themselves, changes the host spelling, and never comes back. The string-inequality check passes.
+2. **A managed database.** A cloud provider hands out one connection string and one superuser. The path of least resistance is to use it twice.
+3. **Privilege drift.** The role was correct at migration time; a later `GRANT ALL ON SCHEMA public TO PUBLIC` — a common fix for an unrelated permissions problem — silently returns write access to it.
+4. **Benchmark schemas.** The loader creates one schema per converted database and grants `SELECT` on each. A grant that was too broad on any one of them widens the boundary for every query, not just that database's.
+
+**Secure implementation.** `composition.assert_read_only(connection)`, run on **first open of the read-only connection** rather than in each entrypoint's startup sequence — four MCP servers and an API is five places to remember, and the one that forgets is the one that ships. A component holding this connection has, by construction, proved it.
+
+| Check | Query |
+|---|---|
+| No write privilege on any user relation | `has_table_privilege(oid, 'INSERT'\|'UPDATE'\|'DELETE'\|'TRUNCATE')` across every non-system schema |
+| No object creation | `has_schema_privilege(nspname, 'CREATE')` |
+| No grant-bypassing role attributes | `rolsuper`, `rolcreatedb`, `rolcreaterole`, `rolbypassrls` |
+| The second barrier is reported | `default_transaction_read_only` is logged, not enforced — see below |
+
+**Why the fix is secure.** It asks PostgreSQL what the role *would be permitted* to do rather than attempting a write and checking that it failed. That ordering matters: the case this exists to catch is precisely the one where a test `INSERT` would be **accepted**, so a write probe's negative result is a mutation of the operator's database. It also needs no table to aim at, so an empty target schema cannot produce a vacuous pass; and `has_table_privilege` accounts for role inheritance, `PUBLIC` grants, column-level grants and superuser bypass in a single answer, which is four rules this code would otherwise reimplement and have to keep correct across PostgreSQL versions. A superuser is caught twice over — the privilege functions return true for everything, and `rolsuper` is reported by name so the error says *why*.
+
+There is deliberately **no setting to skip it**. A deployment that needs generated SQL to run as a role that can write is not one this threat model describes, and an environment variable that turned the boundary off would be found by the first person tired of reading the error.
+
+`default_transaction_read_only` is reported rather than required. With the grants verified absent a write cannot land whatever it says, so failing on it would reject a correctly configured deployment that arrived by another route — but migration 002 claims *two* independent barriers, and a startup check that only ever looked at one should not be the evidence for that claim.
+
+**Residual risk.** The check is a point-in-time snapshot at process start, like the catalog. A `GRANT` issued while the process is running is not detected until restart. Continuous verification is [FUTURE.md](../project/FUTURE.md) work; the mitigation today is that grants change at migration frequency and the processes are restarted by deployment.
+
+**CIA impact.** Integrity and confidentiality, and it is the control the rest of the document's integrity claims are downstream of.
+
+### 13.3 An unhandled exception narrating itself to the network — **High**
+
+**Vulnerability.** Without an explicit catch-all, Starlette re-raises, and whether a traceback reaches the client depends on the server's debug flag. Any handler rendering `str(exc)` publishes driver text — which, per §14.2.10, includes the connection string with the password in it. *(OWASP A09; CWE-209, generation of an error message containing sensitive information.)*
+
+**Why it's dangerous.** This project has already found this exact bug one layer down: `mcp_servers.common` exists because the MCP SDK's catch-all returned `str(exc)` to a model. The reasoning transfers unchanged and the audience is strictly worse — there the string went to a model on the operator's own machine, here it goes to whoever sent the request. It is also the *failure* path, which is the path most likely to be reproduced deliberately by someone probing.
+
+**Attack scenarios.** A caller sends malformed input until something raises below the route layer, and reads infrastructure detail out of the response: table names from a psycopg error, file paths from a traceback, the DSN from a connection failure. Repeated with variations, the error text becomes an oracle for the schema and the deployment layout.
+
+**Secure implementation.** `api.errors.install()` registers four handlers, because there are four ways a response is produced without a route author writing it: a deliberate `ApiError`, a domain exception from a component, a framework validation failure, and an unhandled exception. Domain messages from `core.exceptions` are publishable — this project wrote them for a caller to read. Everything else becomes `GENERIC_FAILURE`, one fixed string, with the exception and traceback logged under the same `request_id` the caller was handed. A domain error that maps to `internal_error` is treated as unpublishable too: that mapping means "we wrote the message but not for a caller".
+
+**Why the fix is secure.** The message is *identical for every unexpected cause*, so it cannot be used to distinguish "no such table" from "connection refused". Coverage is by handler registration rather than by review, so a route added later inherits it without its author knowing this document exists. And FastAPI's own validation errors are re-rendered without pydantic's `input` field, which would otherwise reflect the submitted body back into the response and from there into any log or error tracker that records responses.
+
+**CIA impact.** Confidentiality.
+
+### 13.4 `/ready` as a disclosure surface — **Medium**
+
+**Vulnerability.** Readiness endpoints are unauthenticated by necessity — a kubelet cannot hold a credential — and the natural implementation reports *why* a dependency is down. That reason is a driver message carrying the DSN, the internal hostname, the resolved IP, and the role name. *(OWASP A01/A09; CWE-200, exposure of sensitive information to an unauthorized actor.)*
+
+**Why it's dangerous.** It hands an unauthenticated caller the internal network topology and the database role name for free, on the endpoint most likely to be reachable when everything else is locked down — and it is *more* informative during an incident, when a probe is being hit hardest.
+
+**Attack scenario.** An attacker who has reached the pod network polls `/ready` during a database restart and reads `connection to server at 10.0.4.19:5432 failed: postgresql://sql_agent_login@db.internal/prod` — the internal host, the port, the role, and the database name, without authenticating.
+
+**Secure implementation.** Each dependency reports one of exactly two fixed words, `up` or `down`. The probe raises to signal failure; `Readiness._run` catches, logs the real exception with `logger.exception`, and returns the verdict alone. There is no code path from a driver message to the response body. Asserted directly in `tests/security/test_api_boundary.py`, which raises a probe error containing a password, a hostname and an IP and asserts none of the three appear in the response text.
+
+**Why the fix is secure.** The reason is discarded at the boundary rather than filtered — there is nothing to redact, because nothing string-valued crosses. The operator loses nothing: the full exception is in the process log, correlated by `request_id`.
+
+**CIA impact.** Confidentiality.
+
+### 13.5 The probes as an amplifier, and liveness coupled to the database — **Low** (Availability)
+
+**Vulnerability.** A readiness check that opens a connection lets an unauthenticated caller exhaust the pool with a loop. Separately, a `/health` that checks the database converts a brief database outage into a fleet-wide restart, because every replica's liveness probe fails simultaneously.
+
+**Why it's dangerous.** The second is worse than it sounds. The orchestrator responds to a recoverable incident by adding a cold start, a connection storm, and a catalog reload per replica — turning a thirty-second blip into an outage that outlasts its cause.
+
+**Secure implementation.** `/health` checks *nothing* but that the process is running, and a test asserts it issues no query. `/ready` reuses the connections the process already holds, runs `SELECT 1`, and caches the verdict for `READINESS_TTL_SECONDS` (5s), so the cost of being probed does not scale with probe frequency. Unconfigured readiness reports **not ready** — `all([])` is `True`, so the naive version answers 200 during startup and again after any refactor that drops a probe.
+
+**CIA impact.** Availability.
+
+### 13.6 Log injection through `X-Request-Id` — **Medium**
+
+**Vulnerability.** The correlation header is honoured so a trace survives across hops, and it arrives from the network. Unchecked, it reaches the log — where a newline writes a second line the attacker chose — and the response headers, where CR/LF is response splitting. *(OWASP A09; CWE-117, improper output neutralization for logs; CWE-113, HTTP response splitting.)*
+
+**Why it's dangerous.** An attacker who controls a log line controls what the operator reads during an investigation: a forged `ERROR authentication bypassed for admin`, or enough fabricated entries to bury the real one. Log integrity is the thing incident response in §15 depends on.
+
+**Attack scenario.** `X-Request-Id: abc\nWARN sql_agent_ro granted INSERT by operator` — the second line is indistinguishable from a real record in any aggregator that parses line-by-line.
+
+**Secure implementation.** `assign_request_id` matches an **allowlist** — `[A-Za-z0-9._:-]{1,128}` — anchored with `\A`/`\Z`. A value that fails is **replaced** with a generated one rather than rejected: a 400 for a malformed correlation header would fail requests that were otherwise fine and would give a prober a way to fingerprint this service.
+
+**Why the fix is secure.** An allowlist cannot be bypassed by an encoding nobody thought of, which is the standing failure of denylists. The `\A`/`\Z` anchoring is load-bearing and easy to get wrong: in Python `$` also matches immediately before a trailing newline, so `^[\w.]+$` accepts `"abc\n"` — exactly the input the pattern exists to reject. There is a test for that single case.
+
+**CIA impact.** Integrity of the audit and log trail.
+
+### 13.7 CORS and the browser as a confused deputy — **High if misconfigured**
+
+**Vulnerability.** `Access-Control-Allow-Origin: *` combined with credentialed requests makes every page a visitor loads into an authenticated client of this API. *(OWASP A05; CWE-942, permissive cross-domain policy.)*
+
+**Secure implementation.** `API_CORS_ORIGINS` is empty by default, so no browser origin is trusted. A literal `*` is **refused at startup** by a validator rather than accepted and rendered harmless — the misconfiguration should not be representable. `allow_credentials` is hardcoded `False`; methods and headers are enumerated rather than wildcarded. The middleware is not installed at all when no origins are configured.
+
+**Why the fix is secure.** The dangerous combination is rejected where it is written, not where it is served, so it cannot be reintroduced by a route or a proxy. Refusing `*` at configuration time also means the error arrives with the person who typed it.
+
+**CIA impact.** Confidentiality and integrity, via a browser acting on a user's behalf.
+
+### 13.8 OpenAPI served unauthenticated — **Low**
+
+**Vulnerability.** FastAPI serves `/docs`, `/redoc` and `/openapi.json` by default. `openapi.json` is a complete, machine-readable map of every route, parameter, and schema. *(OWASP A05; API9:2023 improper inventory management.)*
+
+**Why it's dangerous.** It is not a vulnerability by itself; it is the reconnaissance step that makes every other one cheaper, and it is worth exactly as much to somebody enumerating the service as to the developer it was for.
+
+**Secure implementation.** `API_DOCS_ENABLED` defaults to `false` and governs **all three** routes together, `openapi_url` included. Clearing only `docs_url` hides the rendered page while leaving the machine-readable map reachable — a test asserts `app.openapi_url is None`, because that is the half people forget. `python -m api` also sets `server_header=False`, so the framework and version are not announced to every client.
+
+**CIA impact.** Confidentiality, indirectly.
+
+### 13.9 Controls required *before* `POST /v1/query`
+
+Not deferred findings — prerequisites. Each is unexploitable today because no endpoint accepts a body, and each becomes live the moment one does.
+
+| Control | Why it must land with the endpoint |
+|---|---|
+| **Request body size cap** | An unbounded body is memory pressure from an unauthenticated caller. `MAX_REQUEST_BYTES` |
+| **`question` length bound** | API.md specifies 1–2000 chars. Prompt cost and token spend scale with it |
+| **Per-client in-flight cap** | API.md specifies `429 rate_limited` and nothing emits it. One client's twenty questions must not hold every slot |
+| **A real connection pool** | `SQLExecutor` takes `ConnectionSource`; today's single-connection adapter means two concurrent calls contend. Unreachable over stdio, reachable over HTTP |
+| **SSE stream limits** | Concurrent-stream cap, keepalive, and cancellation on disconnect — an abandoned stream that pins a connection is the `idle_in_transaction_session_timeout` case from §5 arriving from outside |
+| **`explain_only` must not become an oracle** | Validating without executing still discloses whether an identifier exists |
 
 ## 14. Multi-provider LLM risks
 

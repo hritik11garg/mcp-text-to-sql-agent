@@ -240,22 +240,36 @@ Read only by `python -m benchmark.load`. Nothing here is reachable from a reques
 
 **There is no variable that points the loader at a URL.** Sources are an allowlist in `benchmark/sources.py`; see [DATASETS.md](../ml/DATASETS.md) §8.
 
-## 6. API — planned (Stage 1 close-out)
+## 6. API
 
-> None of these exist yet. `src/api/` is a stub; the variables below are the design intent for when it lands.
+The HTTP layer exists as of v0.1: `create_app()`, `/health`, `/ready`, the error envelope, and request correlation. `POST /v1/query` does not — see [API.md](../architecture/API.md) for which parts of that contract are served today.
+
+### Implemented
 
 | Variable | Type | Default | Notes |
 |---|---|---|---|
-| `HOST` | str | `127.0.0.1` | **Localhost by default — deliberate** |
-| `PORT` | int | `8000` | |
-| `API_KEY` | SecretStr | — | Required when `HOST` is not loopback |
-| `CORS_ORIGINS` | list[str] | `[]` | Empty = no cross-origin access |
-| `MAX_QUESTION_LENGTH` | int | `2000` | |
+| `API_HOST` | str | `127.0.0.1` | **Loopback, enforced at startup** — see below |
+| `API_PORT` | int | `8000` | |
+| `API_DOCS_ENABLED` | bool | **`false`** | Serves `/docs`, `/redoc` **and** `/openapi.json` |
+| `API_CORS_ORIGINS` | csv | `[]` | Empty = no cross-origin access. `*` is refused at startup |
+
+**Binding beyond loopback is a startup error, not a warning.** This page has said so since Stage 0, conditioned on `API_KEY`; the honest form today is stricter, because `API_KEY` does not exist yet. There is no authentication of any kind, so no non-loopback bind address is safe, and the process refuses to start on one. All four spellings of loopback are accepted (`127.0.0.1`, `127.0.0.2`, `::1`, `localhost`) so that nobody has to work around the control to get a legitimate configuration running.
+
+To deploy: publish the port from your container runtime (`-p 8000:8000`) or put a reverse proxy in front that authenticates. Both leave the decision to expose the service with whoever is deploying it, rather than with a default.
+
+`API_DOCS_ENABLED` governs all three documentation routes together, `openapi.json` included. Clearing only `docs_url` hides the rendered page while leaving the machine-readable route map reachable, which helps nobody except somebody enumerating the service.
+
+### Planned
+
+| Variable | Type | Default | Notes |
+|---|---|---|---|
+| `API_KEY` | SecretStr | — | Lands with authentication; until then, loopback is the control |
+| `MAX_QUESTION_LENGTH` | int | `2000` | With `POST /v1/query` |
+| `MAX_REQUEST_BYTES` | int | `65536` | Required **before** the first endpoint that accepts a body |
 | `RATE_LIMIT_PER_MINUTE` | int | `30` | Per client |
 | `MAX_CONCURRENT_STREAMS` | int | `10` | Global |
+| `MAX_IN_FLIGHT_PER_CLIENT` | int | `2` | The `429` in API.md; nothing emits it yet |
 | `SSE_KEEPALIVE_MS` | int | `15000` | Prevents proxy idle-timeouts |
-
-Binding to `0.0.0.0` without `API_KEY` set is a **startup error**, not a warning. An unauthenticated endpoint that runs LLM-generated SQL and bills tokens should not be reachable by accident.
 
 ## 7. Observability — planned (Stage 6)
 

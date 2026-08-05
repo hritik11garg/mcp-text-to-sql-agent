@@ -149,7 +149,7 @@ class TestFailuresDoNotNarrateInfrastructure:
                 sys.executable,
                 "-c",
                 "from core.settings import Settings\n"
-                "from mcp_servers.resources import Resources\n"
+                "from composition.resources import Resources\n"
                 "from mcp_servers.validate_sql.server import build\n"
                 "try:\n"
                 "    build(Resources(Settings.load()))\n"

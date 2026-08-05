@@ -274,7 +274,7 @@ Each server is a module launched with `python -m`. Any host that speaks stdio ca
 
 ```python
 async with ToolRegistry() as registry:
-    print(registry.tools)                                   # discovered, not hardcoded
+    print(registry.tools)  # discovered, not hardcoded
     await registry.call("search_schema", {"query": "customer country"})
 ```
 

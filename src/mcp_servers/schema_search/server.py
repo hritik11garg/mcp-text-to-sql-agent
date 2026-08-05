@@ -17,8 +17,8 @@ from typing import Any
 
 from mcp.server.lowlevel import Server
 
+from composition.resources import Resources
 from mcp_servers.common import ToolSpec, build_server, succeeded
-from mcp_servers.resources import Resources
 from schema.retrieval import MAX_K, MAX_TABLE_FILTER, RetrievalResult
 
 logger = logging.getLogger(__name__)

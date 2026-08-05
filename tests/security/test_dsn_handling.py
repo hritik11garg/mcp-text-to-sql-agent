@@ -15,9 +15,9 @@ from __future__ import annotations
 import psycopg
 import pytest
 
+from composition.resources import _connect
 from core.dsn import libpq_dsn, redact_dsn
 from core.exceptions import ConfigurationError
-from mcp_servers.resources import _connect
 
 SECRET = "hunter2-not-a-real-password"  # fixture value; every test asserts it is absent
 

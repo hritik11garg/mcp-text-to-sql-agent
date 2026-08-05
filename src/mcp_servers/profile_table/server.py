@@ -26,9 +26,9 @@ from typing import Any
 
 from mcp.server.lowlevel import Server
 
+from composition.resources import Resources
 from core.settings import ProfilingSettings
 from mcp_servers.common import ToolSpec, build_server, succeeded
-from mcp_servers.resources import Resources
 from profiling.profiler import TableProfile, TableProfiler
 
 logger = logging.getLogger(__name__)

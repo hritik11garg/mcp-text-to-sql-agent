@@ -1,13 +1,13 @@
 # Text-to-SQL Analytics Agent (MCP-native)
 
-> **Status: Stage 1 core loop, the Stage 3 MCP layer, Stage 2's benchmark loaded and verified, and the eval pipeline running end to end.** The four servers run and are callable from any MCP host over stdio. Spider's dev split is converted to PostgreSQL, *verified* against its own gold results, indexed, and answered against. Still open: the HTTP API, and a full-split run — every accuracy number so far covers **3 of 20 databases** and says so. See [BENCHMARKS](docs/ml/BENCHMARKS.md) for what has been measured and what bounds it, [ROADMAP](docs/project/ROADMAP.md) for stage status, [TASKS](docs/project/TASKS.md) for the working checklist.
+> **Status: Stage 1 core loop, the Stage 3 MCP layer, Stage 2's benchmark loaded and verified, and the eval pipeline running end to end.** The four servers run and are callable from any MCP host over stdio. Spider's dev split is converted to PostgreSQL, *verified* against its own gold results, indexed, and answered against. Still open: `POST /v1/query`, and a full-split run — every accuracy number so far covers **3 of 20 databases** and says so. See [BENCHMARKS](docs/ml/BENCHMARKS.md) for what has been measured and what bounds it, [ROADMAP](docs/project/ROADMAP.md) for stage status, [TASKS](docs/project/TASKS.md) for the working checklist.
 >
 > | Landed | Next |
 > |---|---|
 > | **Four MCP servers over stdio, with runtime `tools/list` discovery** | **A full-split run — every number so far is 3 databases of 20** |
-> | **Spider loaded — 20 dev databases converted to Postgres, 19 verified against every gold result** | FastAPI + SSE, and the `/health` · `/ready` pair |
+> | **Spider loaded — 20 dev databases converted to Postgres, 19 verified against every gold result** | `POST /v1/query`, non-streaming and SSE |
 > | Postgres 16 + pgvector, Alembic migrations | The agent loop that drives the discovered tools |
-> | `SELECT`-only role, proven by 30 negative tests | |
+> | **`SELECT`-only role, proven by 30 negative tests — and now proven to be *the role the app connects as*** | Authentication; the API refuses to bind beyond loopback until it exists |
 > | Schema catalog — introspection, serialization, embedding | |
 > | Retrieval — pgvector ANN, join-path expansion, clamped limits | |
 > | Validation — sqlglot AST + `EXPLAIN`, refused at both layers | |
@@ -15,6 +15,7 @@
 > | Generation — provider-agnostic, with a model fallback chain | |
 > | Profiling — column stats under a documented disclosure budget | |
 > | Eval harness — comparison, Recall@k, resumable runs | |
+> | **HTTP API foundation — `/health`, `/ready`, sanitized error envelope** | A connection pool and a per-client in-flight cap |
 
 An agent that answers analytical questions in plain English against a real PostgreSQL database. Capabilities are exposed as **four MCP servers** rather than hardcoded functions, so any MCP host can point at them and query its own database — including the client this project ships.
 
@@ -95,7 +96,7 @@ Why validation and execution are separate capabilities, how blast radius is boun
 - **Multi-step decomposition** — compound questions ("compare Q3 vs Q4 growth by region and flag anomalies") become several queries plus a synthesis step.
 - **Session memory** — prior results are addressable in follow-up questions.
 - **Fine-tuned schema linker** — contrastive sentence-transformer over question→column pairs, with a committed before/after ablation.
-- **Bounded blast radius** — read-only role, statement timeouts, row limits, cost caps.
+- **Bounded blast radius** — read-only role, statement timeouts, row limits, cost caps. The role is verified at startup, not assumed: a control tested only against the fixture that satisfies it has been tested against itself.
 - **SSE streaming + OpenTelemetry** — progress visible per agent step; traces span agent → MCP → database.
 
 ## Installation
@@ -157,9 +158,26 @@ Three ways to drive them, **none of which costs anything or needs an account** (
 
 They need both database URLs and an indexed catalog. They do **not** need an LLM key, since they are called by a model rather than calling one.
 
+**As an HTTP service — the foundation is running.**
+
+```powershell
+python -m api                                          # or, while developing:
+uvicorn api.app:create_app --factory --reload
+```
+
+```
+GET /health   →  200 {"status": "ok"}
+GET /ready    →  200 {"status": "ready", "dependencies": {...}}   or 503
+```
+
+`POST /v1/query` is the next slice; the table in [API.md](docs/architecture/API.md) says which routes answer today and which are still design intent.
+
+**It has no authentication, and it refuses to start on any address but loopback until it does.** Not a warning — a `ConfigurationError` before the socket is bound. An endpoint that runs model-generated SQL against your database and spends your token budget should not become reachable because somebody was debugging. To deploy it, publish the port from a container runtime or front it with a proxy that authenticates, so exposing it is a decision somebody made. [SECURITY.md §13](docs/operations/SECURITY.md) reviews the boundary in full.
+
+Startup also **proves the read-only role cannot write** rather than trusting `DATABASE_RO_URL` to name one. Thirty negative tests already asserted what `sql_agent_ro` may do; none of them asserted that the application *connects as that role*, and the only check that existed compared the two connection strings for inequality — which two spellings of the same superuser pass. `assert_read_only` now asks PostgreSQL's privilege functions directly, and it asks rather than attempting a write, because the deployment this catches is exactly the one where a test `INSERT` would succeed.
+
 Still planned:
 
-- **HTTP API** — `POST /query`, streaming progress over SSE. See [API.md](docs/architecture/API.md).
 - **CLI** — eval harness and training runs via `typer` entrypoints.
 
 ## Folder structure
@@ -197,7 +215,10 @@ Directories marked *(stub)* exist with a docstring stating which stage fills the
 │   ├── evals/                  # comparison, Recall@k, artifacts, resumable runs
 │   ├── benchmark/              # acquire, SQLite→Postgres, verify the conversion, splits
 │   ├── agent/                  # tools/list discovery; planner and memory — Stage 4
-│   └── api/                    # (stub) FastAPI + SSE
+│   ├── composition/            # the dependency graph, built once per process
+│                               # shared by the MCP servers and the API, which are peers
+│   └── api/                    # FastAPI — /health, /ready, the error envelope
+│                               # POST /v1/query and SSE are the next slice
 ├── web/                        # (planned) React + TypeScript demo UI — Stage 1
 ├── .github/
 │   └── pull_request_template.md

@@ -12,6 +12,7 @@ pytest-asyncio==1.4.0         # async MCP client / FastAPI tests
 pytest-cov==7.1.0
 pytest-benchmark==5.2.3       # latency budgets in docs/operations/PERFORMANCE.md
 testcontainers[postgres]==4.15.0  # real Postgres + pgvector for integration tests
+httpx2==2.9.1                 # starlette.testclient's transport; it refuses httpx 0.x
 
 # --- Linting / typing ------------------------------------------------------
 ruff==0.16.0                  # lint + format (replaces black/isort/flake8)

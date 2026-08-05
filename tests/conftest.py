@@ -17,6 +17,7 @@ import subprocess
 import sys
 from collections.abc import Callable, Iterator
 from pathlib import Path
+from typing import Any
 from urllib.parse import urlsplit, urlunsplit
 
 import psycopg
@@ -25,12 +26,15 @@ import pytest
 from adapters.llm.fake import FakeLLMClient
 from core.settings import (
     AgentSettings,
+    APISettings,
     BenchmarkSettings,
     DatabaseSettings,
     ExecutionSettings,
+    LLMProvider,
     LLMSettings,
     ProfilingSettings,
     RetrievalSettings,
+    Settings,
 )
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -125,6 +129,10 @@ def _isolate_env(monkeypatch: pytest.MonkeyPatch) -> None:
         "PROFILE_MIN_VALUE_FREQUENCY",
         "PROFILE_SCAN_LIMIT",
         "PROFILE_MAX_COLUMNS",
+        "API_HOST",
+        "API_PORT",
+        "API_DOCS_ENABLED",
+        "API_CORS_ORIGINS",
     ):
         monkeypatch.delenv(var, raising=False)
 
@@ -135,6 +143,7 @@ def _isolate_env(monkeypatch: pytest.MonkeyPatch) -> None:
         RetrievalSettings,
         ProfilingSettings,
         AgentSettings,
+        APISettings,
         BenchmarkSettings,
     ):
         monkeypatch.setitem(settings_cls.model_config, "env_file", None)
@@ -171,6 +180,32 @@ def agent_settings() -> AgentSettings:
 @pytest.fixture
 def benchmark_settings() -> BenchmarkSettings:
     return BenchmarkSettings()
+
+
+def build_settings(**api: Any) -> Settings:
+    """A complete :class:`Settings`, for tests that need the composed object.
+
+    ``Settings.load()`` cannot be used: ``_isolate_env`` above clears the
+    environment on purpose, and ``LLMSettings`` then refuses to construct
+    without a model. The fake provider is the documented way to say "this test
+    is not about the LLM", and every other group takes its declared defaults --
+    so a test that cares about one setting states that one and nothing else.
+    """
+    return Settings(
+        llm=LLMSettings(llm_provider=LLMProvider.FAKE),
+        database=DatabaseSettings(),
+        execution=ExecutionSettings(),
+        retrieval=RetrievalSettings(),
+        profiling=ProfilingSettings(),
+        agent=AgentSettings(),
+        api=APISettings(**api),
+        benchmark=BenchmarkSettings(),
+    )
+
+
+@pytest.fixture
+def settings() -> Settings:
+    return build_settings()
 
 
 @pytest.fixture

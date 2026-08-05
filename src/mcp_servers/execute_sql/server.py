@@ -23,9 +23,9 @@ from typing import Any
 
 from mcp.server.lowlevel import Server
 
+from composition.resources import Resources
 from execution.executor import AuditLog, QueryResult, SingleConnectionSource, SQLExecutor
 from mcp_servers.common import ToolSpec, build_server, succeeded
-from mcp_servers.resources import Resources
 from validation.validator import MAX_SQL_CHARS, SQLValidator
 
 logger = logging.getLogger(__name__)

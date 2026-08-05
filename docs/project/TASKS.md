@@ -77,15 +77,17 @@ Convention: `[ ]` open · `[x]` done · `[~]` in progress · `[!]` blocked
 - [ ] Wire the profiler into the self-correction loop — *lands with the agent layer, which is what will actually decide a column is ambiguous*
 
 ### API
-- [ ] `Settings` via pydantic-settings; startup validation
-- [ ] Startup assertion: the read-only role genuinely cannot write
+- [x] `Settings` via pydantic-settings; startup validation — `APISettings`, with the closed defaults as *validators* rather than defaults: a non-loopback bind and a `*` CORS origin are both startup errors, because there is no authentication yet and a default is not a control
+- [x] **Startup assertion: the read-only role genuinely cannot write** — `composition.assert_read_only`. Nothing had ever checked; the only existing check compared the two DSN *strings*, which two spellings of the same superuser pass. Asks PostgreSQL's privilege functions rather than attempting a write, because the case this catches is the one where a probe INSERT would be *accepted*. Runs on first open of the read-only connection, so all five entrypoints inherit it
 - [ ] `POST /v1/query` (streaming + non-streaming)
 - [ ] SSE event types per API.md
-- [ ] `/health` and `/ready`
-- [ ] Sanitized error envelope
+- [x] `/health` and `/ready` — liveness deliberately checks nothing, so a database blip cannot restart the fleet; readiness reports two fixed words per dependency and never the driver's reason, which carries the DSN
+- [x] Sanitized error envelope — four handlers, covering the three paths no route author writes: an unrouted 404, a framework validation failure, and an unhandled exception. A domain message is publishable, everything else is one fixed string
 - [x] `.env.example` — committed, and its coverage of CONFIG.md is asserted by `tests/unit/test_settings.py` rather than reviewed. An audit found 18 of 50 settings had reached the code without reaching it, including two security controls whose safe defaults are exactly what made the omission invisible
-- [ ] **Inject a connection pool** — `SQLExecutor` already depends on `ConnectionSource`, which `psycopg_pool.ConnectionPool` satisfies structurally. Until this lands, two concurrent `execute_sql` calls contend on one connection: a real bug, unreachable while the only transport is stdio
+- [ ] **Inject a connection pool** — `SQLExecutor` already depends on `ConnectionSource`, which `psycopg_pool.ConnectionPool` satisfies structurally. Until this lands, two concurrent `execute_sql` calls contend on one connection: a real bug, unreachable while the only transport is stdio, **reachable the moment `/v1/query` does**
 - [ ] **Per-user admission control** — an in-flight cap per caller, not just the global pool bound. Without it one client's twenty questions hold every slot; API.md already specifies the `429` and nothing emits it
+- [ ] **Request body size cap** — unbounded body from an unauthenticated caller. Unexploitable today because no route accepts one; a blocking prerequisite for the first that does. See SECURITY.md §13.9 for the full list
+- [ ] **Authentication** — the API has none. `API_HOST` is refused on anything but loopback until it does, which is a containment measure, not a substitute
 
 ### Demo UI
 - [ ] Vite + React + TypeScript app under `web/`, no server-side rendering

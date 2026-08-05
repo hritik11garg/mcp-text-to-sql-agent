@@ -367,6 +367,91 @@ class AgentSettings(BaseSettings):
     agent_timeout_ms: int = Field(default=120_000, ge=1_000)
 
 
+class APISettings(BaseSettings):
+    """The HTTP surface. Every default here assumes the network is hostile.
+
+    This is the first boundary in the project reachable by someone who does not
+    already have the machine. Everything before it -- the MCP servers, the
+    indexer, the eval harness -- runs as a local process started by the
+    operator, where "who can call this" was answered by the operating system.
+    It is not answered here, so it has to be answered by these defaults.
+
+    Three of them are closed rather than convenient, and each would be a
+    finding if it were the other way round:
+
+    - ``api_host`` binds loopback, not ``0.0.0.0``. A container publishes the
+      port deliberately; a developer running this on a laptop on a cafe network
+      should not be serving their database to the room.
+    - ``api_docs_enabled`` is off. OpenAPI is a complete map of the attack
+      surface, served unauthenticated, and it is worth exactly as much to
+      someone enumerating the service as to the developer it was meant for.
+    - ``api_cors_origins`` is empty, so no browser origin is trusted. There is
+      no authentication yet; adding ``*`` here later, once there is, would make
+      every page on the internet a client.
+    """
+
+    model_config = _ENV_FILE
+
+    api_host: str = "127.0.0.1"
+    api_port: int = Field(default=8000, ge=1, le=65_535)
+
+    api_docs_enabled: bool = False
+    """Serve ``/docs``, ``/redoc`` and ``/openapi.json``.
+
+    On in development, off in production, and off by default because the
+    default is what an unattended deployment gets.
+    """
+
+    api_cors_origins: CsvTuple = ()
+    """Browser origins allowed to call this API. Empty means none.
+
+    Not a list with ``*`` in it and not a regex. Credentials are never allowed
+    alongside these origins (see ``api.app``), because the combination of a
+    wildcard origin and credentialed requests is the one CORS configuration
+    that turns every visitor's browser into an authenticated client.
+    """
+
+    @model_validator(mode="after")
+    def _check_cors(self) -> APISettings:
+        if any(origin == "*" for origin in self.api_cors_origins):
+            raise ConfigurationError(
+                "API_CORS_ORIGINS must not contain '*'. A wildcard origin on an "
+                "API that reaches a database is an open proxy for every browser "
+                "that visits any page -- name the origins that need access."
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _refuse_to_publish_an_unauthenticated_service(self) -> APISettings:
+        """Binding beyond loopback is a startup error while there is no auth.
+
+        docs/operations/CONFIG.md section 6 has specified this since Stage 0 --
+        "binding to 0.0.0.0 without API_KEY set is a startup error, not a
+        warning" -- and the honest form of that rule today is stricter, because
+        ``API_KEY`` does not exist yet. There is no authentication at all, so
+        there is no value of ``API_HOST`` other than loopback that is safe.
+
+        A warning would not do. Nobody reads a log line on a service that
+        started successfully, and the failure mode is an endpoint that runs
+        model-written SQL against a production database for anyone who can
+        route a packet to it.
+
+        Containers are unaffected: publish the port with ``-p 8000:8000`` and
+        the runtime forwards to loopback inside the namespace. That is the same
+        deployment, with the decision to expose it made by whoever deploys it.
+        """
+        if not _is_loopback_host(self.api_host):
+            raise ConfigurationError(
+                f"API_HOST={self.api_host!r} would serve this API beyond this "
+                f"machine, and it has no authentication yet -- any caller that "
+                f"can reach the port can run generated SQL against the target "
+                f"database and spend the LLM budget doing it. Bind 127.0.0.1 "
+                f"and publish the port from your container runtime or a "
+                f"reverse proxy that does authenticate."
+            )
+        return self
+
+
 class BenchmarkSettings(BaseSettings):
     """Bounds on the offline benchmark loader.
 
@@ -411,6 +496,7 @@ class Settings:
     retrieval: RetrievalSettings
     profiling: ProfilingSettings
     agent: AgentSettings
+    api: APISettings
     benchmark: BenchmarkSettings
 
     @classmethod
@@ -423,6 +509,7 @@ class Settings:
             retrieval=RetrievalSettings(),
             profiling=ProfilingSettings(),
             agent=AgentSettings(),
+            api=APISettings(),
             benchmark=BenchmarkSettings(),
         )
 
@@ -430,6 +517,27 @@ class Settings:
 # --- endpoint safety -------------------------------------------------------
 
 _BLOCKED_REASON = "LLM_BASE_URL resolves to a blocked address ({addr}): {why}"
+
+
+def _is_loopback_host(host: str) -> bool:
+    """Is this bind address reachable only from this machine?
+
+    Resolved rather than string-matched. ``127.0.0.1`` is the obvious spelling
+    and it is not the only one: ``127.0.0.2``, ``::1``, and ``localhost`` are
+    all loopback, and a check that only knew the first would reject a correct
+    configuration -- which is how a security control gets a bypass added to it
+    by somebody who needed to get on with their day.
+
+    Anything that does not resolve is treated as *not* loopback. Failing
+    closed is the only safe direction here: the consequence of guessing wrong
+    is an unauthenticated database on a network.
+    """
+    if host == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
 
 
 def _is_loopback_url(url: str) -> bool:

@@ -1,10 +1,25 @@
 # HTTP API Reference
 
-> **Status: TBD — Stage 1.** Endpoint shapes below are the design intent. Request/response bodies are confirmed against the implementation when the core loop lands, and this page becomes the authoritative contract.
+> **Status: partly built.** Two endpoints are served and are authoritative here. The rest of this page is design intent — much of it describes the *Stage 4* system, and marking that plainly is the point of the table below rather than letting a reader assume every route responds.
 
-Base URL: `http://localhost:8000`
+| Endpoint | Status |
+|---|---|
+| `GET /health` | **Served.** |
+| `GET /ready` | **Served.** |
+| Error model | **Served** for every response, including 404s and unhandled exceptions |
+| `X-Request-Id` | **Served.** Honoured when safe to repeat, replaced when not — see below |
+| `POST /v1/query` | Not built |
+| `GET /v1/schema/search` | Not built |
+| `POST`/`GET`/`DELETE /v1/sessions…` | Not built — session memory is Stage 4 |
+| `plan`, `tool_call`, `tool_result` events; `steps[]` | Not built — these come from the agent loop, Stage 4 |
+
+**There is no authentication.** The server refuses to start on any bind address that is not loopback while that remains true. See [../operations/SECURITY.md](../operations/SECURITY.md) §13.1 and [../operations/CONFIG.md](../operations/CONFIG.md) §6.
+
+Base URL: `http://127.0.0.1:8000`
 Content type: `application/json` unless noted.
 API version prefix: `/v1`
+
+Run it: `python -m api`, or `uvicorn api.app:create_app --factory --reload` while developing.
 
 ---
 
@@ -13,7 +28,7 @@ API version prefix: `/v1`
 - All timestamps are RFC 3339 UTC.
 - All errors share the envelope in [Error model](#error-model).
 - `session_id` is optional on every request; omit it to start a fresh session.
-- Requests carry a `X-Request-Id` header if supplied, or one is generated; it appears in logs and traces (see [../operations/OBSERVABILITY.md](../operations/OBSERVABILITY.md)).
+- **`X-Request-Id`** is honoured when it matches `[A-Za-z0-9._:-]{1,128}`, so a gateway's trace id survives this hop. Anything else — a newline, a control character, an over-long value — is **replaced** with a generated `req_<hex>` rather than rejected, because a 400 on a correlation header would fail requests that were otherwise fine. The value appears on every response, in the header and in the error body. See [../operations/SECURITY.md](../operations/SECURITY.md) §13.6 for why it is not trusted verbatim.
 
 ---
 
@@ -121,18 +136,43 @@ Direct access to the retrieval step, bypassing the agent. Useful for debugging r
 }
 ```
 
-## `GET /health` · `GET /ready`
+## `GET /health` · `GET /ready` — **served**
 
-- `/health` — process liveness. `200` with `{"status": "ok"}`. No dependency checks.
-- `/ready` — dependency readiness: database reachable, MCP servers connected, embedding model loaded. `200` or `503` with per-dependency status.
+Distinguishing them matters for orchestrators: a failing `/ready` should stop traffic, a failing `/health` should restart the pod. Conflating them produces the worst behaviour in an outage — a `/health` that checked the database would fail every replica's liveness probe at once and the orchestrator would restart the fleet, adding a cold start, a connection storm and a catalog reload to an incident that was resolving itself.
 
-Distinguishing them matters for orchestrators — a failing `/ready` should stop traffic, a failing `/health` should restart the pod.
+### `/health`
+
+`200 OK` with exactly `{"status": "ok"}`. **Checks nothing else** — deliberately, and asserted by a test that fails if it issues a query.
+
+Nothing more is reported. No version, no hostname, no uptime: all of it is a fingerprint for someone matching services against a CVE list, and none of it is what a kubelet consumes.
+
+### `/ready`
+
+`200 OK` when every dependency is up:
+
+```json
+{"status": "ready", "dependencies": {"database": "up", "database_readonly": "up"}}
+```
+
+`503` in the standard error envelope otherwise, with the same map under `details`:
+
+```json
+{"error": {"code": "not_ready", "message": "one or more dependencies are unavailable",
+           "request_id": "req_...", "details": {"dependencies": {"database": "up",
+           "database_readonly": "down"}}}}
+```
+
+Each dependency is one of exactly two words, `up` or `down`. **The reason is never reported** — a driver message carries the DSN, the internal hostname and the role name, and this endpoint is unauthenticated because a kubelet cannot hold a credential. The real cause is in the process log under the same `request_id`. See [../operations/SECURITY.md](../operations/SECURITY.md) §13.4.
+
+The verdict is cached for 5 seconds, so the cost of being probed does not scale with how often somebody probes. Before startup completes, `/ready` reports `{"startup": "down"}` and `503` — an unconfigured readiness check must not answer yes, and `all([])` is `True`.
+
+The dependency set will grow with the components that have one. MCP server connectivity and the embedding model are listed in older drafts of this page; neither is probed today, because both are loaded at startup and held in memory, and a probe that cannot fail reports nothing.
 
 ---
 
-## Error model
+## Error model — **served**
 
-Every error uses this envelope:
+Every error uses this envelope, including the ones no route author writes: a 404 for an unknown path, a framework validation failure, and an unhandled exception. Starlette's own default is `{"detail": ...}`, which would be a second shape for a client to parse on exactly the paths its error handling is least likely to have been tested against.
 
 ```json
 {
@@ -158,8 +198,15 @@ Every error uses this envelope:
 | 502 | `llm_unavailable` | Upstream model call failed after retries |
 | 503 | `database_unavailable` | Cannot reach PostgreSQL |
 | 503 | `mcp_server_unavailable` | One or more MCP servers unreachable |
+| 503 | `not_ready` | `/ready` — a dependency is unavailable |
 
-**Error messages never include** raw database error text containing data values, connection strings, or internal paths. See [../operations/SECURITY.md](../operations/SECURITY.md).
+Two more are emitted by the framework layer and are in the envelope for the same reason: `404 not_found` for an unrouted path, and `405 method_not_allowed`.
+
+**`message` is either something this project wrote for a caller to read, or a fixed generic string.** There is no third case. Every message in `core.exceptions` was written to help someone fix their query and passes through; anything else — a driver error, a `KeyError`, a dependency's traceback — becomes `"the server could not complete this request"`, identical for every cause so it cannot be used as an oracle, with the real exception logged under the `request_id` the caller was handed.
+
+`details` is omitted rather than null when there is nothing to put in it. Validation failures report the field and the rule that was broken, never the value that was sent: pydantic's own error list carries the offending input verbatim, and reflecting it back puts the request body into the response and from there into anything that records responses.
+
+See [../operations/SECURITY.md](../operations/SECURITY.md) §13.3.
 
 ---
 

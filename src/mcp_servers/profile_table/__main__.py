@@ -8,10 +8,10 @@ to correct its way out of.
 
 from __future__ import annotations
 
+from composition.resources import Resources
 from core.settings import Settings
 from mcp_servers.common import configure_logging, main
 from mcp_servers.profile_table.server import build
-from mcp_servers.resources import Resources
 
 if __name__ == "__main__":
     configure_logging()
