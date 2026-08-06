@@ -29,7 +29,7 @@ from evals.comparison import Comparison, Verdict
 from evals.dataset import Question, Split, load_questions, write_questions
 from evals.recall import RecallResult, aggregate, compute_recall, extract_gold_elements
 from evals.runner import Attempt, EvalRunner
-from evals.taxonomy import FailureCategory, classify, counts
+from evals.taxonomy import FailureCategory, classify, counts, is_infrastructure
 
 pytestmark = pytest.mark.unit
 
@@ -335,6 +335,251 @@ class TestResumption:
         store.start()
 
         assert (store.root / "manifest.json").exists()
+
+
+class TestAFailedBudgetIsNotAnAnsweredQuestion:
+    """Resumption skips what was *answered*, not what was written.
+
+    The distinction the first full-split attempt was missing. It spent a daily
+    token budget, recorded 308 questions as `llm_failed`, and every one of them
+    was thereafter permanently done -- so the run could never be finished by
+    resuming it, only restarted from nothing.
+    """
+
+    INFRASTRUCTURE: ClassVar[list[str]] = [
+        "llm_failed",
+        "scope_unavailable",
+        "retrieval_failed",
+        "internal_error",
+    ]
+
+    VERDICTS: ClassVar[list[str]] = ["unanswerable", "execution_failed"]
+
+    @pytest.mark.parametrize("error_type", INFRASTRUCTURE)
+    def test_an_infrastructure_failure_is_re_attempted(
+        self, tmp_path: Path, error_type: str
+    ) -> None:
+        store = RunStore(tmp_path, manifest())
+        store.start()
+        store.record(
+            QuestionArtifact(
+                question_id="q1", question="?", gold_sql="SELECT 1", error_type=error_type
+            )
+        )
+
+        assert RunStore(tmp_path, manifest()).resume() == frozenset()
+
+    @pytest.mark.parametrize("error_type", VERDICTS)
+    def test_a_real_verdict_is_not_re_attempted(self, tmp_path: Path, error_type: str) -> None:
+        """The other half, and the reason this cannot just retry every failure.
+
+        `unanswerable` and `execution_failed` are things the run *learned*
+        about the model. Retrying them would spend the budget re-deriving
+        results already in hand, and on a free tier that is the same defect
+        with the sign flipped.
+        """
+        store = RunStore(tmp_path, manifest())
+        store.start()
+        store.record(
+            QuestionArtifact(
+                question_id="q1", question="?", gold_sql="SELECT 1", error_type=error_type
+            )
+        )
+
+        assert RunStore(tmp_path, manifest()).resume() == {"q1"}
+
+    def test_a_correct_answer_is_not_re_attempted(self, tmp_path: Path) -> None:
+        store = RunStore(tmp_path, manifest())
+        store.start()
+        store.record(
+            QuestionArtifact(question_id="q1", question="?", gold_sql="SELECT 1", matched=True)
+        )
+
+        assert RunStore(tmp_path, manifest()).resume() == {"q1"}
+
+    def test_the_predicate_matches_what_leaves_the_denominator(self) -> None:
+        """The two decisions this predicate now serves must be the same one.
+
+        A question excluded from the score because the model was never asked is
+        exactly a question a resumed run must ask. If these ever disagree, one
+        of the two is wrong and the run either loses questions or re-spends
+        budget on questions it already answered.
+        """
+        for error_type in self.INFRASTRUCTURE + self.VERDICTS:
+            excluded = classify(comparison=None, error_type=error_type) is (
+                FailureCategory.INFRASTRUCTURE
+            )
+            assert is_infrastructure(error_type) is excluded, error_type
+
+    def test_a_retry_overwrites_the_record_rather_than_adding_one(self, tmp_path: Path) -> None:
+        """Resume depends on a deterministic filename, so a re-attempt has to
+        land on the file it replaces. Two files for one question would count it
+        twice in every summary."""
+        store = RunStore(tmp_path, manifest())
+        store.start()
+        store.record(
+            QuestionArtifact(
+                question_id="q1",
+                question="?",
+                gold_sql="SELECT id FROM customers",
+                error_type="llm_failed",
+            )
+        )
+
+        runner = EvalRunner(
+            RunStore(tmp_path, manifest()),
+            lambda q: Attempt(sql="SELECT id FROM customers"),
+            _rows({"SELECT id FROM customers": [[1]]}),
+        )
+        summary = runner.run([question("q1")])
+
+        assert len(list((store.root / "questions").glob("*.json"))) == 1
+        assert summary.total == 1
+        assert summary.matched == 1
+
+    def test_a_run_stopped_by_a_spent_budget_finishes_on_the_next_day(self, tmp_path: Path) -> None:
+        """The scenario the whole change exists for, end to end.
+
+        Day one answers two questions and then the provider stops. Day two
+        answers the rest. What matters is that the second run *re-attempts* the
+        three the budget failed, and that the finished directory holds five
+        answered questions rather than two answers and three excuses.
+        """
+        questions = [question(f"q{i}") for i in range(5)]
+        budget = {"left": 2}
+
+        def rationed(q: Question) -> Attempt:
+            if budget["left"] <= 0:
+                return Attempt(error_type="llm_failed", error_message="daily budget spent")
+            budget["left"] -= 1
+            return Attempt(sql="SELECT id FROM customers")
+
+        rows = _rows({"SELECT id FROM customers": [[1]]})
+        day_one = EvalRunner(RunStore(tmp_path, manifest()), rationed, rows, halt_after=2)
+        first = day_one.run(questions)
+
+        assert first.matched == 2
+        assert first.scored == 2, "the three the budget failed must not be scored as wrong"
+
+        budget["left"] = 5
+        second = EvalRunner(RunStore(tmp_path, manifest()), rationed, rows).run(questions)
+
+        assert second.total == 5
+        assert second.matched == 5
+        assert second.infrastructure_errors == 0
+
+
+class TestHaltingOnAWall:
+    """A spent budget does not recover inside the run.
+
+    Continuing means asking a dead provider once per remaining question. It
+    costs wall clock, buries the cause under identical records, and leaves the
+    summary describing a directory that is mostly noise -- which is what 308
+    consecutive `llm_failed` records looked like.
+    """
+
+    def test_it_stops_after_the_configured_run_of_failures(self, tmp_path: Path) -> None:
+        asked: list[str] = []
+
+        def dead(q: Question) -> Attempt:
+            asked.append(q.question_id)
+            return Attempt(error_type="llm_failed", error_message="out of budget")
+
+        runner = EvalRunner(
+            RunStore(tmp_path, manifest()),
+            dead,
+            _rows({"SELECT id FROM customers": [[1]]}),
+            halt_after=3,
+        )
+        runner.run([question(f"q{i}") for i in range(20)])
+
+        assert len(asked) == 3
+
+    def test_the_untouched_questions_are_not_recorded(self, tmp_path: Path) -> None:
+        """Halting must leave them genuinely unattempted. Recording them would
+        reintroduce the bug the halt exists to contain."""
+        store = RunStore(tmp_path, manifest())
+        runner = EvalRunner(
+            store,
+            lambda q: Attempt(error_type="llm_failed"),
+            _rows({"SELECT id FROM customers": [[1]]}),
+            halt_after=2,
+        )
+        runner.run([question(f"q{i}") for i in range(10)])
+
+        assert len(list((store.root / "questions").glob("*.json"))) == 2
+
+    def test_a_success_resets_the_run(self, tmp_path: Path) -> None:
+        """Consecutive, not total. A provider that blips and recovers must not
+        end a run that is making progress."""
+        answers = iter(
+            [
+                Attempt(error_type="llm_failed"),
+                Attempt(error_type="llm_failed"),
+                Attempt(sql="SELECT id FROM customers"),
+                Attempt(error_type="llm_failed"),
+                Attempt(error_type="llm_failed"),
+                Attempt(sql="SELECT id FROM customers"),
+            ]
+        )
+        asked: list[str] = []
+
+        def flaky(q: Question) -> Attempt:
+            asked.append(q.question_id)
+            return next(answers)
+
+        runner = EvalRunner(
+            RunStore(tmp_path, manifest()),
+            flaky,
+            _rows({"SELECT id FROM customers": [[1]]}),
+            halt_after=3,
+        )
+        runner.run([question(f"q{i}") for i in range(6)])
+
+        assert len(asked) == 6
+
+    def test_it_can_be_disabled(self, tmp_path: Path) -> None:
+        asked: list[str] = []
+
+        def dead(q: Question) -> Attempt:
+            asked.append(q.question_id)
+            return Attempt(error_type="llm_failed")
+
+        runner = EvalRunner(
+            RunStore(tmp_path, manifest()),
+            dead,
+            _rows({"SELECT id FROM customers": [[1]]}),
+            halt_after=None,
+        )
+        runner.run([question(f"q{i}") for i in range(8)])
+
+        assert len(asked) == 8
+
+    def test_a_summary_is_still_written(self, tmp_path: Path) -> None:
+        """A halted run is a run that stopped, not a run that crashed. The
+        operator needs the summary to see what it got through."""
+        runner = EvalRunner(
+            RunStore(tmp_path, manifest()),
+            lambda q: Attempt(error_type="llm_failed"),
+            _rows({"SELECT id FROM customers": [[1]]}),
+            halt_after=1,
+        )
+        summary = runner.run([question(f"q{i}") for i in range(5)])
+
+        assert summary.infrastructure_errors == 1
+        assert summary.execution_accuracy is None, "nothing scored is not zero accuracy"
+
+    @pytest.mark.parametrize("halt_after", [0, -1])
+    def test_a_meaningless_threshold_is_refused(self, tmp_path: Path, halt_after: int) -> None:
+        """Zero reads as "never halt" to one person and "halt immediately" to
+        the comparison. Refusing beats picking one."""
+        with pytest.raises(ValueError, match="at least 1"):
+            EvalRunner(
+                RunStore(tmp_path, manifest()),
+                lambda q: Attempt(),
+                _rows({}),
+                halt_after=halt_after,
+            )
 
 
 class TestRunnerBehaviour:

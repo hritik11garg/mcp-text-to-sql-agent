@@ -49,7 +49,7 @@ from evals.pipeline import (
     SchemaScopedQueryRunner,
     ScopeRegistry,
 )
-from evals.runner import EvalRunner
+from evals.runner import DEFAULT_HALT_AFTER, EvalRunner
 from generation.generator import SQLGenerator
 
 logger = logging.getLogger(__name__)
@@ -114,6 +114,15 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Schema elements retrieved per question. Defaults to RETRIEVAL_TOP_K",
     )
+    parser.add_argument(
+        "--halt-after",
+        type=int,
+        default=DEFAULT_HALT_AFTER,
+        help=(
+            "Stop after this many consecutive infrastructure failures "
+            "(spent quota, unindexed schema). 0 disables the check"
+        ),
+    )
     return parser
 
 
@@ -166,7 +175,13 @@ def main(argv: list[str] | None = None) -> int:
             args, settings, owner=owner, readonly=readonly, schemas=applied.schemas
         )
         with answerer:
-            runner = EvalRunner(store, answerer, run_query, on_progress=progress_line)
+            runner = EvalRunner(
+                store,
+                answerer,
+                run_query,
+                on_progress=progress_line,
+                halt_after=args.halt_after if args.halt_after > 0 else None,
+            )
             summary = runner.run(questions)
     finally:
         owner.close()

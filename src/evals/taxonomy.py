@@ -127,6 +127,22 @@ def classify(
     return _FROM_VERDICT.get(comparison.verdict, FailureCategory.UNCATEGORISED)
 
 
+def is_infrastructure(error_type: str | None) -> bool:
+    """Whether this failure means the system under test was never asked.
+
+    One predicate behind two decisions that have to agree: which questions
+    leave the scored denominator, and which questions a resumed run must
+    *retry*. They are the same claim -- nothing was learned about the model --
+    so deriving both from one set is what stops them drifting apart.
+
+    They were not derived from one set. Scoring excluded these; resumption did
+    not, so a run that spent its daily token budget recorded 308 questions as
+    permanently answered, having asked none of them. See
+    :meth:`evals.artifacts.RunStore.resume`.
+    """
+    return error_type in _INFRASTRUCTURE
+
+
 _FROM_ERROR_TYPE: dict[str, FailureCategory] = {
     "unknown_identifier": FailureCategory.UNKNOWN_IDENTIFIER,
     "syntax_error": FailureCategory.SYNTAX_UNRECOVERABLE,

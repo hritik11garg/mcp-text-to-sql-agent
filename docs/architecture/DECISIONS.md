@@ -906,3 +906,41 @@ Thirty negative tests in `tests/security/test_readonly_role.py` assert what `sql
 **Tradeoff.** A seam built one commit before its second caller, which is the shape YAGNI warns about. Accepted narrowly: the eval was being refactored anyway, the second caller was the next slice rather than a maybe, and the cost of divergence is a benchmark number that describes nothing. Also two parameters (`feedback`, `previous_sql`) that no caller passes yet — they are the Stage 4 retry shape, and re-retrieving on a retry answers a subtly different question and makes the retry's effect unattributable.
 
 **Generalises to:** share the part where a difference would invalidate the measurement; keep separate the part where sameness would.
+
+---
+
+## ADR-037 — Resumption skips answered questions, not recorded ones
+
+**Status:** accepted · **Date:** 2026-08-06 · **Stage:** 2
+
+**Context.** The artifact store exists so that a spent daily token budget stops being a lost run — its module docstring says so, and [EVALUATION.md](../ml/EVALUATION.md) §3 calls resumability "the requirement that shaped the design". Every question is written as it completes, and `resume()` returns what is already on disk so a re-run skips it.
+
+It returned **every** recorded id, without looking at why the question was recorded.
+
+The first full-split attempt made that concrete. Groq's daily cap arrived at question ~395 of 1034, and the loop kept going, recording 308 questions as `llm_failed`. Every one of those was thereafter permanently done. The run could not be finished by resuming it — only restarted from nothing, spending the whole budget again — and the second day would have hit the same cap in the same place. **A budget spent failing was still a lost run; it just looked like a completed one.**
+
+The same set already existed elsewhere, doing the same job under a different name: `FailureCategory.INFRASTRUCTURE` means *the system under test never got to answer*, and those questions are excluded from the scored denominator for exactly the reason they should be retried.
+
+**Decision.** `resume()` treats a question as done only if it was **answered**. An artifact whose `error_type` is in the infrastructure set — `llm_failed`, `scope_unavailable`, `retrieval_failed`, `internal_error` — is re-attempted, and the retry overwrites the record in place because `artifact_filename` is deterministic.
+
+Both decisions read `evals.taxonomy.is_infrastructure`. They are the same claim, and a test asserts that the predicate and the scoring exclusion agree.
+
+**Why not retry every failure.** `unanswerable` and `execution_failed` are things the run *learned* about the model. Re-asking them spends budget re-deriving results already in hand, which on a free tier is the same defect with the sign reversed.
+
+**Why the error type rather than the recorded category.** `failure_category` is derived; an artifact may have been written by an older taxonomy. The error type is what the component actually reported.
+
+**The consequence to know about.** A question failing for a *durable* infrastructure reason is retried on every resume and never retires. That is the intended reading: a database that is still not indexed is a deployment fault the operator should keep seeing, not a question the harness should quietly give up on. The halt below bounds what that costs.
+
+**And the run now stops at a wall.** Ten consecutive infrastructure failures end the run (`--halt-after`, `0` disables). A spent budget does not recover inside a run, so continuing means asking a dead provider several hundred more times: it costs wall clock, buries the cause under identical records, and leaves the summary describing a directory that is mostly noise. Consecutive rather than total, because a blip the provider recovers from must not stop a run that is making progress — and by the time an `llm_failed` reaches the runner the client's own retries are already exhausted.
+
+The threshold is deliberately low enough to trip on a whole database failing as `scope_unavailable`. That is a deployment fault, and stopping to report it beats scoring around it — which is what the same run did with 84 questions.
+
+**Alternatives.**
+- *Delete the failed artifacts by hand before resuming.* What I did once. It works, it is undocumented, and it depends on remembering which of five error types are safe to delete.
+- *Never record an infrastructure failure.* Loses the evidence. The 308 records are how the cause was diagnosed, and the 74 `scope_unavailable` records are how a separate bug was found.
+- *Halt on total rather than consecutive failures.* Ends long runs over accumulated transient blips, which is the failure mode the retries already handle.
+- *Clamp `halt_after=0` to "off".* Zero reads as "never halt" to one person and "halt immediately" to the comparison. Refused instead.
+
+**Tradeoff.** A resumed run now re-executes gold SQL for the retried questions, so a durable fault costs a little database work on each attempt. Cheap next to the alternative, which is a benchmark that can only ever be run in one sitting on hardware that cannot provide one.
+
+**Generalises to:** "we recorded it" and "we learned something from it" are different predicates, and a store that conflates them turns an outage into data.

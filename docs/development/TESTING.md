@@ -45,7 +45,7 @@ High-value targets:
 - **Settings validation** — out-of-range values fail at startup, client values clamp to ceilings.
 - **Prompt assembly** — stable prefix is byte-identical across requests (the prompt-cache precondition).
 - **Result comparison** — every rule in [../ml/EVALUATION.md](../ml/EVALUATION.md) §1.1, one test each, written as an executable copy of that table. This is the highest-value unit test in the project: a bug in `compare` does not raise, it returns a *number*, and the number looks exactly like a correct one.
-- **Eval resumption** — a finished question is not asked again, the summary covers the whole run rather than the last invocation, and a resume with a different model or commit is refused.
+- **Eval resumption** — an *answered* question is not asked again, one that failed on infrastructure is re-attempted and overwrites its record, the summary covers the whole run rather than the last invocation, and a resume with a different model or commit is refused. One test runs the whole scenario the feature exists for: a budget that runs out mid-run, then a second invocation that finishes the split. Another asserts that the predicate deciding what to retry is the same one deciding what leaves the scored denominator — they are the same claim, and they were not the same code.
 - **Profiling bounds** — identifier resolution happens *before* any statement is composed (asserted with a connection that raises on any access, so the ordering is tested rather than the outcome); type eligibility for extremes; sample-size clamping.
 
 The LLM is a fake that returns scripted responses, so retry, decomposition, and self-correction logic is fully testable without a live model.

@@ -34,7 +34,33 @@ from evals.artifacts import QuestionArtifact, RunStore
 from evals.comparison import Comparison, compare
 from evals.dataset import Question
 from evals.recall import compute_recall, extract_gold_elements
-from evals.taxonomy import FailureCategory, classify, counts, parse_category
+from evals.taxonomy import (
+    FailureCategory,
+    classify,
+    counts,
+    is_infrastructure,
+    parse_category,
+)
+
+DEFAULT_HALT_AFTER = 10
+"""Consecutive infrastructure failures that stop a run.
+
+A spent daily token budget does not recover within the run, so continuing
+means asking a dead provider several hundred more times: it costs wall clock,
+it buries the cause under identical records, and the summary written at the
+end describes a directory that is mostly noise. The first full-split attempt
+did this 308 times.
+
+Consecutive rather than total, because a transient blip that the provider
+recovers from must not stop a run -- and by the time an ``llm_failed`` reaches
+here the client's own retries are already exhausted, so ten in a row is a wall
+rather than a bad minute.
+
+It is deliberately low enough to trip on a whole database failing as
+``scope_unavailable``. That is a deployment fault, and stopping to report it
+beats scoring around it -- which is what the previous run did with 84
+questions.
+"""
 
 logger = logging.getLogger(__name__)
 
@@ -155,6 +181,8 @@ class EvalRunner:
         run_query: Executes SQL. **The same one is used for gold.**
         on_progress: Called after each question, for a progress line. Kept as a
             callback so the runner writes nothing to stdout itself.
+        halt_after: Consecutive infrastructure failures that stop the run. See
+            :data:`DEFAULT_HALT_AFTER`. ``None`` disables the check.
     """
 
     def __init__(
@@ -164,11 +192,19 @@ class EvalRunner:
         run_query: QueryRunner,
         *,
         on_progress: Callable[[QuestionArtifact], None] | None = None,
+        halt_after: int | None = DEFAULT_HALT_AFTER,
     ) -> None:
         self._store = store
         self._answerer = answerer
         self._run_query = run_query
         self._on_progress = on_progress
+        if halt_after is not None and halt_after < 1:
+            # Not clamped to 1 and not silently treated as "off". Zero means
+            # two opposite things to two readers -- "never halt" and "halt
+            # immediately" -- and the loop's comparison would pick the second,
+            # ending every run at question one with a summary over nothing.
+            raise ValueError(f"halt_after must be at least 1 or None, got {halt_after}")
+        self._halt_after = halt_after
 
     def run(self, questions: Sequence[Question]) -> RunSummary:
         """Evaluate every question not already recorded.
@@ -183,13 +219,28 @@ class EvalRunner:
         pending = [q for q in questions if q.question_id not in done]
 
         if done:
-            logger.info("skipping %d already-recorded question(s)", len(questions) - len(pending))
+            logger.info("skipping %d already-answered question(s)", len(questions) - len(pending))
 
-        for question in pending:
+        consecutive = 0
+        for position, question in enumerate(pending):
             artifact = self._evaluate(question)
             self._store.record(artifact)
             if self._on_progress is not None:
                 self._on_progress(artifact)
+
+            consecutive = consecutive + 1 if is_infrastructure(artifact.error_type) else 0
+            if self._halt_after is not None and consecutive >= self._halt_after:
+                logger.error(
+                    "halting: %d consecutive infrastructure failures, last was %s (%s). "
+                    "The remaining %d question(s) are untouched and these %d will be "
+                    "re-attempted -- resume this run id once the cause is cleared",
+                    consecutive,
+                    artifact.error_type,
+                    artifact.error_message,
+                    len(pending) - position - 1,
+                    consecutive,
+                )
+                break
 
         # Summarised from what is on disk, not from this process's results, so
         # a resumed run reports over every question rather than only the ones

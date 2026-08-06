@@ -13,10 +13,17 @@ operating condition rather than an incident. If that loses 140 questions of
 work, the harness is unusable on the hardware this project actually runs on.
 
 So every question is written as it completes, and a run resumes by reading what
-is already on disk. The corollary is the check in :meth:`RunStore.resume`: a
-resumed run must have the *same configuration*, because a result set that is
+is already on disk. Two corollaries, both in :meth:`RunStore.resume`.
+
+A resumed run must have the *same configuration*, because a result set that is
 half one model and half another is not a measurement of either, and nothing
 downstream would show it.
+
+And a question is resumed as done only if the system under test actually
+answered it. The whole design above exists so that hitting a cap at question
+140 costs nothing -- which it did not, because the questions the cap *failed*
+were recorded like any other and never retried. A budget spent failing was
+still a lost run; it just looked like a complete one.
 """
 
 from __future__ import annotations
@@ -30,6 +37,8 @@ from dataclasses import asdict, dataclass, field, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Final
+
+from evals.taxonomy import is_infrastructure
 
 logger = logging.getLogger(__name__)
 
@@ -244,7 +253,28 @@ class RunStore:
             path.write_text(json.dumps(self._manifest.to_dict(), indent=2) + "\n", encoding="utf-8")
 
     def resume(self) -> frozenset[str]:
-        """Question ids already recorded, after checking the config still matches.
+        """Question ids already *answered*, after checking the config still matches.
+
+        Answered, not recorded -- and the difference is what makes a run
+        survive the daily token cap this module's docstring is about.
+
+        An artifact whose ``error_type`` is an infrastructure failure records
+        that the system under test was never asked: the provider was out of
+        budget, the schema was not indexed, the harness itself broke. Treating
+        that file as "done" retires the question permanently, so a run spanning
+        several daily budgets converges on a directory where most questions
+        were never attempted and nothing says so. The first full-split attempt
+        did exactly that with 308 of them.
+
+        These questions are therefore re-answered on the next run, and the
+        record is overwritten in place -- :func:`artifact_filename` is
+        deterministic, so a retry lands on the file it is replacing.
+
+        The consequence to know about: a question failing for a *durable*
+        infrastructure reason is retried on every resume and will never retire.
+        That is the intended reading. A database that is still not indexed is a
+        deployment fault the operator should see repeatedly, not a question the
+        harness should quietly give up on.
 
         Raises:
             ValueError: the existing manifest describes a different
@@ -272,16 +302,35 @@ class RunStore:
         # and inferring an id from a name that has been through a substitution
         # is how a resume comes to believe the wrong question is done.
         done: set[str] = set()
+        retrying = 0
         for path in self._questions.glob("*.json"):
             try:
-                done.add(str(json.loads(path.read_text(encoding="utf-8"))["question_id"]))
+                record = json.loads(path.read_text(encoding="utf-8"))
+                question_id = str(record["question_id"])
             except (OSError, ValueError, KeyError):
                 # A file written mid-crash. Re-answering that question is the
                 # cheap, correct response; refusing the whole resume is not.
                 logger.warning("ignoring unreadable artifact %s", path.name)
+                continue
 
-        if done:
-            logger.info("resuming %s: %d question(s) already recorded", self._root, len(done))
+            # Keyed on the raw `error_type` rather than the recorded
+            # `failure_category`, because the category is derived and an
+            # artifact may have been written by an older taxonomy. The error
+            # type is what the component actually reported.
+            if is_infrastructure(record.get("error_type")):
+                retrying += 1
+                continue
+
+            done.add(question_id)
+
+        if done or retrying:
+            logger.info(
+                "resuming %s: %d question(s) answered, %d to re-attempt after "
+                "infrastructure failure",
+                self._root,
+                len(done),
+                retrying,
+            )
         return frozenset(done)
 
     def record(self, artifact: QuestionArtifact) -> None:
