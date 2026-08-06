@@ -1,10 +1,10 @@
 # Text-to-SQL Analytics Agent (MCP-native)
 
-> **Status: Stage 1 core loop, the Stage 3 MCP layer, Stage 2's benchmark loaded and verified, and the eval pipeline running end to end.** The four servers run and are callable from any MCP host over stdio. Spider's dev split is converted to PostgreSQL, *verified* against its own gold results, indexed, and answered against. Still open: `POST /v1/query`, and a full-split run — every accuracy number so far covers **3 of 20 databases** and says so. See [BENCHMARKS](docs/ml/BENCHMARKS.md) for what has been measured and what bounds it, [ROADMAP](docs/project/ROADMAP.md) for stage status, [TASKS](docs/project/TASKS.md) for the working checklist.
+> **Status: Stage 1 core loop, the Stage 3 MCP layer, Stage 2's benchmark loaded and verified, and the eval pipeline running end to end.** The four servers run and are callable from any MCP host over stdio. Spider's dev split is converted to PostgreSQL, *verified* against its own gold results, indexed, and answered against. Still open: `POST /v1/query`, and finishing the full-split run — it reached **9 of 20 databases** before a daily token cap paused it, and resumes into the same directory. See [BENCHMARKS](docs/ml/BENCHMARKS.md) for what has been measured and what bounds it, [ROADMAP](docs/project/ROADMAP.md) for stage status, [TASKS](docs/project/TASKS.md) for the working checklist.
 >
 > | Landed | Next |
 > |---|---|
-> | **Four MCP servers over stdio, with runtime `tools/list` discovery** | **A full-split run — every number so far is 3 databases of 20** |
+> | **Four MCP servers over stdio, with runtime `tools/list` discovery** | **Finishing the full-split run — 9 databases of 20 reached, paused on a daily token cap** |
 > | **Spider loaded — 20 dev databases converted to Postgres, 19 verified against every gold result** | `POST /v1/query`, non-streaming and SSE |
 > | Postgres 16 + pgvector, Alembic migrations | The agent loop that drives the discovered tools |
 > | **`SELECT`-only role, proven by 30 negative tests — and now proven to be *the role the app connects as*** | Authentication; the API refuses to bind beyond loopback until it exists |
@@ -131,8 +131,8 @@ That creates the `agent_meta` schema, the pgvector extension and the HNSW index,
 Verify the install — the security suite is the one that matters, and it passes by being **refused**:
 
 ```powershell
-pytest                    # ~1,070 tests; integration, security and contract need Docker
-pytest -m security        # the containment suite, on its own — 206 tests
+pytest                    # ~1,265 tests; integration, security and contract need Docker
+pytest -m security        # the containment suite, on its own — 249 tests
 ruff check . ; mypy
 ```
 
@@ -247,18 +247,18 @@ Directories marked *(stub)* exist with a docstring stating which stage fills the
 
 ## Benchmarks
 
-> **First accuracy numbers recorded — and they are smoke rows, not a benchmark result.** Every accuracy figure below covers **150 of 921 scoreable questions**, which in file order is **3 of 20 databases**. A full-split run does not exist yet. Each is single-database execution accuracy, *not* Spider's stricter Test Suite Accuracy, and 113 questions are excluded with reasons. Every measurement is recorded in [BENCHMARKS.md](docs/ml/BENCHMARKS.md) with the commit and command it came from; nothing appears here that is not traceable to a row there.
+> **A full-split run is in progress and these are its partial numbers, not a benchmark result.** The accuracy figures below cover **379 of 921 scoreable questions** — **9 of 20 databases**, up from the 3 the earlier smoke rows reached. The run is paused on a free-tier daily token cap and resumes into the same results directory, so these move rather than being replaced. Each is single-database execution accuracy, *not* Spider's stricter Test Suite Accuracy, and 113 questions are excluded with reasons. Every measurement is recorded in [BENCHMARKS.md](docs/ml/BENCHMARKS.md) with the commit and command it came from; nothing appears here that is not traceable to a row there.
 
 | Metric | Baseline | Current | Stage |
 |---|---|---|---|
 | **Conversion fidelity** (Spider dev, 1034 questions) | — | **99.3%** — 915 / 921, 19 of 20 databases fully verified | 2 |
-| Execution accuracy (Spider dev, 3 of 20 DBs, `k=30`) | 42.7% @ `k=10` | **72.7%** — single model, `retrieval-only` | 2 |
-| Schema-linking Recall@5 | — | **0.889** (R@1 0.605, R@10 0.960, R@20 1.000) | 5 |
-| Schema-linking Recall@10 | — | **0.960** — the fine-tune's target is R@1, not coverage | 5 |
-| Invalid-query rate | 20.7% | **2.7%** — pre-correction; the retry loop is Stage 4 | 4 |
+| Execution accuracy (Spider dev, 9 of 20 DBs, `k=30`) | 42.7% @ `k=10` | **80.9%** — single model, `retrieval-only`; 55.4%–97.1% across databases | 2 |
+| Schema-linking Recall@5 | — | **0.936** (R@1 0.687, R@10 0.982, R@20 1.000) | 5 |
+| Schema-linking Recall@10 | — | **0.982** — the fine-tune's target is R@1, not coverage | 5 |
+| Invalid-query rate | 20.7% | **3.3%** — pre-correction; the retry loop is Stage 4 | 4 |
 | Multi-step task success | TBD | TBD | 4 |
 
-**Recall@20 = 1.0 bounds what Stage 5 can buy on Spider.** A retriever that already finds every needed element by rank 20 can only be improved into finding them *sooner* — which is the argument for BIRD, and the null result [R-01](docs/project/RISKS.md) predicted the shape of.
+**Recall@20 = 1.0 bounds what Stage 5 can buy on Spider**, and it held at 1.0 across four times the questions and three times the databases. A retriever that already finds every needed element by rank 20 can only be improved into finding them *sooner* — which is the argument for BIRD, and the null result [R-01](docs/project/RISKS.md) predicted the shape of.
 
 ## Documentation
 

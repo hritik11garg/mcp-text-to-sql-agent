@@ -37,7 +37,7 @@ Implemented multi-step decomposition with session memory, scoring X% task succes
 
 | Bullet | Measured | Why it is not the number yet |
 |---|---|---|
-| Execution accuracy | **72.7%** (`retrieval-only`, k=30) | 150 of 921 scoreable questions — **3 of 20 databases** — and the split is not comparable to published Spider numbers |
-| Recall@5 baseline | **0.889** (R@1 0.605, R@10 0.960, R@20 **1.000**) | This is the *before*. There is no *after* — Stage 5 has not started. Full coverage by rank 20 also bounds what a fine-tune can buy on Spider, which is the argument for BIRD |
-| Invalid-query rate | **2.7%** | Pre-correction only. The self-correction loop is Stage 4, so the "X%→Y%" the bullet promises is a single number today |
+| Execution accuracy | **80.9%** (`retrieval-only`, k=30, single model) | 379 of 921 scoreable questions — **9 of 20 databases**, up from 3. The full-split run is *paused on a daily token cap and resumes into the same directory*, so this figure moves rather than being replaced. Still not comparable to published Spider numbers |
+| Recall@5 baseline | **0.936** (R@1 0.687, R@10 0.982, R@20 **1.000**) | This is the *before*. There is no *after* — Stage 5 has not started. R@20 holding at 1.000 over 379 questions and 9 databases, not just 150 and 3, tightens rather than loosens the bound on what a fine-tune can buy on Spider — which is the argument for BIRD |
+| Invalid-query rate | **3.3%** | Pre-correction only. The self-correction loop is Stage 4, so the "X%→Y%" the bullet promises is a single number today |
 | Multi-step task success | — | Stage 4. Not started |

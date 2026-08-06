@@ -1,6 +1,6 @@
 # Database
 
-> **Status: design intent — Stage 1 confirms.** Role model, containment strategy, and index plan are decided. The ER diagram, concrete DDL, and query-plan analysis land with the implementation.
+> **Status: built, except the pictures and the plans.** Both schemas, all five `agent_meta` tables, the indexes and the read-only role are deployed by the migrations, and §3, §5 and §7 track them column for column. **Still open:** the ER diagram (§2) and the `EXPLAIN ANALYZE` work in §9, which needs a corpus larger than a benchmark database.
 
 PostgreSQL 16+ with the `pgvector` extension.
 
@@ -27,7 +27,7 @@ Two diagrams are needed:
 
 ## 3. Tables (`agent_meta`)
 
-> **TBD — Stage 1** for exact DDL. Planned shape:
+**Built** — `migrations/versions/001_agent_meta.py` is the authority. The shapes below match what is deployed, column for column.
 
 ### `schema_elements`
 One row per table or column in the target schema — the retrieval corpus.
@@ -46,7 +46,7 @@ One row per table or column in the target schema — the retrieval corpus.
 | `model_version` | `text` | Which retriever produced this vector |
 | `updated_at` | `timestamptz` | |
 
-`serialized` is the interesting field: retrieval quality depends on what text gets embedded. Plan is `"{table}.{column} ({type}) — {comment}. Examples: {v1}, {v2}, {v3}"`, so type and representative values contribute to the match, not just the name. Confirmed empirically in Stage 5.
+`serialized` is the interesting field: retrieval quality depends on what text gets embedded. `src/schema/serialization.py` builds `"{table}.{column} ({type}) — {comment}. Examples: {v1}, {v2}, {v3}"` for columns and `"{table} (table) — {comment}. Columns: a, b, c, and N more"` for tables, so type, comment and representative values contribute to the match rather than the name alone. Whether the examples earn their place is an ablation nobody has run — Stage 5.
 
 `model_version` is not optional bookkeeping — vectors from the baseline and fine-tuned models are **not comparable**, so mixing them silently corrupts retrieval. Queries filter on it.
 

@@ -162,6 +162,12 @@ Data never seen during training or prompt tuning, used for the final reported nu
 **Gold error**
 A benchmark reference query that is itself wrong, ambiguous, or does not run on the database it shipped with. Counted and reported rather than discarded — dropping them quietly inflates every score computed afterwards, because they cap what is achievable.
 
+**Infrastructure failure**
+A question the system under test was never asked: a spent provider budget, a schema that was never indexed, a retriever that fell over, a bug in the harness. Sibling to *gold error* and excluded from the denominator for the same reason — nothing about the model follows from a question it never saw. The consequence is easy to miss: a run with many of these does not report a *bad* score, it reports a **smaller measurement**, at the same apparent confidence.
+
+**Answered vs recorded**
+The distinction resumption turns on. Every question is written to disk as it completes, including the ones that failed — the records are the evidence. But only a question the model actually *answered* is skipped on a re-run; an infrastructure failure is re-attempted. Conflating them means a spent daily budget permanently retires the questions it failed, so the run can only ever be restarted from nothing. See [ADR-037](architecture/DECISIONS.md#adr-037--resumption-skips-answered-questions-not-recorded-ones).
+
 **Type affinity**
 SQLite's rule for what a declared column type *suggests*, given that SQLite does not enforce types: a column declared `INTEGER` can hold `'unknown'`. The conversion treats the declaration as a hint and the data as the evidence, which is why a benchmark column can arrive in PostgreSQL as `text`.
 

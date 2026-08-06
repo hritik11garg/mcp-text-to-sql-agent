@@ -364,44 +364,6 @@ Not deferred findings — prerequisites. Each is unexploitable today because no 
 | **SSE stream limits** | Concurrent-stream cap, keepalive, and cancellation on disconnect — an abandoned stream that pins a connection is the `idle_in_transaction_session_timeout` case from §5 arriving from outside |
 | **`explain_only` must not become an oracle** | Validating without executing still discloses whether an identifier exists |
 
-## 13a. The eval harness — availability of the measurement
-
-Reviewed alongside the resumption change ([ADR-037](../architecture/DECISIONS.md#adr-037--resumption-skips-answered-questions-not-recorded-ones)). The harness is a local developer tool with no network surface, so the findings here are about **availability and log integrity**, not confidentiality. Both were introduced by that change and fixed in it.
-
-### 13a.1 A corrupt artifact could abort the whole resume — **Low** (Availability)
-
-**Vulnerability.** `resume()` reads `error_type` out of each artifact and tests it against a `frozenset`. Membership on a `frozenset` raises `TypeError` for an unhashable value, so an artifact whose `error_type` deserialised as a list or an object would raise out of the loop and abort the resume. *(OWASP A04, insecure design; CWE-703, improper check for unusual conditions.)*
-
-**Why it's dangerous.** Not because the input is hostile — it is a local file the harness wrote — but because of *when* it fires. Resumption exists to survive a bad situation: a run that was killed, a machine that lost power, a provider that quit mid-question. Those are the circumstances that produce a truncated artifact, so the one operation meant to recover from a crash would fail on that crash's own debris. The function had already decided the opposite rule for unreadable files, in a comment: *"Re-answering that question is the cheap, correct response; refusing the whole resume is not."* The new code did not inherit it.
-
-**Attack scenario.** No attacker required. A process killed mid-`write_text` leaves a half-written JSON file; a hand-edited artifact during debugging does the same. The next resume raises and the run cannot continue — on a metered tier, that is a lost daily budget.
-
-**Severity — Low.** Availability of a developer tool, locally triggered, no data at risk.
-
-**Secure implementation.** The type is checked inside the existing `try`, and `TypeError` joins `OSError, ValueError, KeyError` in the `except`. The artifact is skipped with a warning and the question is re-answered.
-
-**Why the fix is secure.** It makes the whole record parse fail-soft in one place rather than defending against one bad field — so a future field read in that loop inherits the behaviour instead of needing to remember it. Fail-soft is right *here* specifically because the fallback is to do more work, not less: skipping an artifact costs one re-answered question and cannot produce a wrong score.
-
-**CIA impact.** Availability only.
-
-### 13a.2 Log injection through a provider's error message — **Low** (Integrity)
-
-**Vulnerability.** The new halting message logs `error_message`, which is `str(exc)` from the LLM provider or the database — text this project does not author. A newline in a log record is a record separator. *(OWASP A09; CWE-117, improper output neutralization for logs.)*
-
-**Why it's dangerous.** Same argument as [§13.6](#136-log-injection-through-x-request-id--medium), and the timing is worse: this line is only ever written when a run has hit a wall, so any forged entry appears in the log of an outage, at the moment that log is being read to explain it.
-
-**Attack scenario.** A compromised or hostile provider returns an error whose body contains `\nINFO evals.runner: run completed successfully`. The operator reading the tail of a halted run sees a completion that never happened. Remote, but the trust placed in a third-party endpoint's error text is exactly what §14 is about.
-
-**Severity — Low.** Requires control of the configured provider's responses; affects a local log rather than an aggregator.
-
-**Secure implementation.** `_one_line()` collapses all whitespace runs to single spaces and truncates to 200 characters. Unlike the request-id case, an allowlist is wrong here — the field is free-form diagnostic text and rejecting it would discard the reason the run stopped. Flattening preserves the diagnostic and removes the separator.
-
-**Why the fix is secure.** `" ".join(s.split())` removes every Unicode whitespace character Python recognises, including `\r`, `\v`, `\f`, `\x85` and ` ` — the ones a denylist of `\n` misses. The length bound is a second control for a different failure: a provider that returns its whole response body in an exception should not put it in the operator's terminal.
-
-**CIA impact.** Integrity of the log trail.
-
-**Scope checked:** the per-question progress line logs `failure_category`, an enum value that cannot carry provider text; artifacts are written with `json.dumps`, which escapes newlines. This line was the only exposure.
-
 ## 14. Multi-provider LLM risks
 
 Introduced by [ADR-014](../architecture/DECISIONS.md#adr-014--provider-agnostic-llm-behind-an-llmclient-port). Making the LLM endpoint configurable is necessary, but it adds two attack surfaces that a hardcoded vendor SDK did not have.
@@ -749,6 +711,44 @@ This is not hypothetical here. It fired. `.env.example` ships `DATABASE_URL` in 
 A free-tier model is generally more susceptible to injected instructions than a frontier model. This does **not** change the containment argument in §7 — a fully successful injection still only yields SQL, which is still parsed, still `SELECT`-only, and still runs under a role that cannot write. It does mean injection attempts will *succeed more often at the model layer*, so §7's position (contain, don't filter) matters more, not less. It also raises the value of the `MAX_TOOL_CALLS_PER_REQUEST` cap, since a manipulated weak model is likelier to loop.
 
 ---
+
+### 14.2.12 The eval harness — availability of the measurement
+
+Reviewed alongside the resumption change ([ADR-037](../architecture/DECISIONS.md#adr-037--resumption-skips-answered-questions-not-recorded-ones)). The harness is a local developer tool with no network surface, so the findings here are about **availability and log integrity**, not confidentiality. Both were introduced by that change and fixed in it.
+
+#### 14.2.12.1 A corrupt artifact could abort the whole resume — **Low** (Availability)
+
+**Vulnerability.** `resume()` reads `error_type` out of each artifact and tests it against a `frozenset`. Membership on a `frozenset` raises `TypeError` for an unhashable value, so an artifact whose `error_type` deserialised as a list or an object would raise out of the loop and abort the resume. *(OWASP A04, insecure design; CWE-703, improper check for unusual conditions.)*
+
+**Why it's dangerous.** Not because the input is hostile — it is a local file the harness wrote — but because of *when* it fires. Resumption exists to survive a bad situation: a run that was killed, a machine that lost power, a provider that quit mid-question. Those are the circumstances that produce a truncated artifact, so the one operation meant to recover from a crash would fail on that crash's own debris. The function had already decided the opposite rule for unreadable files, in a comment: *"Re-answering that question is the cheap, correct response; refusing the whole resume is not."* The new code did not inherit it.
+
+**Attack scenario.** No attacker required. A process killed mid-`write_text` leaves a half-written JSON file; a hand-edited artifact during debugging does the same. The next resume raises and the run cannot continue — on a metered tier, that is a lost daily budget.
+
+**Severity — Low.** Availability of a developer tool, locally triggered, no data at risk.
+
+**Secure implementation.** The type is checked inside the existing `try`, and `TypeError` joins `OSError, ValueError, KeyError` in the `except`. The artifact is skipped with a warning and the question is re-answered.
+
+**Why the fix is secure.** It makes the whole record parse fail-soft in one place rather than defending against one bad field — so a future field read in that loop inherits the behaviour instead of needing to remember it. Fail-soft is right *here* specifically because the fallback is to do more work, not less: skipping an artifact costs one re-answered question and cannot produce a wrong score.
+
+**CIA impact.** Availability only.
+
+#### 14.2.12.2 Log injection through a provider's error message — **Low** (Integrity)
+
+**Vulnerability.** The new halting message logs `error_message`, which is `str(exc)` from the LLM provider or the database — text this project does not author. A newline in a log record is a record separator. *(OWASP A09; CWE-117, improper output neutralization for logs.)*
+
+**Why it's dangerous.** Same argument as [§13.6](#136-log-injection-through-x-request-id--medium), and the timing is worse: this line is only ever written when a run has hit a wall, so any forged entry appears in the log of an outage, at the moment that log is being read to explain it.
+
+**Attack scenario.** A compromised or hostile provider returns an error whose body contains `\nINFO evals.runner: run completed successfully`. The operator reading the tail of a halted run sees a completion that never happened. Remote, but the trust placed in a third-party endpoint's error text is exactly what §14 is about.
+
+**Severity — Low.** Requires control of the configured provider's responses; affects a local log rather than an aggregator.
+
+**Secure implementation.** `_one_line()` collapses all whitespace runs to single spaces and truncates to 200 characters. Unlike the request-id case, an allowlist is wrong here — the field is free-form diagnostic text and rejecting it would discard the reason the run stopped. Flattening preserves the diagnostic and removes the separator.
+
+**Why the fix is secure.** `" ".join(s.split())` removes every Unicode whitespace character Python recognises, including `\r`, `\v`, `\f`, `\x85` and ` ` — the ones a denylist of `\n` misses. The length bound is a second control for a different failure: a provider that returns its whole response body in an exception should not put it in the operator's terminal.
+
+**CIA impact.** Integrity of the log trail.
+
+**Scope checked:** the per-question progress line logs `failure_category`, an enum value that cannot carry provider text; artifacts are written with `json.dumps`, which escapes newlines. This line was the only exposure.
 
 ## 15. Incident response
 

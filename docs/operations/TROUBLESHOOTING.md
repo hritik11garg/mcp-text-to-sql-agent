@@ -202,6 +202,27 @@ The tool description is the model's only selection signal. If a tool is not bein
 
 That advance is the thing to check rather than the 429 itself. Read `answered_by` in the run summary: if more than one model appears, `single_model` is `false` and **the accuracy figure is a weighted average of two systems**. Measured on one run: 96% for one model and 59% for the other, reported as 75.3% — a number neither earned. Re-run with a single model, or record the row as a blend and mark it.
 
+**To measure one model, set `LLM_MODEL_FALLBACKS=` empty for the run.** The daily cap then produces visible `llm_failed` records and a halt, instead of a silent switch to another system — which is the outcome you want, because the run is now resumable through it. A blend cannot be un-blended afterwards; a halt costs a day.
+
+### `halting: N consecutive infrastructure failures`
+
+Working as intended, and the message is the diagnosis. The run stopped because the provider, the catalog or the harness itself failed *N* times in a row — a daily token cap being the usual cause. Continuing would have asked a dead provider once per remaining question.
+
+**Nothing is lost.** The questions after the halt were never attempted, and the ones that failed are re-attempted on the next run rather than counted as answered — see [ADR-037](../architecture/DECISIONS.md#adr-037--resumption-skips-answered-questions-not-recorded-ones). Clear the cause, then resume with the **same `--run-id`**.
+
+Read the `last was ...` field before resuming, because two causes need opposite responses:
+
+- **`llm_failed`** — wait for the budget to reset. The full Spider dev split needs roughly 700k tokens, which is more than one free-tier day, so a multi-day run is the expected shape rather than a fault.
+- **`scope_unavailable`** — a database was never indexed. Resuming without fixing it just spends another *N* attempts. Run `python -m benchmark.load index` and check the `dataset` values it wrote against the `db_id` values in the split. This is the failure that lost 84 questions to a name that differed only in case.
+
+`--halt-after 0` disables the check, which is occasionally right when you *want* a run to grind through a known-flaky provider. It is not the fix for either cause above.
+
+### The summary covers fewer questions than the split
+
+Check `infrastructure_errors` in the summary. Those questions leave the scored denominator by design — nothing about the model can be concluded from a question it was never asked — so an accuracy figure stays clean while covering less than it appears to.
+
+A large `infrastructure_errors` count is therefore not a bad score, it is a **smaller measurement**, and the two are easy to confuse at a glance. If the count is non-zero, the number is not a benchmark result until the cause is cleared and the run resumed.
+
 ### `LLMUnavailableError ... HTTP 413`
 
 `LLM_MAX_TOKENS` is above the endpoint's completion cap. It is a *request* rejection — the model never ran — and the default of 16000 exceeds at least one free tier's limit. Measured on Groq with `openai/gpt-oss-120b`: 6000 accepted, 8192 refused. Set `LLM_MAX_TOKENS=4096`.

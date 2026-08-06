@@ -20,7 +20,7 @@ Percentages are checkbox counts from [TASKS.md](TASKS.md), not confidence — a 
 | 5 | **Fine-tuned schema linker** | ⬜ Not started | 0% |
 | 6 | **Hardening** — limits, tracing, tests | ⬜ Not started | 0% |
 
-**What is genuinely blocking, in order:** a full-split run — the pipeline runs end to end and has produced numbers, but every one of them covers 3 of 20 databases and two are a blend of two models. Then `POST /v1/query` and the demo UI it serves (blocks the Stage 1 close-out and any visual demo), then the agent loop.
+**What is genuinely blocking, in order:** finishing the full-split run — it is under way and reached 9 of 20 databases before a daily token cap paused it, which is where the free tier puts the ceiling rather than anything in the code. Then `POST /v1/query` and the demo UI it serves (blocks the Stage 1 close-out and any visual demo), then the agent loop.
 
 **Stage 1 dropped from ~75% to 59%** when the demo UI was added to its scope, and has since recovered to 63% as the API's foundation landed. The percentage got worse because the plan got more honest, which is the direction it should move.
 
@@ -78,7 +78,7 @@ Scope: Spider/BIRD acquisition and SQLite→Postgres conversion; database-level 
 - [~] Reproducible from a clean checkout via one command — three commands rather than one (verify, index, run), all now executed end to end against a real Postgres
 - [x] Conversion verified — gold queries return identical results on SQLite and Postgres, compared with the harness's own comparator, exiting 3 when they do not
 - [x] Splits are database-disjoint and committed as a file — and stable when the corpus grows, which a seeded shuffle is not
-- [~] Baseline rows in [../ml/BENCHMARKS.md](../ml/BENCHMARKS.md) — §0 fidelity, §1 accuracy, §2 recall and §3 invalid-query rate all carry measured values; §1 covers 3 of 20 databases and says so on every row
+- [~] Baseline rows in [../ml/BENCHMARKS.md](../ml/BENCHMARKS.md) — §0 fidelity, §1 accuracy, §2 recall and §3 invalid-query rate all carry measured values; §1.1 is a full-split run at 9 of 20 databases, paused on a daily token cap, and every row states what its own sample covers
 - [~] Failure taxonomy populated with counts — real counts from real runs, and the first one found that four of the runner's own error types had no category and were landing in `uncategorised`
 
 **The measurement machinery landed before the data, deliberately.** Comparison, Recall@k, the failure taxonomy, artifacts and resumption are built and tested against synthetic cases — 84 tests, no model and no database. The order matters: the logic that decides what a number *means* is the part a benchmark cannot check, because a wrong comparison produces a plausible score rather than an error. Building it against a dataset would have meant debugging two unknowns at once.
