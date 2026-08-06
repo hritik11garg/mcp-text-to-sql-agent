@@ -34,6 +34,7 @@ from typing import Any
 
 import psycopg
 from psycopg import Connection
+from psycopg_pool import ConnectionPool
 
 from adapters.embedding.factory import build_embedder
 from core.dsn import libpq_dsn, redact_dsn
@@ -43,6 +44,13 @@ from schema.catalog import SchemaCatalog, load_catalog
 from schema.retrieval import SchemaRetriever, build_retriever
 
 logger = logging.getLogger(__name__)
+
+_POOL_OPEN_TIMEOUT_SECONDS = 30.0
+"""How long startup waits for the pool's first connection.
+
+Bounded so a wedged database fails the process rather than hanging it. A
+deployment that never finishes starting looks identical to one that is slow,
+and only one of them will recover."""
 
 
 @dataclass(slots=True)
@@ -59,6 +67,7 @@ class Resources:
     settings: Settings
     _owner: Connection[Any] | None = None
     _readonly: Connection[Any] | None = None
+    _readonly_pool: ConnectionPool[Connection[Any]] | None = None
     _catalog: SchemaCatalog | None = None
     _retriever: SchemaRetriever | None = None
 
@@ -82,11 +91,103 @@ class Resources:
             conn = self._open(self.settings.database.database_ro_url, "DATABASE_RO_URL")
             try:
                 assert_read_only(conn)
+                self._scope_schema(conn)
             except Exception:
                 conn.close()
                 raise
             self._readonly = conn
         return self._readonly
+
+    def _scope_schema(self, conn: Connection[Any]) -> None:
+        """Point a read-only session at the schema the catalog describes.
+
+        Session-scoped (``false``), not transaction-scoped: the validator opens
+        its own transaction, so a transaction-local setting would be reverted
+        before the ``EXPLAIN`` inside it ran. Set as a bound parameter rather
+        than composed into the statement -- it is configuration, but it is
+        configuration that reaches SQL, and that is the category this project
+        does not interpolate.
+
+        Applied to every read-only session, pooled or not, because the
+        validator holds one connection and the executor borrows another. A
+        search path on only one of them means a query that validates against a
+        schema it will not execute against.
+        """
+        conn.execute(
+            "SELECT set_config('search_path', %s, false)",
+            (self.settings.database.db_target_schema,),
+        )
+
+    @property
+    def readonly_pool(self) -> ConnectionPool[Connection[Any]]:
+        """A pool of ``SELECT``-only connections, for concurrent callers.
+
+        The single :attr:`readonly` connection above is correct for an MCP
+        server, which answers one ``tools/call`` at a time in one process. It
+        is *wrong* the moment two HTTP requests arrive together: psycopg
+        connections are not safe to share across concurrent use, and two
+        requests would interleave on one session -- including the
+        ``set_config`` calls that carry the statement timeout and the
+        ``search_path``. That is not a slowdown, it is one request running
+        under another's limits.
+
+        **Every connection is asserted, not just the first.** ``configure``
+        runs :func:`assert_read_only` on each new connection the pool opens.
+        Asserting once at pool creation would be cheaper and would check the
+        boundary on one connection while serving traffic on eight; the whole
+        argument of ADR-033 is that the connection a request actually uses is
+        the one that has to be proved. Three catalog queries against a bounded
+        pool is not a cost worth trading that for.
+
+        ``open=False`` then an explicit ``open(wait=True)``: a pool that opens
+        in the background reports success before it has proved anything, so a
+        deployment whose read-only role can write would start, serve, and fail
+        on a request instead of at startup.
+        """
+        if self._readonly_pool is None:
+            url = self.settings.database.database_ro_url
+            pool: ConnectionPool[Connection[Any]] = ConnectionPool(
+                conninfo=libpq_dsn(url),
+                min_size=self.settings.api.api_pool_min_size,
+                max_size=self.settings.api.api_pool_max_size,
+                # Autocommit, for two reasons that happen to point the same way.
+                #
+                # `configure` must return the connection with no transaction
+                # open -- psycopg_pool discards one that is `INTRANS` and
+                # retries, so a pool whose configure function runs any query
+                # never finishes opening. `assert_read_only` runs three.
+                #
+                # And it is what a borrowed connection should look like anyway.
+                # Without it every checkout leaves an idle transaction behind
+                # after the executor's `conn.transaction()` block, and the
+                # read-only role carries an `idle_in_transaction_session_timeout`
+                # that would then start killing pooled connections.
+                kwargs={"autocommit": True},
+                configure=self._prepare_pooled,
+                open=False,
+                timeout=max(1.0, self.settings.database.db_connect_timeout_ms / 1000),
+                name="readonly",
+            )
+            try:
+                pool.open(wait=True, timeout=_POOL_OPEN_TIMEOUT_SECONDS)
+            except Exception as exc:
+                pool.close()
+                raise ConfigurationError(
+                    f"could not open the read-only connection pool using "
+                    f"DATABASE_RO_URL: {redact_dsn(str(exc)).strip()}"
+                ) from None
+            self._readonly_pool = pool
+        return self._readonly_pool
+
+    def _prepare_pooled(self, conn: Connection[Any]) -> None:
+        """Every connection the pool opens: proved, then scoped.
+
+        The proof is per connection rather than per pool on purpose -- ADR-033
+        is about the connection a request actually uses, and a pool serving
+        eight while one was checked is exactly the gap it closes.
+        """
+        assert_read_only(conn)
+        self._scope_schema(conn)
 
     def _open(self, url: object, variable: str) -> Connection[Any]:
         return _connect(url, variable, timeout_ms=self.settings.database.db_connect_timeout_ms)
@@ -120,6 +221,10 @@ class Resources:
         return self._retriever
 
     def close(self) -> None:
+        # The pool first: it holds connections of its own, and closing the
+        # single connections underneath it would not release them.
+        if self._readonly_pool is not None:
+            self._readonly_pool.close()
         for conn in (self._owner, self._readonly):
             if conn is not None:
                 conn.close()

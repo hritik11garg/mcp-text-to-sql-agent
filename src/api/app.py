@@ -27,13 +27,16 @@ from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from functools import partial
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 
-from api import errors
+from api import errors, query
+from api.errors import NOT_READY, ApiError
 from api.health import Probe, Readiness, build_router, ping
-from api.middleware import RequestIdMiddleware
+from api.middleware import BodySizeLimitMiddleware, RequestIdMiddleware
+from api.query import QueryService
 from composition import Resources
+from composition.answering import build_answerer, build_executor
 from core.settings import Settings
 
 logger = logging.getLogger(__name__)
@@ -76,6 +79,12 @@ def create_app(
 
     errors.install(app)
     app.add_middleware(RequestIdMiddleware)
+    # Added *after* RequestIdMiddleware, which puts it **outside**: Starlette
+    # builds the stack in reverse, so the last one added runs first. That is
+    # the order this needs -- the body cap has to refuse before anything reads
+    # the body, and a correlation id it can attach itself is a smaller loss
+    # than a limit that only applies to bodies already in memory.
+    app.add_middleware(BodySizeLimitMiddleware, max_bytes=settings.api.api_max_body_bytes)
 
     # Built here, filled in the lifespan. The route table and the middleware
     # stack are frozen when the app starts serving, so a router added later
@@ -83,7 +92,9 @@ def create_app(
     # implementation detail to hang two endpoints on. Until `configure` runs,
     # `/ready` answers 503, which is the honest answer during startup anyway.
     app.state.readiness = Readiness()
+    app.state.query_service = None
     app.include_router(build_router(app.state.readiness))
+    app.include_router(query.build_router(_query_service))
 
     if settings.api.api_cors_origins:
         app.add_middleware(
@@ -127,6 +138,12 @@ async def _lifespan(
             retriever.model_version,
         )
 
+        app.state.query_service = QueryService(
+            build_answerer(resources),
+            build_executor(resources),
+            max_concurrent=settings.api.api_max_concurrent_requests,
+        )
+
         app.state.readiness.configure(
             [
                 Probe("database", partial(ping, owner)),
@@ -140,6 +157,22 @@ async def _lifespan(
         yield
     finally:
         resources.close()
+
+
+def _query_service(request: Request) -> QueryService:
+    """The service, or a 503 if the lifespan has not built it yet.
+
+    Not an `assert` and not an attribute error. A request arriving before
+    startup finished is an ordinary race during a rolling deploy, and the
+    honest answer is the same one `/ready` is giving at that moment -- the
+    process is up and cannot serve yet. An unhandled `AttributeError` would
+    answer 500, which reads as a defect and invites a retry against a replica
+    that is fine.
+    """
+    service = getattr(request.app.state, "query_service", None)
+    if not isinstance(service, QueryService):
+        raise ApiError(NOT_READY, "the service is still starting")
+    return service
 
 
 __all__ = ["TITLE", "create_app"]

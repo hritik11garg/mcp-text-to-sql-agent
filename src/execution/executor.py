@@ -27,6 +27,7 @@ from typing import Any, Protocol, runtime_checkable
 import psycopg
 import sqlglot
 from psycopg import Connection
+from psycopg_pool import ConnectionPool
 from sqlglot import exp
 
 from core.exceptions import (
@@ -108,6 +109,60 @@ class SQLExecutor:
         self._settings = settings
         self._audit = audit
         self._dialect = dialect
+
+    def explain(
+        self,
+        sql: str,
+        *,
+        timeout_ms: int | None = None,
+        question: str | None = None,
+        request_id: str | None = None,
+        trace_id: str | None = None,
+        session_id: str | None = None,
+        validation_attempts: int = 1,
+    ) -> None:
+        """Validate without running. What ``explain_only`` means.
+
+        Deliberately a method on the *executor* rather than a caller reaching
+        for the validator directly, and the reason is the whole value of the
+        feature. ``explain_only`` is a promise that a query would run --
+        answering it with a different validation path than ``execute`` uses
+        makes the promise about a query nobody will submit. One validator, one
+        connection source, one set of clamps; the only difference is that this
+        one stops before the query runs.
+
+        Audited like an execution, with ``outcome='explained'``. An operator
+        reading the trail needs to see that a query was *asked about*: a caller
+        probing the schema through repeated validation failures leaves no
+        record at all otherwise, which is the difference between a control and
+        a control you can detect being tested.
+
+        Raises:
+            SQLValidationError: the query would not have run.
+        """
+        # Clamped and discarded. The value is not used -- nothing executes --
+        # but asking for it means an out-of-range `timeout_ms` is refused here
+        # exactly as it would be on the executing path, so `explain_only` and
+        # `execute` reject the same requests.
+        self._settings.clamp_timeout_ms(timeout_ms)
+
+        validation = self._validator.validate(sql)
+        self._record(
+            outcome="explained" if validation.valid else "rejected",
+            sql=sql,
+            error_type=None if validation.valid else validation.error_type,
+            question=question,
+            request_id=request_id,
+            trace_id=trace_id,
+            session_id=session_id,
+            validation_attempts=validation_attempts,
+        )
+        if not validation.valid:
+            raise SQLValidationError(
+                validation.error_type or "invalid",
+                validation.feedback,
+                validation.identifier,
+            )
 
     def execute(
         self,
@@ -364,9 +419,10 @@ class AuditLog:
 class SingleConnectionSource:
     """A `ConnectionSource` backed by one connection.
 
-    For tests and for the single-threaded path that exists today. It hands the
-    same connection out every time and never closes it, which is exactly what a
-    pool must not do -- hence the separate type rather than a flag.
+    For tests and for the MCP servers, which answer one ``tools/call`` at a
+    time in one process. It hands the same connection out every time and never
+    closes it, which is exactly what a pool must not do -- hence the separate
+    type rather than a flag.
     """
 
     def __init__(self, connection: Connection[Any]) -> None:
@@ -374,6 +430,30 @@ class SingleConnectionSource:
 
     def connection(self) -> AbstractContextManager[Connection[Any]]:
         return _Borrowed(self._conn)
+
+
+class PoolConnectionSource:
+    """A `ConnectionSource` backed by a pool. What a serving process needs.
+
+    The distinction from :class:`SingleConnectionSource` is not performance, it
+    is correctness under concurrency. ``SQLExecutor`` sets ``statement_timeout``
+    with ``set_config(..., true)`` -- transaction-local -- and runs inside
+    ``conn.transaction()``. Two concurrent requests sharing one connection
+    would interleave those transactions on one session, and one request's
+    timeout would bound another's query.
+
+    ``pool.connection()`` is already a context manager that returns the
+    connection to the pool on exit, including on an exception, so this is a
+    rename rather than a wrapper. It exists as a named type so that the wiring
+    states which discipline a process is running under, rather than leaving it
+    to be inferred from what happened to be passed in.
+    """
+
+    def __init__(self, pool: ConnectionPool[Connection[Any]]) -> None:
+        self._pool = pool
+
+    def connection(self) -> AbstractContextManager[Connection[Any]]:
+        return self._pool.connection()
 
 
 class _Borrowed(AbstractContextManager[Connection[Any]]):
@@ -395,6 +475,7 @@ def rows_as_dicts(result: QueryResult) -> list[dict[str, Any]]:
 __all__ = [
     "AuditLog",
     "ConnectionSource",
+    "PoolConnectionSource",
     "QueryResult",
     "SQLExecutor",
     "SingleConnectionSource",

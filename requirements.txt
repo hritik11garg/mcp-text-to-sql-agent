@@ -29,6 +29,7 @@ pydantic-settings==2.14.2     # typed settings from env / .env
 
 # --- Database --------------------------------------------------------------
 psycopg[binary]==3.3.4        # PostgreSQL driver (binary wheel, no libpq build)
+psycopg-pool==3.3.1           # connection pool; one connection cannot serve two requests
 pgvector==0.5.0               # vector type adapter for schema retrieval
 sqlalchemy==2.0.51            # engine/pool management (Core only, not the ORM)
 alembic==1.18.5               # schema migrations for the metadata catalog

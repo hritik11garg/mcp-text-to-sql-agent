@@ -411,6 +411,48 @@ class APISettings(BaseSettings):
     that turns every visitor's browser into an authenticated client.
     """
 
+    api_max_body_bytes: int = Field(default=64 * 1024, ge=1024, le=10 * 1024 * 1024)
+    """Largest request body accepted, before parsing.
+
+    A question is bounded at 2000 characters, so 64 KiB is roughly thirty times
+    the largest legitimate request. The bound exists because the *parser* is
+    the expensive part: without it, an unauthenticated caller can make this
+    process allocate whatever it is willing to send, and the cost is paid
+    before any validation runs.
+    """
+
+    api_max_question_chars: int = Field(default=2000, ge=1, le=10_000)
+    """Longest question accepted. API.md specifies 1-2000.
+
+    Separate from the body cap and not redundant with it: the body cap bounds
+    what is read, this bounds what reaches the model. Prompt cost and token
+    spend scale with it, and the token budget is the scarcest resource here.
+    """
+
+    api_max_concurrent_requests: int = Field(default=4, ge=1, le=64)
+    """Questions answered at once, across all callers.
+
+    Bounds the pool, the provider's rate limit and the event loop together --
+    every in-flight question holds a database connection and an outstanding LLM
+    call. Requests over the limit are refused with ``429`` immediately rather
+    than queued, because a queue converts an overload into a latency spike that
+    every caller waits out, and a caller that is told *no* can retry.
+
+    Four rather than a larger number because the binding constraint is the free
+    tier's requests-per-minute, not this process.
+    """
+
+    api_pool_min_size: int = Field(default=1, ge=0, le=64)
+    api_pool_max_size: int = Field(default=8, ge=1, le=128)
+    """Read-only connection pool bounds.
+
+    ``max_size`` is above ``api_max_concurrent_requests`` on purpose: readiness
+    probes borrow a connection too, and a pool sized exactly to the request cap
+    makes ``/ready`` block behind saturated traffic -- reporting the service
+    unhealthy precisely when it is busy, which is how a load balancer turns a
+    spike into an outage.
+    """
+
     @model_validator(mode="after")
     def _check_cors(self) -> APISettings:
         if any(origin == "*" for origin in self.api_cors_origins):
@@ -448,6 +490,32 @@ class APISettings(BaseSettings):
                 f"database and spend the LLM budget doing it. Bind 127.0.0.1 "
                 f"and publish the port from your container runtime or a "
                 f"reverse proxy that does authenticate."
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _pool_must_outsize_the_request_cap(self) -> APISettings:
+        """The pool has to hold every in-flight request plus the probes.
+
+        Sized equal to or below the request cap, a saturated service starves
+        ``/ready`` of the connection it needs to answer -- so the readiness
+        probe fails under load, the orchestrator pulls the replica out of
+        rotation, and the remaining replicas take its traffic. Load-induced
+        failure that removes capacity is the shape that turns a busy minute
+        into an outage, and it is a two-number arithmetic error away.
+        """
+        if self.api_pool_max_size <= self.api_max_concurrent_requests:
+            raise ConfigurationError(
+                f"API_POOL_MAX_SIZE={self.api_pool_max_size} must exceed "
+                f"API_MAX_CONCURRENT_REQUESTS={self.api_max_concurrent_requests}. "
+                f"Saturated traffic would hold every connection and leave none "
+                f"for the readiness probe, so /ready would fail under load and "
+                f"the replica would be pulled out of rotation for being busy."
+            )
+        if self.api_pool_min_size > self.api_pool_max_size:
+            raise ConfigurationError(
+                f"API_POOL_MIN_SIZE={self.api_pool_min_size} exceeds "
+                f"API_POOL_MAX_SIZE={self.api_pool_max_size}."
             )
         return self
 

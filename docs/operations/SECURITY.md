@@ -350,19 +350,35 @@ There is deliberately **no setting to skip it**. A deployment that needs generat
 
 **CIA impact.** Confidentiality, indirectly.
 
-### 13.9 Controls required *before* `POST /v1/query`
+### 13.9 Controls that landed with `POST /v1/query`
 
-Not deferred findings — prerequisites. Each is unexploitable today because no endpoint accepts a body, and each becomes live the moment one does.
+Each was a prerequisite rather than a deferred finding: unexploitable while no endpoint accepted a body, and live the moment one did. All but the last two ship with the endpoint.
 
-| Control | Why it must land with the endpoint |
-|---|---|
-| **Request body size cap** | An unbounded body is memory pressure from an unauthenticated caller. `MAX_REQUEST_BYTES` |
-| **`question` length bound** | API.md specifies 1–2000 chars. Prompt cost and token spend scale with it |
-| **Per-client in-flight cap** | API.md specifies `429 rate_limited` and nothing emits it. One client's twenty questions must not hold every slot |
-| **A real connection pool** | `SQLExecutor` takes `ConnectionSource`; today's single-connection adapter means two concurrent calls contend. Unreachable over stdio, reachable over HTTP |
-| **Query execution off the event loop** | Every connection is sync `psycopg`. A two-second aggregate run directly in a route stalls *every* concurrent request for its duration — a self-inflicted denial of service that one slow query is enough to trigger. `/ready` already uses `asyncio.to_thread`; the query path must |
-| **SSE stream limits** | Concurrent-stream cap, keepalive, and cancellation on disconnect — an abandoned stream that pins a connection is the `idle_in_transaction_session_timeout` case from §5 arriving from outside |
-| **`explain_only` must not become an oracle** | Validating without executing still discloses whether an identifier exists |
+| Control | Status | How |
+|---|---|---|
+| **Request body size cap** | **Done** | `BodySizeLimitMiddleware`, pure ASGI so it refuses *before* the body is read. `Content-Length` is the cheap rejection and is **not trusted** — received bytes are counted too, because the request that matters is the one that understates the header or omits it under chunked encoding. `413 payload_too_large` |
+| **`question` length bound** | **Done** | `API_MAX_QUESTION_CHARS`, default 2000. Separate from the body cap: that bounds what is read, this bounds what reaches the model, and a caller can exhaust either without touching the other |
+| **Per-client in-flight cap** | **Partial** | `API_MAX_CONCURRENT_REQUESTS`, refused with `429` immediately rather than queued. **Process-wide, not per client** — with no authentication there is no client identity to key on, so one caller can consume the whole allowance. Closing it properly needs the auth that §13.1 is about |
+| **A real connection pool** | **Done** | `PoolConnectionSource` over `psycopg_pool`. Not a performance change: `statement_timeout` is set per transaction, so two concurrent requests on one connection would run one under the other's limit. Every pooled connection is proved by `assert_read_only` as the pool opens it, not just the first |
+| **Query execution off the event loop** | **Done** | `asyncio.to_thread` for execution, validation **and retrieval** — the last was found during this slice, in the shared answering path, where `candidate()` was `async` and called a blocking pgvector query inline |
+| **`explain_only` must not become an oracle** | **Partial** | The response message is fixed and names no identifier; the detail goes to the log and the audit trail under the same `request_id`. **The residual is timing** — validation resolves identifiers against an in-memory catalog and a real name still reaches `EXPLAIN`, so a determined caller may distinguish them by latency. Not closed, and not closable without authentication |
+| **SSE stream limits** | **Not yet** | Concurrent-stream cap, keepalive, cancellation on disconnect. Lands with streaming, which is the next slice |
+
+**Two of these are honestly partial, and both bottom out in the same missing thing.** A per-*client* cap and a timing-resistant oracle defence both require knowing who is calling. Until authentication exists, the loopback bind ([§13.1](#131-no-authentication-on-a-network-reachable-service--critical)) is what stands in for it, and it is a deployment control rather than a request control.
+
+### 13.10 A validation failure as a schema-enumeration oracle — **Medium**
+
+**Vulnerability.** `SQLValidationError` carries the identifier that failed and the catalog's nearest match — `no such column 'custmer_id'. Nearest match: customer_id`. The error envelope's own contract says a domain exception's message is publishable, because those messages were written for a caller. This one was written for an operator holding the schema. *(OWASP A01 broken access control / A05; CWE-209, information exposure through an error message.)*
+
+**Why it's dangerous.** It converts the endpoint into a schema browser for a caller with no credential. The suggestion is the sharp part: it does not merely confirm a guess, it *completes* it, so an attacker learns real column names from wrong ones. Schema is the map for everything else — knowing a table is `payroll` and a column is `ssn_last4` is what turns a generic prompt-injection attempt into a targeted one.
+
+**Attack scenario.** Submit questions engineered to make the model emit near-miss identifiers, and read the corrections. No authentication is needed, and every request looks like ordinary use.
+
+**Secure implementation.** The route catches `SQLValidationError` and answers a fixed `sql_validation_failed` with a message that names no identifier. The full exception goes to the log at `WARNING` and to `agent_meta.query_audit`, correlated by the `request_id` the caller was handed — so an operator loses nothing and a caller learns only *that* validation failed.
+
+**Why the fix is secure.** The published message no longer varies with the schema, which is what made it an oracle. The caller still learns the category, which is what they need to know a retry will not help.
+
+**CIA impact.** Confidentiality. Residual: the timing channel in §13.9 above, and the fact that a *successful* answer still reveals whatever the query returned — which is the endpoint's purpose.
 
 ## 14. Multi-provider LLM risks
 

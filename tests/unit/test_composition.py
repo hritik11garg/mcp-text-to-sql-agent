@@ -20,6 +20,10 @@ from core.exceptions import ConfigurationError
 class FakeConnection:
     def __init__(self) -> None:
         self.closed = False
+        self.statements: list[tuple[str, tuple[Any, ...] | None]] = []
+
+    def execute(self, sql: str, params: tuple[Any, ...] | None = None) -> None:
+        self.statements.append((sql, params))
 
     def close(self) -> None:
         self.closed = True
@@ -115,3 +119,54 @@ class TestRefusalDoesNotLeak:
             _ = resources.readonly
 
         assert resources._readonly is None
+
+
+class TestTheSchemaIsScopedWithTheAssertion:
+    """Generated SQL names bare tables; `EXPLAIN` resolves them through the
+    session's `search_path`. A catalog built from one schema and a session
+    pointed at another is the failure that returns a plausible answer from the
+    wrong tables rather than an error.
+    """
+
+    def test_the_search_path_is_set_on_the_read_only_session(
+        self, monkeypatch: pytest.MonkeyPatch, opened: list[FakeConnection]
+    ) -> None:
+        monkeypatch.setattr(resources_module, "assert_read_only", lambda _conn: None)
+        resources = make_resources()
+
+        conn = resources.readonly
+
+        assert conn.statements, "the session was never scoped"  # type: ignore[attr-defined]
+        sql, params = conn.statements[0]  # type: ignore[attr-defined]
+        assert "search_path" in sql
+        assert params == ("public",)
+
+    def test_the_schema_is_bound_not_interpolated(
+        self, monkeypatch: pytest.MonkeyPatch, opened: list[FakeConnection]
+    ) -> None:
+        """Configuration, but configuration that reaches SQL. This project does
+        not compose that category into a statement."""
+        monkeypatch.setattr(resources_module, "assert_read_only", lambda _conn: None)
+        resources = make_resources()
+
+        sql, _ = resources.readonly.statements[0]  # type: ignore[attr-defined]
+
+        assert "public" not in sql
+
+    def test_a_session_is_not_scoped_before_it_is_proved(
+        self, monkeypatch: pytest.MonkeyPatch, opened: list[FakeConnection]
+    ) -> None:
+        """Ordering, and it is the ordering that matters: a connection that
+        fails the read-only assertion must be closed without having been
+        configured to look like a working one."""
+        monkeypatch.setattr(
+            resources_module,
+            "assert_read_only",
+            lambda _conn: (_ for _ in ()).throw(ConfigurationError("nope")),
+        )
+        resources = make_resources()
+
+        with pytest.raises(ConfigurationError):
+            _ = resources.readonly
+
+        assert opened[0].statements == []

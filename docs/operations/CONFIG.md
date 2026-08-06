@@ -242,7 +242,7 @@ Read only by `python -m benchmark.load`. Nothing here is reachable from a reques
 
 ## 6. API
 
-The HTTP layer exists as of v0.1: `create_app()`, `/health`, `/ready`, the error envelope, and request correlation. `POST /v1/query` does not — see [API.md](../architecture/API.md) for which parts of that contract are served today.
+The HTTP layer exists as of v0.1: `create_app()`, `/health`, `/ready`, the error envelope, request correlation, and **`POST /v1/query` non-streaming**. SSE and sessions do not — see [API.md](../architecture/API.md) for which parts of that contract are served today.
 
 ### Implemented
 
@@ -252,12 +252,25 @@ The HTTP layer exists as of v0.1: `create_app()`, `/health`, `/ready`, the error
 | `API_PORT` | int | `8000` | |
 | `API_DOCS_ENABLED` | bool | **`false`** | Serves `/docs`, `/redoc` **and** `/openapi.json` |
 | `API_CORS_ORIGINS` | csv | `[]` | Empty = no cross-origin access. `*` is refused at startup |
+| `API_MAX_BODY_BYTES` | int | `65536` | Request body cap, enforced **before** parsing. 1 KiB–10 MiB |
+| `API_MAX_QUESTION_CHARS` | int | `2000` | Longest question. Bounds prompt cost, not memory |
+| `API_MAX_CONCURRENT_REQUESTS` | int | `4` | In-flight questions across all callers. Over it: `429`, immediately |
+| `API_POOL_MIN_SIZE` | int | `1` | Read-only pool floor |
+| `API_POOL_MAX_SIZE` | int | `8` | Read-only pool ceiling. **Must exceed `API_MAX_CONCURRENT_REQUESTS`** |
 
 **Binding beyond loopback is a startup error, not a warning.** This page has said so since Stage 0, conditioned on `API_KEY`; the honest form today is stricter, because `API_KEY` does not exist yet. There is no authentication of any kind, so no non-loopback bind address is safe, and the process refuses to start on one. All four spellings of loopback are accepted (`127.0.0.1`, `127.0.0.2`, `::1`, `localhost`) so that nobody has to work around the control to get a legitimate configuration running.
 
 To deploy: publish the port from your container runtime (`-p 8000:8000`) or put a reverse proxy in front that authenticates. Both leave the decision to expose the service with whoever is deploying it, rather than with a default.
 
 `API_DOCS_ENABLED` governs all three documentation routes together, `openapi.json` included. Clearing only `docs_url` hides the rendered page while leaving the machine-readable route map reachable, which helps nobody except somebody enumerating the service.
+
+**The pool must be larger than the request cap, and startup refuses it otherwise.** Sized equal, saturated traffic holds every connection and leaves none for the readiness probe — so `/ready` fails *because* the service is busy, the orchestrator pulls the replica out of rotation, and its traffic moves to the replicas that are also busy. Load-induced failure that removes capacity is the shape that turns a spike into an outage, and it is two numbers apart.
+
+**`DB_TARGET_SCHEMA` and `DATASET` must describe the same schema.** Generated SQL names bare tables, and `EXPLAIN` resolves them through the *session's* search path. Set them apart and the query validates against one schema and executes against another — which is the only failure in this section that returns a **plausible answer from the wrong tables** rather than an error. Left at `public` on a benchmark deployment, every question instead fails identically with "relation does not exist", for correct and hallucinated SQL alike, so the invalid-query rate becomes an artifact of wiring. The eval harness scopes this per question; a serving process has one dataset and scopes once, on every read-only session it opens.
+
+**The body cap and the question cap are not redundant.** The first bounds what is *read* and is enforced before parsing, because parsing is where an unauthenticated caller gets to decide how much this process allocates. The second bounds what reaches the model, where the cost is tokens. A caller can exhaust either without touching the other.
+
+**Over-limit requests are refused, not queued.** A queue converts an overload into latency that every caller waits out, including the ones who arrived first; a `429` is a fact the caller can act on. The default of 4 comes from the provider's requests-per-minute rather than from anything about this process.
 
 ### Planned
 

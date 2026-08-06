@@ -87,7 +87,10 @@ Convention: `[ ]` open · `[x]` done · `[~]` in progress · `[!]` blocked
 - [ ] **Inject a connection pool** — `SQLExecutor` already depends on `ConnectionSource`, which `psycopg_pool.ConnectionPool` satisfies structurally. Until this lands, two concurrent `execute_sql` calls contend on one connection: a real bug, unreachable while the only transport is stdio, **reachable the moment `/v1/query` does**
 - [ ] **Per-user admission control** — an in-flight cap per caller, not just the global pool bound. Without it one client's twenty questions hold every slot; API.md already specifies the `429` and nothing emits it
 - [ ] **Run database work off the event loop** — every connection this process holds is sync `psycopg`, so a query executed directly in a route stalls the loop for every concurrent request. `/ready` already crosses a thread boundary (`asyncio.to_thread`); a two-second analytical aggregate must too, and it needs a pool for the threads to draw from. See CODE_STYLE.md section 6
-- [ ] **Request body size cap** — unbounded body from an unauthenticated caller. Unexploitable today because no route accepts one; a blocking prerequisite for the first that does. See SECURITY.md §13.9 for the full list
+- [x] **Request body size cap** — enforced before parsing, as pure ASGI middleware. `Content-Length` is checked first and not trusted; received bytes are counted too, because the request that matters is the one that understates it
+- [x] **`question` length bound, concurrency cap, connection pool, blocking work off the event loop** — landed with `POST /v1/query`. See SECURITY.md §13.9 for what is done and what is honestly partial
+- [ ] **A *per-client* in-flight cap** — today's cap is process-wide, so one caller can consume the whole allowance. Needs an identity to key on, which needs authentication
+- [ ] **Close the `explain_only` timing channel** — the message no longer names identifiers, but a real name still reaches `EXPLAIN` and a determined caller may distinguish it by latency. Also needs authentication
 - [ ] **Authentication** — the API has none. `API_HOST` is refused on anything but loopback until it does, which is a containment measure, not a substitute
 
 ### Demo UI

@@ -35,8 +35,9 @@ from typing import Final
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import Response
+from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
-from api.errors import REQUEST_ID_HEADER
+from api.errors import PAYLOAD_TOO_LARGE, REQUEST_ID_HEADER, envelope
 
 MAX_REQUEST_ID_CHARS: Final = 128
 """Longer than any sane correlation id, short enough that a million of them in
@@ -59,6 +60,117 @@ def assign_request_id(supplied: str | None) -> str:
     return f"req_{uuid.uuid4().hex}"
 
 
+class BodySizeLimitMiddleware:
+    """Refuse an oversized body without buffering it.
+
+    Pure ASGI rather than :class:`BaseHTTPMiddleware`, because this has to act
+    on the request *stream*. ``BaseHTTPMiddleware`` hands a route the body only
+    after Starlette has read it, so a limit enforced there is checked after the
+    process has already allocated whatever the caller chose to send -- which is
+    the cost the limit exists to avoid.
+
+    **``Content-Length`` is checked first and is not trusted.** It is the cheap
+    rejection: a caller who declares 90 MB is refused before a byte of it
+    arrives. But it is a claim, and two kinds of caller do not make it
+    truthfully -- a hostile one that understates it, and an ordinary one using
+    ``Transfer-Encoding: chunked``, which has no ``Content-Length`` at all. So
+    the received bytes are counted as they arrive and the limit is enforced
+    again on the real total. Checking only the header is a limit that any
+    attacker can opt out of by omitting it.
+
+    On refusal the request body is not drained. The response goes out and the
+    connection is closed by the server; continuing to read a body already known
+    to be too large would be doing the work the limit exists to prevent.
+    """
+
+    def __init__(self, app: ASGIApp, *, max_bytes: int) -> None:
+        self._app = app
+        self._max_bytes = max_bytes
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            await self._app(scope, receive, send)
+            return
+
+        declared = _declared_length(scope)
+        if declared is not None and declared > self._max_bytes:
+            await self._refuse(scope, send)
+            return
+
+        received = 0
+        too_large = False
+
+        async def counted() -> Message:
+            nonlocal received, too_large
+            message = await receive()
+            if message["type"] == "http.request":
+                received += len(message.get("body", b""))
+                if received > self._max_bytes:
+                    too_large = True
+                    # Presented to the app as an empty final chunk. The app
+                    # then fails to parse an empty body and returns 400, which
+                    # would be a *misleading* answer -- so the flag above is
+                    # what the outer send() consults, and the app's response is
+                    # discarded. Raising here instead would surface as a 500.
+                    return {"type": "http.request", "body": b"", "more_body": False}
+            return message
+
+        async def guarded(message: Message) -> None:
+            if too_large:
+                if message["type"] == "http.response.start":
+                    await self._refuse(scope, send)
+                return
+            await send(message)
+
+        await self._app(scope, counted, guarded)
+
+    async def _refuse(self, scope: Scope, send: Send) -> None:
+        request_id = _request_id_from(scope)
+        response = envelope(
+            PAYLOAD_TOO_LARGE,
+            f"request body exceeds {self._max_bytes} bytes",
+            request_id=request_id,
+        )
+        await response(scope, _no_body, send)
+
+
+async def _no_body() -> Message:  # pragma: no cover - a refusal reads nothing
+    return {"type": "http.disconnect"}
+
+
+def _declared_length(scope: Scope) -> int | None:
+    for key, value in scope.get("headers", ()):
+        if key == b"content-length":
+            try:
+                return int(value)
+            except ValueError:
+                # An unparseable Content-Length is not this middleware's
+                # decision to make -- the server or the app will reject it.
+                # Guessing a number here would be inventing the fact the check
+                # depends on.
+                return None
+    return None
+
+
+def _request_id_from(scope: Scope) -> str:
+    """The id assigned upstream, or a fresh one.
+
+    This middleware runs *outside* :class:`RequestIdMiddleware` so that it can
+    refuse before any body is read, which means the usual assignment has not
+    happened yet on the refusal path. Generating one here keeps the guarantee
+    that every response carries an id -- an operator investigating a flood of
+    413s needs the same correlation key as for any other traffic.
+    """
+    state = scope.get("state") or {}
+    existing = state.get("request_id")
+    if isinstance(existing, str):
+        return existing
+    for key, value in scope.get("headers", ()):
+        if key == REQUEST_ID_HEADER.lower().encode():
+            return assign_request_id(value.decode("latin-1"))
+    return assign_request_id(None)
+
+
 class RequestIdMiddleware(BaseHTTPMiddleware):
     """Attach a safe request id to every request and every response.
 
@@ -77,4 +189,9 @@ class RequestIdMiddleware(BaseHTTPMiddleware):
         return response
 
 
-__all__ = ["MAX_REQUEST_ID_CHARS", "RequestIdMiddleware", "assign_request_id"]
+__all__ = [
+    "MAX_REQUEST_ID_CHARS",
+    "BodySizeLimitMiddleware",
+    "RequestIdMiddleware",
+    "assign_request_id",
+]

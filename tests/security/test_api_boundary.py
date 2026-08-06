@@ -47,12 +47,46 @@ class FakeConnection:
         self.closed = True
 
 
+class FakePool:
+    """A pool that hands out one connection and counts the borrows.
+
+    The count is what makes this more than a stub: a request that leaks a
+    connection back into nothing is invisible until the pool is exhausted under
+    load, which is the least convenient moment to discover it.
+    """
+
+    def __init__(self) -> None:
+        self.conn = FakeConnection()
+        self.borrowed = 0
+        self.returned = 0
+        self.closed = False
+
+    def connection(self) -> FakePool:
+        return self
+
+    def __enter__(self) -> FakeConnection:
+        self.borrowed += 1
+        return self.conn
+
+    def __exit__(self, *exc_info: object) -> None:
+        self.returned += 1
+
+    def close(self) -> None:
+        self.closed = True
+
+
 class FakeCatalog:
     tables = frozenset({"orders"})
+
+    def resolve(self, *_: object, **__: object) -> None:
+        return None
 
 
 class FakeRetriever:
     model_version = "test-model"
+
+    def search(self, *_: object, **__: object) -> object:
+        raise AssertionError("no test here should reach retrieval")
 
 
 class FakeResources:
@@ -67,6 +101,7 @@ class FakeResources:
         self.settings = settings
         self.owner = FakeConnection()
         self.readonly = FakeConnection()
+        self.readonly_pool = FakePool()
         self.catalog = FakeCatalog()
         self.retriever = FakeRetriever()
         self.closed = False
@@ -307,3 +342,78 @@ class TestStartupAndShutdown:
             ),
         ):
             pass  # pragma: no cover - the context manager raises on entry
+
+
+class TestTheBodyCapIsNotAdvisory:
+    """An unauthenticated caller must not choose how much this process allocates.
+
+    The cap is enforced twice on purpose. ``Content-Length`` is the cheap
+    refusal -- a caller declaring 90 MB is turned away before a byte arrives --
+    but it is a *claim*, and the request that matters is the one that lies
+    about it or omits it entirely under chunked encoding. Checking only the
+    header is a limit any attacker can opt out of.
+    """
+
+    def test_an_oversized_body_is_refused(self) -> None:
+        app = create_app(build_settings(api_max_body_bytes=2048), resource_factory=FakeResources)
+        with TestClient(app, raise_server_exceptions=False) as client:
+            response = client.post("/v1/query", json={"question": "x" * 5000})
+
+        assert response.status_code == 413
+        assert response.json()["error"]["code"] == "payload_too_large"
+
+    def test_a_lying_content_length_does_not_get_through(self) -> None:
+        """The header is understated; the real body is not. A cap that trusts
+        the declaration is a cap the caller sets."""
+        app = create_app(build_settings(api_max_body_bytes=1024), resource_factory=FakeResources)
+        oversized = b'{"question": "' + b"x" * 4000 + b'"}'
+
+        with TestClient(app, raise_server_exceptions=False) as client:
+            response = client.post(
+                "/v1/query",
+                content=oversized,
+                headers={"Content-Type": "application/json", "Content-Length": "10"},
+            )
+
+        assert response.status_code != 200
+
+    def test_a_refusal_still_carries_a_request_id(self) -> None:
+        """The cap runs outside the correlation middleware, so it has to assign
+        its own. An operator investigating a flood of 413s needs the same key
+        as for any other traffic."""
+        app = create_app(build_settings(api_max_body_bytes=1024), resource_factory=FakeResources)
+        with TestClient(app, raise_server_exceptions=False) as client:
+            response = client.post("/v1/query", json={"question": "x" * 4000})
+
+        assert response.headers.get(REQUEST_ID_HEADER)
+        assert response.json()["error"]["request_id"]
+
+    def test_an_ordinary_request_is_unaffected(self) -> None:
+        """A limit that also refuses legitimate traffic gets raised until it
+        stops being a limit."""
+        app = create_app(build_settings(), resource_factory=FakeResources)
+        with TestClient(app, raise_server_exceptions=False) as client:
+            response = client.post("/v1/query", json={"question": "how many orders?"})
+
+        assert response.status_code != 413
+
+
+class TestThePoolIsNotShared:
+    def test_each_query_borrows_and_returns_a_connection(self) -> None:
+        """Two concurrent requests on one connection would interleave their
+        transactions -- and `statement_timeout` is set per transaction, so one
+        request would run under another's limit. A leaked connection is
+        invisible until the pool is exhausted."""
+        app = create_app(build_settings(), resource_factory=FakeResources)
+        with TestClient(app, raise_server_exceptions=False) as client:
+            client.post("/v1/query", json={"question": "how many orders?"})
+            pool = client.app.state.resources.readonly_pool  # type: ignore[attr-defined]
+
+        assert pool.borrowed == pool.returned, "a connection was not returned to the pool"
+
+    def test_the_pool_is_closed_with_the_process(self) -> None:
+        app = create_app(build_settings(), resource_factory=FakeResources)
+        with TestClient(app) as client:
+            resources = client.app.state.resources  # type: ignore[attr-defined]
+
+        assert resources.closed

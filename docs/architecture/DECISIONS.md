@@ -944,3 +944,31 @@ The threshold is deliberately low enough to trip on a whole database failing as 
 **Tradeoff.** A resumed run now re-executes gold SQL for the retried questions, so a durable fault costs a little database work on each attempt. Cheap next to the alternative, which is a benchmark that can only ever be run in one sitting on hardware that cannot provide one.
 
 **Generalises to:** "we recorded it" and "we learned something from it" are different predicates, and a store that conflates them turns an outage into data.
+
+---
+
+## ADR-038 — The served request accepts only fields that do something
+
+**Status:** accepted · **Date:** 2026-08-06 · **Stage:** 1
+
+**Context.** [API.md](../architecture/API.md) specifies `POST /v1/query` with `question`, `session_id`, `stream` and three options. The slice that serves it builds none of the streaming and none of the session memory — both are Stage 4 — so the endpoint had to decide what to do with two fields it cannot honour.
+
+The tempting answer is to accept them and ignore them: the request parses, existing clients keep working, and nothing breaks today.
+
+**Decision.** The served request model contains `question` and `options.{max_rows, timeout_ms, explain_only}`, with `extra="forbid"`. Sending `stream` or `session_id` is a `400` naming the field.
+
+**Why.** This project has already paid for the other choice. Three variables in `.env.example` that nothing read cost a slice ([ADR-036](#adr-036--the-shared-answering-path-stops-at-generated-sql-and-raises) is the neighbouring decision; the finding is in the CHANGELOG under *dead settings*), and the lesson was that **a missing feature produces a gap the caller can see, and an accepted-and-ignored field produces confidence.** An HTTP field is the same object one layer out.
+
+`session_id` is the sharper of the two, and the reason this is not merely tidiness. Ignoring it means a caller's follow-up question is answered *without* the previous turn's context — and because the system will happily answer it, what comes back is **plausible** rather than obviously wrong. There is no error, no warning, and no way for the caller to tell.
+
+The response omits `answer` for the same reason. API.md's example carries prose — *"Revenue in Q4 2025 was highest in EMEA"* — which requires a synthesis step that does not exist. An empty string in that field is a claim the system cannot back.
+
+**Alternatives.**
+- *Accept and ignore.* The default, and the one this ADR exists to refuse.
+- *Accept `stream: false` and reject only `true`.* Reads better in a client that always sends the field. Rejected because it means the request model carries a field with exactly one legal value, which is a field that does nothing wearing a permission.
+- *`501 Not Implemented` for `stream: true`.* A defensible answer and a second code to publish. `extra="forbid"` already names the field in a `400`, which tells the caller the same thing with nothing added to the error table.
+- *Serve `answer` as an empty string.* Keeps the documented shape. Trades a visible gap for an invisible one.
+
+**Tradeoff.** A client written against the full API.md contract fails against the served endpoint instead of degrading. That is the intended direction: it fails immediately, at the field, with the name in the message — rather than succeeding and returning an answer built without the context it asked for.
+
+**Generalises to:** an interface should accept exactly what it honours. Where it cannot, the gap belongs in front of the caller, not behind them.

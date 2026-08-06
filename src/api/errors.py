@@ -79,6 +79,7 @@ class ErrorCode:
 INVALID_REQUEST: Final = ErrorCode(400, "invalid_request")
 SESSION_NOT_FOUND: Final = ErrorCode(404, "session_not_found")
 QUERY_TIMEOUT: Final = ErrorCode(408, "query_timeout")
+PAYLOAD_TOO_LARGE: Final = ErrorCode(413, "payload_too_large")
 SQL_VALIDATION_FAILED: Final = ErrorCode(422, "sql_validation_failed")
 AMBIGUOUS_QUESTION: Final = ErrorCode(422, "ambiguous_question")
 RATE_LIMITED: Final = ErrorCode(429, "rate_limited")
@@ -95,6 +96,7 @@ _BY_STATUS: Final = {
     404: _NOT_FOUND,
     405: _METHOD_NOT_ALLOWED,
     408: QUERY_TIMEOUT,
+    413: PAYLOAD_TOO_LARGE,
     429: RATE_LIMITED,
     503: DATABASE_UNAVAILABLE,
 }
@@ -283,6 +285,7 @@ __all__ = [
     "INVALID_REQUEST",
     "LLM_UNAVAILABLE",
     "NOT_READY",
+    "PAYLOAD_TOO_LARGE",
     "QUERY_TIMEOUT",
     "RATE_LIMITED",
     "REQUEST_ID_HEADER",

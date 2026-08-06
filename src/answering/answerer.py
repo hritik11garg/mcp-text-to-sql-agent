@@ -5,6 +5,7 @@ See the package docstring for why execution is deliberately excluded.
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 from typing import Protocol, runtime_checkable
 
@@ -94,10 +95,24 @@ class QuestionAnswerer:
         from the middle. It exists alongside the two phases below so that the
         composition is stated once and can be asserted -- a caller that
         sequences the phases itself is a caller that can sequence them wrongly.
+
+        **Retrieval runs on a worker thread.** :meth:`retrieve` is synchronous
+        ``psycopg`` -- an ANN query over pgvector -- and this method is
+        ``async``. Called inline it would block the event loop for the duration
+        of a database round trip, stalling every other request in the process,
+        including the readiness probe.
+
+        That was the shape of this method from the day it was written, and it
+        was harmless for exactly as long as its only caller was the eval
+        harness, which is synchronous and answers one question at a time.
+        ADR-036 recorded the risk of building this seam one commit before its
+        second caller; this is what that risk cost. The eval reaches
+        :meth:`retrieve` directly and is unaffected either way.
         """
+        context = await asyncio.to_thread(self.retrieve, question)
         return await self.generate(
             question,
-            self.retrieve(question),
+            context,
             feedback=feedback,
             previous_sql=previous_sql,
         )

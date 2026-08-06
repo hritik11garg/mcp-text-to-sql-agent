@@ -1,11 +1,11 @@
 # Text-to-SQL Analytics Agent (MCP-native)
 
-> **Status: Stage 1 core loop, the Stage 3 MCP layer, Stage 2's benchmark loaded and verified, and the eval pipeline running end to end.** The four servers run and are callable from any MCP host over stdio. Spider's dev split is converted to PostgreSQL, *verified* against its own gold results, indexed, and answered against. Still open: `POST /v1/query`, and finishing the full-split run — it reached **9 of 20 databases** before a daily token cap paused it, and resumes into the same directory. See [BENCHMARKS](docs/ml/BENCHMARKS.md) for what has been measured and what bounds it, [ROADMAP](docs/project/ROADMAP.md) for stage status, [TASKS](docs/project/TASKS.md) for the working checklist.
+> **Status: Stage 1 core loop, the Stage 3 MCP layer, Stage 2's benchmark loaded and verified, and the eval pipeline running end to end.** The four servers run and are callable from any MCP host over stdio. Spider's dev split is converted to PostgreSQL, *verified* against its own gold results, indexed, and answered against. Still open: SSE streaming and the demo UI, and finishing the full-split run — it reached **9 of 20 databases** before a daily token cap paused it, and resumes into the same directory. See [BENCHMARKS](docs/ml/BENCHMARKS.md) for what has been measured and what bounds it, [ROADMAP](docs/project/ROADMAP.md) for stage status, [TASKS](docs/project/TASKS.md) for the working checklist.
 >
 > | Landed | Next |
 > |---|---|
 > | **Four MCP servers over stdio, with runtime `tools/list` discovery** | **Finishing the full-split run — 9 databases of 20 reached, paused on a daily token cap** |
-> | **Spider loaded — 20 dev databases converted to Postgres, 19 verified against every gold result** | `POST /v1/query`, non-streaming and SSE |
+> | **Spider loaded — 20 dev databases converted to Postgres, 19 verified against every gold result** | Authentication, and a *per-client* in-flight cap that needs it |
 > | Postgres 16 + pgvector, Alembic migrations | The agent loop that drives the discovered tools |
 > | **`SELECT`-only role, proven by 30 negative tests — and now proven to be *the role the app connects as*** | Authentication; the API refuses to bind beyond loopback until it exists |
 > | Schema catalog — introspection, serialization, embedding | |
@@ -15,7 +15,7 @@
 > | Generation — provider-agnostic, with a model fallback chain | |
 > | Profiling — column stats under a documented disclosure budget | |
 > | Eval harness — comparison, Recall@k, resumable runs | |
-> | **HTTP API foundation — `/health`, `/ready`, sanitized error envelope** | A connection pool and a per-client in-flight cap |
+> | **`POST /v1/query` — a question over HTTP, answered from a real schema** | SSE streaming, and the demo UI it feeds |
 
 An agent that answers analytical questions in plain English against a real PostgreSQL database. Capabilities are exposed as **four MCP servers** rather than hardcoded functions, so any MCP host can point at them and query its own database — including the client this project ships.
 
@@ -56,15 +56,27 @@ The agent is an **MCP client** that discovers these tools at runtime. It decompo
 
 A fine-tuned schema-linking retriever (contrastive training on question→table/column pairs) sits inside the retrieval step, with Recall@k measured against the off-the-shelf embedding baseline.
 
-> Those two paragraphs describe the finished system. **Today**: the four servers and runtime discovery are built and tested, and the HTTP layer serves `/health`, `/ready` and a sanitized error envelope. Decomposition, session memory, self-correction, SSE, `POST /v1/query` and the fine-tune are not built. The status block at the top of this file is the authority on what exists.
+> Those two paragraphs describe the finished system. **Today**: the four servers and runtime discovery are built and tested, and the HTTP layer serves `/health`, `/ready`, a sanitized error envelope and **`POST /v1/query`** — a question in, generated SQL and rows out. Decomposition, session memory, self-correction, SSE and the fine-tune are not built. The status block at the top of this file is the authority on what exists.
 
 Why validation and execution are separate capabilities, how blast radius is bounded on the read-only role, and why the linker was fine-tuned rather than over-retrieved are all recorded in [DECISIONS.md](docs/architecture/DECISIONS.md).
 
 ## Demo
 
-> **TBD — Stage 1.** A React UI over the SSE stream, plus a GIF and screenshots, land with `POST /v1/query`. Exact commands and expected output: [DEMO_SCRIPT.md](docs/project/DEMO_SCRIPT.md).
->
-> The MCP servers run today and any MCP host can drive them ([MCP.md](docs/architecture/MCP.md) §9) — but that needs a host configured against a live database, so it is how the project is *used*, not how it is *seen*. `python -m api` starts and answers its probes, which proves the wiring and is not a demo.
+> **A curl is the demo today.** A React UI over the SSE stream, plus a GIF and screenshots, land with streaming. Exact commands and expected output: [DEMO_SCRIPT.md](docs/project/DEMO_SCRIPT.md).
+
+```console
+$ curl -s -X POST http://127.0.0.1:8000/v1/query -H 'Content-Type: application/json'     -d '{"question": "How many singers are there?"}'
+{
+  "sql": "SELECT COUNT(*) FROM singer;",
+  "columns": ["count"], "rows": [[6]], "row_count": 1,
+  "truncated": false, "executed": true,
+  "steps": [{"stage": "answer",  "duration_ms": 29081.0, "status": "ok"},
+            {"stage": "execute", "duration_ms": 27.5,    "status": "ok"}],
+  "usage": {"input_tokens": 501, "output_tokens": 43}
+}
+```
+
+Run against Spider's `concert_singer` schema, converted and loaded by this repo's own benchmark loader. Ask for `max_rows: 3` on a larger result and the limit is injected into the AST, with `truncated: true` on the way back — a client is never handed a clipped result that claims to be complete.
 
 ## Architecture
 

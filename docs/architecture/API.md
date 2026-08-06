@@ -1,6 +1,6 @@
 # HTTP API Reference
 
-> **Status: partly built.** Two endpoints are served and are authoritative here. The rest of this page is design intent — much of it describes the *Stage 4* system, and marking that plainly is the point of the table below rather than letting a reader assume every route responds.
+> **Status: partly built.** Three endpoints are served and are authoritative here. The rest of this page is design intent — much of it describes the *Stage 4* system, and marking that plainly is the point of the table below rather than letting a reader assume every route responds.
 
 | Endpoint | Status |
 |---|---|
@@ -8,10 +8,16 @@
 | `GET /ready` | **Served.** |
 | Error model | **Served** for every response, including 404s and unhandled exceptions |
 | `X-Request-Id` | **Served.** Honoured when safe to repeat, replaced when not — see below |
-| `POST /v1/query` | Not built |
+| `POST /v1/query` — **non-streaming** | **Served.** Question in, SQL and rows out |
+| `POST /v1/query` with `stream: true` | Not built — the field is **refused**, not ignored |
+| `session_id` on any request | Not built — the field is **refused**, not ignored |
+| `answer` (prose synthesis) | Not built — absent from the response rather than empty |
 | `GET /v1/schema/search` | Not built |
 | `POST`/`GET`/`DELETE /v1/sessions…` | Not built — session memory is Stage 4 |
-| `plan`, `tool_call`, `tool_result` events; `steps[]` | Not built — these come from the agent loop, Stage 4 |
+| `plan`, `tool_call`, `tool_result` events | Not built — these come from the agent loop, Stage 4 |
+| `steps[]` | **Served**, with the phases that exist: `answer`, then `execute` or `validate` |
+
+**Unimplemented fields are refused by name, not accepted and ignored.** `stream` and `session_id` produce a `400 invalid_request` naming the field. Accepting them silently would be the same defect as a config variable nothing reads — the caller sets it, gets no error, and concludes it took effect. `session_id` is the sharper case: ignoring it means a follow-up question is answered *without* the previous turn's context, and the answer comes back plausible rather than obviously wrong.
 
 **There is no authentication.** The server refuses to start on any bind address that is not loopback while that remains true. See [../operations/SECURITY.md](../operations/SECURITY.md) §13.1 and [../operations/CONFIG.md](../operations/CONFIG.md) §6.
 
@@ -27,7 +33,7 @@ Run it: `python -m api`, or `uvicorn api.app:create_app --factory --reload` whil
 
 - All timestamps are RFC 3339 UTC.
 - All errors share the envelope in [Error model](#error-model).
-- `session_id` is optional on every request; omit it to start a fresh session.
+- `session_id` is optional on every request in the design; **the served endpoint refuses it** until session memory exists (Stage 4).
 - **`X-Request-Id`** is honoured when it matches `[A-Za-z0-9._:-]{1,128}`, so a gateway's trace id survives this hop. Anything else — a newline, a control character, an over-long value — is **replaced** with a generated `req_<hex>` rather than rejected, because a 400 on a correlation header would fail requests that were otherwise fine. The value appears on every response, in the header and in the error body. See [../operations/SECURITY.md](../operations/SECURITY.md) §13.6 for why it is not trusted verbatim.
 
 ---
@@ -35,6 +41,27 @@ Run it: `python -m api`, or `uvicorn api.app:create_app --factory --reload` whil
 ## `POST /v1/query`
 
 Ask a natural-language analytical question. This is the primary endpoint.
+
+> **Served, non-streaming only.** The request the endpoint actually accepts is
+> `question` plus `options.{max_rows, timeout_ms, explain_only}`, and nothing
+> else — `stream` and `session_id` are refused by name. The response omits
+> `answer`, because prose synthesis is Stage 4 and an empty string would be a
+> claim the system cannot back. Everything below describes the finished shape.
+
+### Served request
+
+| Field | Type | Required | Notes |
+|---|---|---|---|
+| `question` | string | yes | 1–`API_MAX_QUESTION_CHARS` (2000) |
+| `options.max_rows` | int | no | May only make the result **smaller**; the server ceiling still applies |
+| `options.timeout_ms` | int | no | Same — clamped, never raised |
+| `options.explain_only` | bool | no | Generate and validate, do not execute |
+
+Any other field is a `400`. The body is capped at `API_MAX_BODY_BYTES` before parsing (`413 payload_too_large`), and the process answers `API_MAX_CONCURRENT_REQUESTS` questions at once — over that, `429 rate_limited` immediately rather than a queue.
+
+**`explain_only` returns `executed: false`** rather than an empty `rows`. A query that legitimately returns no rows and a query that never ran are different facts with identical shape, and only one of them is worth retrying.
+
+**A validation failure does not name the identifier.** `SQL_VALIDATION_FAILED` carries a fixed message; the offending name and the catalog's nearest match go to the log and the audit trail, correlated by `request_id`. The detailed form is written for an operator holding the schema, and over an unauthenticated endpoint it is a schema-enumeration oracle — submit questions, read which column names come back.
 
 ### Request
 
