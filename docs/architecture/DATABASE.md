@@ -57,7 +57,9 @@ Join paths between tables. Returned alongside retrieval results so the model doe
 Session memory: question, generated SQL, result metadata (not full result sets), timestamps.
 
 ### `query_audit`
-Append-only. Every statement that reached `execute_sql`: SQL text, role, duration, row count, truncation flag, outcome, request/trace ID. See [../operations/SECURITY.md](../operations/SECURITY.md).
+Append-only. Every statement that reached the executor: SQL text, role, duration, row count, truncation flag, outcome, request/trace ID. See [../operations/SECURITY.md](../operations/SECURITY.md).
+
+`outcome` is one of `success`, `error`, `rejected` (validation refused it) or **`explained`** — a query the caller asked about with `explain_only` and which therefore never ran. Audited like any other, because a caller probing the schema through repeated validation failures would otherwise leave no trail at all, and the difference between a control and a control you can detect being tested is exactly that trail.
 
 ## 4. Relationships
 

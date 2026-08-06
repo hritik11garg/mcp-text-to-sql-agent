@@ -111,6 +111,10 @@ One thread for the whole refresh rather than one per probe: they are sequential 
 
 **The generalisable rule:** judge a blocking call by its behaviour in the failure it was written to detect, not by its cost in the healthy case.
 
+**It has now been broken twice, and the second time is the more instructive.** `/ready` ran a sync `psycopg` call inline; that was caught by re-reading this page against the code. `QuestionAnswerer.candidate()` did the same with a pgvector query — and it was written `async` from the start, in a module built specifically for the HTTP layer, one commit before the HTTP layer existed. Nothing was wrong with it while its only caller was the sequential eval harness, so no test could have failed, and no review of the module in isolation would flag it.
+
+**A blocking call is only wrong relative to who calls it.** That makes this a rule about *composition*, not about a function, and the practical form is: when a module becomes reachable from an event loop for the first time, re-read every synchronous call in it. `git grep -n 'def .*psycopg\|\.execute(' src/answering src/api` is thirty seconds and would have found it.
+
 ## 7. Logging
 
 ```python

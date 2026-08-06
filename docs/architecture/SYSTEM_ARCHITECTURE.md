@@ -49,7 +49,7 @@ Thin. Accepts a question, opens an SSE stream, delegates to the agent, streams p
 
 Responsibilities: request validation, session correlation, SSE framing, rate limiting, health/readiness probes.
 
-**Built:** `create_app()`, `GET /health`, `GET /ready`, the error envelope, request correlation, and the startup sequence. **Not built:** `POST /v1/query`, SSE, sessions. [API.md](API.md) carries the per-route table.
+**Built:** `create_app()`, `GET /health`, `GET /ready`, **`POST /v1/query`** (non-streaming), the error envelope, request correlation, the body cap, the concurrency cap and the read-only pool. **Not built:** SSE, sessions, authentication. [API.md](API.md) carries the per-route table.
 
 This is the project's **first surface reachable by someone who does not already have the machine** — every other component runs as a local process an operator started, so "who can call this" was answered by the operating system. Three consequences shape the layer rather than sit beside it:
 
@@ -163,6 +163,42 @@ Both phases are public *and* so is the composition, for two different reasons:
 `src/composition/` builds the dependency graph once per process: both connections, the catalog, the retriever. It is the one package allowed to know about every layer at once, and nothing depends on it.
 
 It exists as its own package rather than living under `mcp_servers/` because the API and the MCP servers are **peers** — both adapters over the same components. An entrypoint reaching into a sibling entrypoint's package to open a database connection is a dependency in the wrong direction, and it would have made `mcp_servers` un-deletable.
+
+### 2.9 One connection, or a pool, and it is not a performance choice
+
+The two entrypoints need different connection disciplines, and the difference is correctness rather than throughput.
+
+| Entrypoint | Discipline | Why |
+|---|---|---|
+| MCP servers | `SingleConnectionSource` | One `tools/call` at a time in one subprocess. A pool with one client is machinery without a job |
+| HTTP API | `PoolConnectionSource` | Concurrent requests, one connection each |
+
+**Sharing a connection across concurrent requests is not slow, it is wrong.** `SQLExecutor` sets `statement_timeout` with a transaction-local `set_config` and runs inside `conn.transaction()`; the session also carries a `search_path`. Two requests interleaving on one connection means one running under the other's limits — a request that should have timed out at 5 s inheriting 60 s, silently.
+
+**Every pooled connection is proved read-only as the pool opens it**, not once at pool creation. [ADR-033](DECISIONS.md#adr-033--the-read-only-role-is-proved-at-startup-by-asking-rather-than-by-writing) is about the connection a request actually uses, and a pool serving eight on the strength of one having been checked is exactly the gap it closes. The same hook sets the `search_path`, so a connection cannot be borrowed proved-but-unscoped or scoped-but-unproved.
+
+### 2.10 The serving path, and what it may not do on the event loop
+
+`POST /v1/query` composes the answering path (§2.7) with execution:
+
+```
+  request ──▶ body cap ──▶ request id ──▶ validate body ──▶ concurrency slot
+                                                                   │
+                        ┌──────────────────────────────────────────┘
+                        ▼
+              answering.candidate()          ── worker thread (pgvector) + await (LLM)
+                        │
+                        ▼
+              SQLExecutor.execute()          ── worker thread (psycopg)
+              or .explain()                     `explain_only`
+                        │
+                        ▼
+                    response + audit row
+```
+
+**Every synchronous call is on a worker thread**, and that is the rule the project keeps having to re-learn. `/ready` broke it once; `answering.candidate()` was `async` and called a blocking pgvector query inline, harmless only while its single caller was the sequential eval harness. A blocking call in an `async` route does not slow one request — it stops the loop, so every other in-flight request and every probe waits on it. [CODE_STYLE.md](../development/CODE_STYLE.md) §6 carries the rule that catches this: judge a blocking call by its behaviour in the failure it exists for, not by its cost in the healthy case.
+
+**The concurrency slot is taken before any work and refused rather than queued.** A queue converts an overload into latency every caller pays; a `429` is a fact a client can back off from.
 
 ## 3. Data flow
 

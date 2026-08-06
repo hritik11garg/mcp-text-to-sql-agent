@@ -215,7 +215,7 @@ Properties:
 
 Everything before v0.1 ran as a local process an operator started: the MCP servers under a host, the indexer, the eval harness. "Who can call this" was answered by the operating system. The HTTP layer is the first component where it is not, and every finding below follows from that one change.
 
-Reviewed at the point the app skeleton landed (`create_app`, `/health`, `/ready`, the error envelope, request correlation). `POST /v1/query` does not exist yet; §13.9 is the list of controls that must land **before** it does.
+Reviewed twice: once when the app skeleton landed (`create_app`, `/health`, `/ready`, the error envelope, request correlation), and again when `POST /v1/query` made it a surface that *accepts* input rather than only answering probes. §13.9 tracks the controls that were prerequisites for that second step — five done, two honestly partial, one waiting on streaming. §13.10 is the finding the endpoint itself produced.
 
 ### 13.1 No authentication on a network-reachable service — **Critical**
 

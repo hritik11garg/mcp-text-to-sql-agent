@@ -13,7 +13,7 @@ The MCP-host shape is the one that makes this project runnable by other people, 
 
 **The first shape works today.** The four servers run over stdio and the host configuration is in [../architecture/MCP.md](../architecture/MCP.md) §9 — no Docker image and no HTTP endpoint required, because the host launches them as subprocesses with the environment it is given.
 
-**The second shape is not deployable yet, and the process enforces that rather than documenting it.** The HTTP layer exists — `python -m api` serves `/health` and `/ready` — but it has **no authentication**, so `APISettings` refuses any `API_HOST` that is not loopback ([ADR-034](../architecture/DECISIONS.md#adr-034--the-api-refuses-to-bind-beyond-loopback-while-it-has-no-authentication)). A container can still publish the port, which is the supported path below; what it cannot do is bind `0.0.0.0` inside the container and pretend that is the same thing.
+**The second shape is not deployable yet, and the process enforces that rather than documenting it.** The HTTP layer exists — `python -m api` serves `/health`, `/ready` and `POST /v1/query` — but it has **no authentication**, so `APISettings` refuses any `API_HOST` that is not loopback ([ADR-034](../architecture/DECISIONS.md#adr-034--the-api-refuses-to-bind-beyond-loopback-while-it-has-no-authentication)). A container can still publish the port, which is the supported path below; what it cannot do is bind `0.0.0.0` inside the container and pretend that is the same thing.
 
 There is a reason that ordering is not accidental: an HTTP-reachable `execute_sql` is a different risk class from a subprocess a host launched, and it needs authentication before it needs a Dockerfile.
 
@@ -68,6 +68,10 @@ Production-specific requirements:
 | `API_PORT` | `8000` | Whatever the runtime maps to |
 | `API_DOCS_ENABLED` | `false` (the default) | OpenAPI is a complete map of the attack surface, served unauthenticated |
 | `API_CORS_ORIGINS` | Named origins, or empty | `*` is refused at startup |
+| `API_MAX_BODY_BYTES` | `65536` (the default) | Enforced before parsing. Raise only for a measured need |
+| `API_MAX_CONCURRENT_REQUESTS` | Size against the **provider**, not the CPU | Every in-flight question holds a database connection and an outstanding LLM call. The free tier's requests-per-minute binds first |
+| `API_POOL_MAX_SIZE` | **Must exceed** `API_MAX_CONCURRENT_REQUESTS` | Startup refuses otherwise. Sized equal, saturated traffic starves `/ready` of a connection and the replica is pulled for being busy |
+| `DB_TARGET_SCHEMA` | The schema holding the target tables | **Must match `DATASET`'s schema.** Disagreeing returns a plausible answer from the wrong tables |
 | `LOG_FORMAT` | `json` | Machine-parseable |
 | `LOG_RESULT_VALUES` | `false` | Never log result data outside local debugging |
 | `OTEL_ENABLED` | `true` | |
@@ -89,6 +93,8 @@ Checklist to be verified, not just written:
 - [x] **`DATABASE_RO_URL` role cannot write** — no longer a checklist item an operator ticks. `assert_read_only` refuses to open the connection otherwise, so a deployment that gets this wrong does not start. The negative tests in [../development/TESTING.md](../development/TESTING.md) prove the *migration* produces a correct role; this proves the *deployment* connects as one, and the difference is the whole of [SECURITY.md](SECURITY.md) §13.2
 - [ ] `agent_meta` not readable by the read-only role
 - [ ] **Authentication in front of the service** — there is none in the application. Until `API_KEY` exists this means a proxy, a gateway, or a network boundary that does the work
+- [ ] **A per-client rate limit at that same proxy** — the application's in-flight cap is process-wide, so one caller can consume the whole allowance. The per-client half needs an identity to key on, which is the same thing the row above is missing
+- [ ] **`replicas × API_POOL_MAX_SIZE` sized against the database**, not the application. Scaling replicas without accounting for it scales load onto one PostgreSQL
 - [ ] Rate limits active (request, token, and concurrent-stream)
 - [ ] Statement timeout set on the role *and* per transaction
 - [ ] Connection pool sized against database capacity, not application concurrency
@@ -126,9 +132,11 @@ Both are **built**. Contract in [../architecture/API.md](../architecture/API.md)
 | Endpoint | Checks today | Orchestrator action on failure |
 |---|---|---|
 | `/health` | Process alive. **No dependencies** — asserted by a test that fails if it issues a query | Restart |
-| `/ready` | `database`, `database_readonly` — a `SELECT 1` on each held connection | Remove from load balancer |
+| `/ready` | `database`, `database_readonly` — a `SELECT 1` on each held connection, run on a worker thread | Remove from load balancer |
 
 Keeping them distinct matters: a database outage should stop traffic, not trigger a restart loop that makes recovery slower. That is not a stylistic preference — a `/health` that touched the database would fail every replica's liveness probe at the same moment, and the orchestrator would answer a self-resolving incident by restarting the fleet, adding a cold start, a connection storm and a catalog reload per replica.
+
+**`/ready` does not borrow from the request pool**, and that is why `API_POOL_MAX_SIZE` must exceed `API_MAX_CONCURRENT_REQUESTS`. It probes the two connections held since startup. If it ever moves to the pool, a saturated service would fail its own readiness probe — the orchestrator would remove the replica for being busy and move its traffic to replicas that are also busy, which is the shape that turns a spike into an outage.
 
 Three properties an orchestrator config should know about:
 

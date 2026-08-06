@@ -56,6 +56,7 @@ query.request                                    (root)
 |---|---|
 | `DEBUG` | Full prompts, retrieved elements, raw tool payloads. **Local only** |
 | `INFO` | Request lifecycle, tool calls, generated SQL, outcomes |
+| `WARNING` | A validation failure's *detail* — the offending identifier and the catalog's nearest match, which the response deliberately withholds ([SECURITY.md](SECURITY.md) §13.10). Correlated to the caller by `request_id`, so the operator loses nothing the response no longer says |
 | `WARNING` | Retry attempts, truncated results, timeouts, degraded MCP servers |
 | `ERROR` | Unhandled failures, dependency outages, budget exhaustion |
 

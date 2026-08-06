@@ -74,10 +74,14 @@ Everything in v1 is bounded for a **single caller**. That is a deliberate conseq
 
 **The deployment shape is already decided, and it is not per-machine.** A desktop install needs `DATABASE_RO_URL` and `LLM_API_KEY` on every workstation, which distributes the credentials the entire containment argument in [../operations/SECURITY.md](../operations/SECURITY.md) rests on, with no revocation story and an audit table written by clients nobody controls. The intended shape is one centrally deployed service holding the credentials, reached over HTTP/SSE — which is why [../architecture/MCP.md](../architecture/MCP.md) §2 puts Streamable HTTP with the API layer, "which is where a network-reachable endpoint first needs authentication anyway." **That ordering held only partly:** the API layer landed first and still has no authentication, so what enforces the boundary today is that the service refuses to bind beyond loopback ([ADR-034](../architecture/DECISIONS.md#adr-034--the-api-refuses-to-bind-beyond-loopback-while-it-has-no-authentication)) rather than the transport not existing. The stdio transport keeps one legitimate audience: a developer pointing the tools at their own database from their own MCP host. Both configurations run the same code because the tool boundary is a protocol ([ADR-003](../architecture/DECISIONS.md#adr-003--mcp-for-the-tool-boundary)).
 
-### A real connection pool
-`blocked` · Hand each concurrent query its own connection.
+### ~~A real connection pool~~ — **built**
+`done` · Landed with `POST /v1/query`, because that is the commit that created the concurrent caller.
 
-**Why not v1.** No concurrent caller exists — the API layer is Stage 1 and the MCP servers are stdio, one subprocess per client. The seam is cut and waiting: `SQLExecutor` depends on `ConnectionSource`, whose only method is `connection() -> AbstractContextManager[Connection]`, which is exactly `psycopg_pool.ConnectionPool.connection()`'s signature. Introducing a pool is a wiring change rather than a rewrite, and until then "a pool with one client is machinery without a job." **Until it lands, two concurrent `execute_sql` calls would contend on a single connection** — a real bug, currently unreachable.
+The prediction held: it was a wiring change, not a rewrite. `PoolConnectionSource` wraps `psycopg_pool.ConnectionPool`, whose `connection()` already matched the `ConnectionSource` protocol, and `SQLExecutor` was untouched.
+
+**Two things the seam did not predict, both found by running it.** `psycopg_pool` discards any connection whose `configure` callback leaves it in a transaction, and `assert_read_only` runs three `SELECT`s — so the pool retried until timeout and never opened. And every borrowed connection needs `autocommit`, or the executor's transaction block leaves an idle transaction against the read-only role's `idle_in_transaction_session_timeout`. Neither is visible from the protocol; both are properties of the implementation behind it. **A seam predicts the shape of the change, not its failures.**
+
+The pool also carries the read-only assertion per connection rather than once ([ADR-033](../architecture/DECISIONS.md#adr-033--the-read-only-role-is-proved-at-startup-by-asking-rather-than-by-writing)), which is what stops a pool serving eight connections on the strength of one having been checked.
 
 ### Two-tier execution: interactive and batch
 `scope` · Route a query to a background job when its planned cost says it cannot finish interactively.
@@ -91,7 +95,9 @@ There is a third answer worth building before either: the plan is already parsed
 ### Per-user admission control
 `scope` · Cap in-flight queries and request rate per user, not just globally.
 
-**Why not v1.** No users to distinguish. It is nonetheless **the highest-value concurrency control**, above any amount of pool tuning: total simultaneous queries is `replicas × DB_POOL_MAX_SIZE`, and with no per-user cap one client firing twenty questions holds every slot. A per-user in-flight limit converts "one user degrades everyone" into "one user degrades themselves." [../architecture/API.md](../architecture/API.md) already specifies the `429 rate_limited` response and [../operations/DEPLOYMENT.md](../operations/DEPLOYMENT.md) has the unchecked box; neither is built.
+**Why not v1, and what changed.** A *global* in-flight cap now exists — `API_MAX_CONCURRENT_REQUESTS`, refused with `429` immediately rather than queued — so the `rate_limited` response [../architecture/API.md](../architecture/API.md) specifies is real. **The per-user half is still missing, and it is the half that matters**: total simultaneous queries is `replicas × API_POOL_MAX_SIZE`, and a global cap does nothing about *which* caller holds the slots. One client firing twenty questions still consumes the whole allowance; the difference is only that questions 5–20 are refused rather than queued.
+
+The blocker is not the counter, it is the key. There is no authentication, so there is no client identity to count against — an IP address is neither stable nor trustworthy behind a proxy. This is the same missing thing that leaves the `explain_only` timing channel open in [../operations/SECURITY.md](../operations/SECURITY.md) §13.9, and it is worth noticing that two unrelated-looking controls bottom out in one gap. **Per-user admission control is an authentication feature wearing a performance feature's name.**
 
 ### Provider-side rate budgeting
 `unproven` · Treat the model provider's tokens-per-minute as the scarce resource and schedule against it.
@@ -191,7 +197,7 @@ If the project continued, roughly in order of value per unit of effort:
 
 If instead the goal is to put this in front of more than one person, the order is different and mostly cheaper:
 
-1. **A real connection pool** — the seam exists; without it, concurrency is a correctness bug rather than a performance one.
+1. ~~**A real connection pool**~~ — **built** with `POST /v1/query`. The seam held; the two failures it did not predict were properties of the pool implementation, not of the interface.
 2. **Per-user admission control** — largest effect per line of code, and it is what makes the service *operable* under load rather than merely fast.
 3. **Tenant-aware retrieval** — decide before the catalog schema hardens further, because retrofitting an authorization filter is much more expensive than designing one.
 4. **Two-tier execution** — the routing signal is already computed; this is mostly a worker and a job table.

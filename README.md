@@ -143,8 +143,8 @@ That creates the `agent_meta` schema, the pgvector extension and the HNSW index,
 Verify the install — the security suite is the one that matters, and it passes by being **refused**:
 
 ```powershell
-pytest                    # ~1,265 tests; integration, security and contract need Docker
-pytest -m security        # the containment suite, on its own — 249 tests
+pytest                    # ~1,310 tests; integration, security and contract need Docker
+pytest -m security        # the containment suite, on its own — 255 tests
 ruff check . ; mypy
 ```
 
@@ -234,8 +234,9 @@ Directories marked *(stub)* exist with a docstring stating which stage fills the
 │   ├── agent/                  # tools/list discovery; planner and memory — Stage 4
 │   ├── composition/            # the dependency graph, built once per process
 │                               # shared by the MCP servers and the API, which are peers
-│   └── api/                    # FastAPI — /health, /ready, the error envelope
-│                               # POST /v1/query and SSE are the next slice
+│                               # one connection for stdio, a pool for HTTP
+│   └── api/                    # FastAPI — /health, /ready, POST /v1/query,
+│                               # the error envelope, the body cap. SSE is next
 ├── web/                        # (planned) React + TypeScript demo UI — Stage 1
 ├── .github/
 │   └── pull_request_template.md

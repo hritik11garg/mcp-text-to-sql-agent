@@ -121,6 +121,26 @@ WHERE grantee = 'sql_agent_ro';
 ```
 The negative tests in [../development/TESTING.md](../development/TESTING.md) prove the *migration* produces a correct role. They build that role in a testcontainer and never look at the one your `.env` names — which is exactly why the startup assertion had to exist as well.
 
+### `pool initialization incomplete after 30.0 sec` at startup
+
+The read-only pool never opened. Check the log for the real cause, which `psycopg_pool` reports as a warning per attempt rather than raising:
+
+- **`connection left in status INTRANS by configure function`** — something in the pool's configure hook ran a query and left a transaction open. `psycopg_pool` discards such a connection and retries forever. The pool is opened with `autocommit=True` for exactly this reason (`assert_read_only` runs three `SELECT`s), so seeing this again means a new statement was added to that path without it.
+- **`connection refused` / authentication** — ordinary connectivity, same causes as the entries above.
+- **`DATABASE_RO_URL can write`** — the read-only assertion failed on a pooled connection. Same finding as the startup entry below; the pool runs it per connection, so a role that was fine for the single connection and fails here means something is handing out different roles.
+
+### Every question fails with `table_not_found`, and the SQL looks correct
+
+`DB_TARGET_SCHEMA` does not name the schema holding the tables. Generated SQL names bare tables, and `EXPLAIN` resolves them through the *session's* `search_path` — so a catalog built from `spider_concert_singer` and a session pointed at `public` rejects every query, identically for correct and hallucinated SQL. The invalid-query rate becomes an artifact of wiring.
+
+Set `DB_TARGET_SCHEMA` to the same schema `DATASET`'s catalog was built from. To check what is actually indexed:
+
+```sql
+SELECT DISTINCT dataset FROM agent_meta.schema_elements;
+```
+
+**The opposite mistake is worse and silent.** If the two name *different existing* schemas that share table names — which Spider's databases do — the query validates against one and reads the other, and the answer comes back plausible.
+
 ---
 
 ## pgvector
@@ -345,6 +365,31 @@ If all four are ruled out and it is still worse, record it in [../ml/BENCHMARKS.
 ---
 
 ## HTTP API
+
+### `413 payload_too_large`
+
+The request body exceeded `API_MAX_BODY_BYTES` (64 KiB). A question is capped at 2000 characters, so a legitimate request is nowhere near it; a body this size is usually a client sending a file, a whole conversation, or a retry loop concatenating.
+
+### `429 rate_limited` from the API rather than the provider
+
+Two different causes with the same code, told apart by the message:
+
+- **`too many questions in flight; the limit is N`** — `API_MAX_CONCURRENT_REQUESTS` is saturated. The cap is process-wide, not per client, so one caller can consume it entirely. Requests are refused rather than queued deliberately: a queue makes every caller wait, a refusal is something a client can back off from.
+- **`model '...' is rate limited or out of quota`** — the provider, not this service. See the LLM section above.
+
+### `400 invalid_request` naming `stream` or `session_id`
+
+Working as intended. Those fields are in [API.md](../architecture/API.md)'s design and are **not built**, so they are refused by name rather than parsed and ignored ([ADR-038](../architecture/DECISIONS.md#adr-038--the-served-request-accepts-only-fields-that-do-something)). Drop the field; SSE and session memory are later stages.
+
+### `422 sql_validation_failed` with no detail
+
+Also intended. The full message names the offending identifier and the catalog's nearest match, which over an unauthenticated endpoint completes an attacker's guesses rather than merely confirming them ([SECURITY.md](SECURITY.md) §13.10). The detail is in the log at `WARNING` and in `agent_meta.query_audit`, both keyed by the `request_id` in the response:
+
+```sql
+SELECT question, generated_sql, error_type FROM agent_meta.query_audit
+WHERE request_id = 'req_...';
+```
+
 
 ### `API_HOST='0.0.0.0' would serve this API beyond this machine`
 

@@ -2,6 +2,8 @@
 
 > **Status: implemented.** All four servers ship, and the schemas below are the ones they publish — asserted against a committed snapshot in `tests/contract/tool_schemas.json`, so this page and the code cannot drift. The client half (`tools/list` discovery) ships too. Still open: Streamable HTTP transport, and re-running the eval to confirm accuracy is unchanged, which waits on the Stage 2 harness.
 >
+> **The servers deliberately keep a single connection while the HTTP API uses a pool.** One `tools/call` at a time in one subprocess is not a concurrency problem, and a pool with one client is machinery without a job. The discipline is chosen at the composition root, not inside the components — `SQLExecutor` takes a `ConnectionSource` and never learns which it got.
+>
 > **One change reached these servers from outside.** `Resources` moved to `src/composition/` so the HTTP API could share it without importing from this package ([ADR-035](DECISIONS.md#adr-035--the-composition-root-is-its-own-package-because-entrypoints-are-peers)), and it gained a startup assertion that the read-only role genuinely cannot write ([ADR-033](DECISIONS.md#adr-033--the-read-only-role-is-proved-at-startup-by-asking-rather-than-by-writing)). All four servers inherited that check without being modified — including `execute_sql`, which is the one that runs generated SQL and therefore needed it most.
 
 This is the document that decides whether this project reads as "MCP-native" or as "three functions in a protocol wrapper." The substance is in the contracts, not the transport.

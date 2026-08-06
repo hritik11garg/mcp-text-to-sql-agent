@@ -204,6 +204,12 @@ The property that adding databases to a corpus does not move the ones already as
 **Composition root**
 The one place in a codebase that constructs the object graph — connections, adapters, components — so every other module receives what it needs rather than building it. `src/composition/` here. It is allowed to know about every layer at once precisely because nothing depends on it.
 
+**Oracle (in an error message)**
+An error whose *content varies with a secret*, letting a caller learn the secret by reading responses. A validation failure naming the nearest matching column is one: it does not merely confirm a guess, it completes it. The defence is a message that is identical for every cause, with the detail kept where only an operator can read it — which is why the API's generic failure string is fixed rather than descriptive.
+
+**Backpressure vs queueing**
+Two answers to more work than capacity. Queueing accepts it and makes everyone wait, converting an overload into latency that the earliest caller pays too. Backpressure refuses it immediately — `429` — which is a fact the client can act on. This project refuses, because a caller that has not received a response cannot back off from it.
+
 **Liveness vs readiness**
 Two questions an orchestrator asks for two different reasons. Liveness (`/health`) means *is this process alive* — failing it triggers a **restart**. Readiness (`/ready`) means *can it serve* — failing it **removes the replica from the load balancer** and leaves it running. Conflating them is how a thirty-second database blip becomes a fleet restart.
 

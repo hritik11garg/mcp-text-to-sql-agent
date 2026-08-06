@@ -11,17 +11,36 @@
 | Schema retrieval | **< 100 ms** p95 | `retrieval_duration_seconds` | ANN over a few thousand vectors; more than this means an index problem |
 | SQL validation | **< 50 ms** p95 | `mcp.call validate_sql` | Parse + `EXPLAIN`, no execution. Called repeatedly, so it must stay cheap |
 | Table profiling | **< 1 s** p95 | `mcp.call profile_table` | One bounded scan per column, so cost is `PROFILE_MAX_COLUMNS` × `PROFILE_SCAN_LIMIT`. Its own `PROFILE_TIMEOUT_MS` (10 s) is deliberately shorter than the executor's — profiling is a side quest during answering and should give up long before the real query would |
-| Query execution | **< 2 s** p95 | `db_query_duration_seconds` | Analytical aggregates on benchmark-sized data |
+| Query execution | **< 2 s** p95 | `db_query_duration_seconds` | Analytical aggregates on benchmark-sized data. **First measurements: 3–4 ms** on Spider-sized schemas, from `agent_meta.query_audit` — three orders under budget, and that is a statement about the data rather than the code |
 | MCP call overhead | **< 20 ms** p95 | `mcp.call` minus tool duration | Framing plus a local pipe. Anything larger means the cost is in serialization, not the protocol |
 | MCP server startup | **< 3 s** | Process launch → `tools/list` returned | Four subprocesses, each opening two connections and loading the catalog. Paid once per session, and it is why the catalog is a snapshot rather than re-read per call |
 | API startup | **< 5 s** | Process launch → `/ready` returns 200 | Two connections, the read-only assertion (three round trips), the catalog, and the embedder. All eager, deliberately: a lazy startup moves these costs onto the first request and moves configuration errors past the deploy |
 | `/health` | **< 5 ms** p95 | — | Serializes a fixed dict. It touches nothing, so anything larger is framework overhead worth looking at |
 | `/ready` | **< 20 ms** p95 uncached | — | Two `SELECT 1`s on held connections, then cached 5 s. The cache is the control that stops an unauthenticated endpoint being a load generator, not an optimization |
 | SSE first token | **< 500 ms** | Time to first event | Perceived responsiveness |
-| End-to-end (single query) | **< 8 s** p95 | `request_duration_seconds` | Dominated by LLM generation |
+| End-to-end (single query) | **< 8 s** p95 | `request_duration_seconds` | Dominated by LLM generation. **First measurement: 29 s** — see below. The budget was written before anything served a request and it is not close |
 | End-to-end (multi-step) | **< 25 s** p95 | — | N sub-queries plus synthesis |
 
 **These are budgets, not predictions.** The interesting outcome is where they are missed — a missed budget points at the component to fix.
+
+### The first end-to-end measurement missed its budget by 3.6x, and the split says why
+
+One served request against Spider's `concert_singer`, `k=30`, `openai/gpt-oss-120b` on a free tier:
+
+| Phase | Measured | Share |
+|---|---|---|
+| `answer` — retrieval + generation | **29,081 ms** | 99.9% |
+| `execute` — validation + query | **28 ms** | 0.1% |
+
+**Everything this project controls is already fast, and the budget is spent somewhere it does not own.** Retrieval is bounded by an ANN index over ~26 vectors; execution is 3–4 ms against a benchmark-sized table. The 29 seconds is one round trip to a free-tier provider under load, and no amount of work on this side of the boundary moves it.
+
+Three things follow, and the third is the one that matters for what to build next:
+
+- **The budget is not wrong, it is unattributed.** An `< 8 s` end-to-end target with no per-phase split cannot distinguish a slow retriever from a slow provider, which are opposite problems. The `steps[]` array in every response carries the split, which is why it ships before any tracing does.
+- **A paid tier or a local Ollama would likely meet it**, and neither is a requirement of this project ([PROJECT.md](../../PROJECT.md)). So the honest form of this row is *"< 8 s p95 on a provider that is not rate-limited"*, and it stays unmet until there is one to measure against.
+- **This is the argument for streaming, restated as a number.** 29 seconds of silence is a broken-looking request; 29 seconds with a `sql` event at 2 s and rows at 29 s is a working one. SSE is not a nicety here — it is the difference between the measured latency being visible and being indistinguishable from a hang.
+
+**What is not yet measured:** p95 of anything. These are single observations, which is the correct amount of measurement for a component that started serving today and the wrong amount to put in a benchmark row. `/health`, `/ready`, MCP overhead and retrieval latency all remain unmeasured against their budgets.
 
 **First-token latency is the target most likely to be missed**, and the most user-visible. The first SSE event should be the `session` event, emitted before any model call — so a slow LLM cold start does not read as a hung request.
 

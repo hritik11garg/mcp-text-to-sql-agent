@@ -1,6 +1,6 @@
 # Demo Script
 
-> **Status: TBD — filled in per stage, starting Stage 1.** Structure and discipline below are decided now.
+> **Status: Segment 1 is real and recorded. The rest are TBD per stage.** Structure and discipline below were decided at Stage 0; the first segment now has output that was actually produced rather than imagined.
 
 Exact commands, exact questions, expected output. Written so the demo can be run under pressure without improvising — an interview is not the place to discover that the database needs re-seeding.
 
@@ -25,19 +25,54 @@ Run 10 minutes before, not 30 seconds before.
 
 ---
 
-## Segment 1 — Single-query text-to-SQL (Stage 1)
-
-> **TBD — Stage 1.**
+## Segment 1 — Single-query text-to-SQL (Stage 1) — **runnable**
 
 **Point being made:** English in, correct SQL out, against a real database under real constraints.
 
-| Step | Command / question | Expected |
-|---|---|---|
-| 1 | *(a simple aggregate over the loaded schema)* | Correct answer; SSE events visible |
-| 2 | Show the generated SQL | Readable, correct join |
-| 3 | Note latency breakdown | Generation dominates |
+**Setup.** Spider's `concert_singer` converted into PostgreSQL by this repo's own loader, indexed, and served:
 
-**Recorded output:** TBD
+```powershell
+$env:DB_TARGET_SCHEMA = "spider_concert_singer"
+$env:DATASET          = "spider_concert_singer"
+$env:RETRIEVAL_TOP_K  = "30"
+python -m api
+```
+
+`DB_TARGET_SCHEMA` and `DATASET` must name the same schema — the catalog and the session's `search_path` describe *one* database, and disagreeing is the one failure here that returns a plausible answer from the wrong tables.
+
+| Step | Command | Expected |
+|---|---|---|
+| 1 | `curl localhost:8000/ready` | `{"status":"ready","dependencies":{"database":"up","database_readonly":"up"}}` |
+| 2 | Ask the question below | Correct answer, with the SQL |
+| 3 | Point at `steps[]` | Generation is 99.9% of the time |
+
+**Recorded output** — run 2026-08-06, commit `ec4b23f`:
+
+```console
+$ curl -s -X POST localhost:8000/v1/query -H 'Content-Type: application/json'     -d '{"question": "How many singers are there?"}'
+{"sql": "SELECT COUNT(*) FROM singer;",
+ "columns": ["count"], "rows": [[6]], "row_count": 1,
+ "truncated": false, "executed": true,
+ "steps": [{"stage": "answer",  "duration_ms": 29081.0, "status": "ok"},
+           {"stage": "execute", "duration_ms": 27.5,    "status": "ok"}],
+ "usage": {"input_tokens": 501, "output_tokens": 43}}
+```
+
+**Say the latency out loud rather than hoping nobody notices.** 29 seconds is a free-tier provider under load, and `steps[]` is what proves it: everything this project owns took 28 ms. That is a better answer than a fast demo on a paid key, because it shows the instrumentation working. See [../operations/PERFORMANCE.md](../operations/PERFORMANCE.md).
+
+**Second question, showing the row limit is real:**
+
+```console
+$ curl -s -X POST localhost:8000/v1/query -H 'Content-Type: application/json'     -d '{"question": "Names and capacities of stadiums, highest capacity first?",
+         "options": {"max_rows": 3}}'
+{"sql": "SELECT name, capacity FROM stadium ORDER BY capacity DESC;",
+ "rows": [["Hampden Park", 52500], ["Somerset Park", 11998], ["Stark's Park", 10104]],
+ "truncated": true, ...}
+```
+
+The generated SQL has **no `LIMIT`** and three rows came back with `truncated: true`. The limit was injected into the AST, not asked for in the prompt — an instruction to a model is not an enforcement mechanism ([ADR-005](../architecture/DECISIONS.md#adr-005--limits-enforced-at-the-ast-level-not-by-prompting)). Worth 20 seconds of narration; it is the difference between a bound and a request.
+
+**If the provider is out of quota**, the answer is `429 rate_limited` with the model named. That is a legitimate thing to show — it is the failure mode a free tier actually produces, and the envelope handles it — but have the recorded output above on a second screen.
 
 ## Segment 2 — The validation tier (Stage 1)
 
