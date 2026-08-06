@@ -64,6 +64,32 @@ questions.
 
 logger = logging.getLogger(__name__)
 
+MAX_LOGGED_MESSAGE_CHARS = 200
+
+
+def _one_line(message: str) -> str:
+    """Collapse a provider's error text into a single bounded log field.
+
+    ``error_message`` carries `str(exc)` from the LLM provider or the database
+    -- text this project does not author. Written to a log verbatim it can
+    contain newlines, and a newline in a log record is a *record separator*:
+    the remainder is read as a second entry, at whatever level and from
+    whatever logger it claims (CWE-117). Forged entries in the log of an
+    outage are read during exactly the incident they would mislead.
+
+    The length bound is separate and is about the same failure the artifact's
+    row cap addresses -- a provider that returns its whole response body in an
+    exception should not put it in the operator's terminal.
+
+    Applies only to the halting message. The per-question progress line logs
+    `failure_category`, which is an enum value and cannot carry text.
+    """
+    flattened = " ".join(message.split())
+    if len(flattened) <= MAX_LOGGED_MESSAGE_CHARS:
+        return flattened
+    return flattened[:MAX_LOGGED_MESSAGE_CHARS] + "..."
+
+
 Rows = list[list[Any]]
 
 _UNSCORED = frozenset({FailureCategory.GOLD_ERROR, FailureCategory.INFRASTRUCTURE})
@@ -236,7 +262,7 @@ class EvalRunner:
                     "re-attempted -- resume this run id once the cause is cleared",
                     consecutive,
                     artifact.error_type,
-                    artifact.error_message,
+                    _one_line(artifact.error_message),
                     len(pending) - position - 1,
                     consecutive,
                 )

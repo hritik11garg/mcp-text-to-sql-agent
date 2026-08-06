@@ -10,6 +10,7 @@ a live provider to check a taxonomy branch would never be run.
 from __future__ import annotations
 
 import json
+import logging
 from pathlib import Path
 from typing import Any, ClassVar
 
@@ -28,7 +29,7 @@ from evals.artifacts import (
 from evals.comparison import Comparison, Verdict
 from evals.dataset import Question, Split, load_questions, write_questions
 from evals.recall import RecallResult, aggregate, compute_recall, extract_gold_elements
-from evals.runner import Attempt, EvalRunner
+from evals.runner import MAX_LOGGED_MESSAGE_CHARS, Attempt, EvalRunner, _one_line
 from evals.taxonomy import FailureCategory, classify, counts, is_infrastructure
 
 pytestmark = pytest.mark.unit
@@ -411,6 +412,24 @@ class TestAFailedBudgetIsNotAnAnsweredQuestion:
             )
             assert is_infrastructure(error_type) is excluded, error_type
 
+    @pytest.mark.parametrize("bad", [["llm_failed"], {"type": "llm_failed"}, 7])
+    def test_a_corrupt_error_type_costs_one_question_not_the_resume(
+        self, tmp_path: Path, bad: object
+    ) -> None:
+        """The membership test is a `frozenset` lookup, which raises
+        `TypeError` on an unhashable value. Letting that escape would abort
+        the one operation whose whole purpose is surviving a bad situation --
+        and this function already decided the opposite for unreadable files."""
+        store = RunStore(tmp_path, manifest())
+        store.start()
+        store.record(QuestionArtifact(question_id="q1", question="?", gold_sql="SELECT 1"))
+        artifact = next((store.root / "questions").glob("*.json"))
+        record = json.loads(artifact.read_text(encoding="utf-8"))
+        record["error_type"] = bad
+        artifact.write_text(json.dumps(record), encoding="utf-8")
+
+        assert RunStore(tmp_path, manifest()).resume() == frozenset()
+
     def test_a_retry_overwrites_the_record_rather_than_adding_one(self, tmp_path: Path) -> None:
         """Resume depends on a deterministic filename, so a re-attempt has to
         land on the file it replaces. Two files for one question would count it
@@ -568,6 +587,35 @@ class TestHaltingOnAWall:
 
         assert summary.infrastructure_errors == 1
         assert summary.execution_accuracy is None, "nothing scored is not zero accuracy"
+
+    def test_a_provider_message_cannot_forge_a_log_record(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """CWE-117. `error_message` is `str(exc)` from the provider or the
+        database -- text this project does not author. A newline in a log
+        record is a record separator, and forged entries in the log of an
+        outage are read during the incident they would mislead."""
+        forged = "rate limited\nINFO evals.runner: run completed successfully"
+        runner = EvalRunner(
+            RunStore(tmp_path, manifest()),
+            lambda q: Attempt(error_type="llm_failed", error_message=forged),
+            _rows({"SELECT id FROM customers": [[1]]}),
+            halt_after=1,
+        )
+        with caplog.at_level(logging.ERROR, logger="evals.runner"):
+            runner.run([question("q0")])
+
+        halting = [r for r in caplog.records if "halting" in r.getMessage()]
+        assert halting, "the halt must be logged"
+        assert "\n" not in halting[0].getMessage()
+
+    def test_an_enormous_provider_message_is_bounded(self, tmp_path: Path) -> None:
+        """A provider returning its whole response body in an exception should
+        not put it in the operator's terminal."""
+        assert len(_one_line("x" * 5000)) <= MAX_LOGGED_MESSAGE_CHARS + 3
+
+    def test_ordinary_messages_are_left_readable(self) -> None:
+        assert _one_line("out of budget") == "out of budget"
 
     @pytest.mark.parametrize("halt_after", [0, -1])
     def test_a_meaningless_threshold_is_refused(self, tmp_path: Path, halt_after: int) -> None:

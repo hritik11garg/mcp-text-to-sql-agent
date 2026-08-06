@@ -307,7 +307,16 @@ class RunStore:
             try:
                 record = json.loads(path.read_text(encoding="utf-8"))
                 question_id = str(record["question_id"])
-            except (OSError, ValueError, KeyError):
+                error_type = record.get("error_type")
+                # Coerced before the membership test below, which is a
+                # `frozenset` lookup and raises `TypeError` on an unhashable
+                # value. A truncated or hand-edited artifact holding a list
+                # would otherwise abort the whole resume -- the one operation
+                # that exists to survive a bad situation, failing on a bad
+                # situation.
+                if not isinstance(error_type, str | None):
+                    raise TypeError(f"error_type is {type(error_type).__name__}")
+            except (OSError, ValueError, KeyError, TypeError):
                 # A file written mid-crash. Re-answering that question is the
                 # cheap, correct response; refusing the whole resume is not.
                 logger.warning("ignoring unreadable artifact %s", path.name)
@@ -317,7 +326,7 @@ class RunStore:
             # `failure_category`, because the category is derived and an
             # artifact may have been written by an older taxonomy. The error
             # type is what the component actually reported.
-            if is_infrastructure(record.get("error_type")):
+            if is_infrastructure(error_type):
                 retrying += 1
                 continue
 
