@@ -972,3 +972,60 @@ The response omits `answer` for the same reason. API.md's example carries prose 
 **Tradeoff.** A client written against the full API.md contract fails against the served endpoint instead of degrading. That is the intended direction: it fails immediately, at the field, with the name in the message — rather than succeeding and returning an answer built without the context it asked for.
 
 **Generalises to:** an interface should accept exactly what it honours. Where it cannot, the gap belongs in front of the caller, not behind them.
+
+---
+
+## ADR-039 — A stream is admitted before it is a stream
+
+**Status:** accepted · **Date:** 2026-08-07 · **Stage:** 1
+
+**Context.** `POST /v1/query` gained `stream: true`. The endpoint already had an in-flight cap that refuses over-limit requests with `429` ([ADR-038](#adr-038--the-served-request-accepts-only-fields-that-do-something) is the neighbouring decision on the request shape).
+
+A streaming response makes that cap harder in a way that is easy to miss: **once the response has begun, `429` is no longer expressible.** The status line and headers are gone. The only remaining way to refuse is an `error` event on a response that has already claimed `200 OK`, which tells a client the request succeeded and then that it did not.
+
+The natural implementation walks straight into it. An `async def` generator does not execute its own body until the first `__anext__`, which happens *after* the route has returned and the response has started. Anything the generator does about admission, it does too late.
+
+`asyncio.Semaphore` cannot help, because its `acquire` is a coroutine: taking a slot means awaiting, and awaiting means returning. Checking `locked()` first and acquiring later leaves a gap with an `await` in it — which is precisely the window two concurrent requests both pass through.
+
+**Decision.** `QueryService.stream()` is **not** `async`. It is a plain function that admits the request synchronously and then returns the async generator that does the work. Admission is a plain integer counter (`_Admission`), shared by both response shapes.
+
+**Why a counter and not a semaphore.** Synchronous `acquire` is atomic against the event loop — there is no suspension point between the test and the increment, so no second request can observe the state in between. That is a property of *asyncio being single-threaded*, not of the class, which is why it is documented as not thread-safe rather than made thread-safe for a caller that does not exist.
+
+**One cap, not two.** The streaming path does not get its own allowance. A second counter would be a second policy, and the effective limit would be whichever one happened to be checked. The same argument applies to error rendering: a stream cannot use the exception handlers, so it renders failures itself — through `errors.published`, the one function that decides which of this project's messages a caller may read. Two renderers, one rule. Left inline in the handler, the stream would have re-derived that judgement, and re-deriving a "which of our messages are publishable" call is how the strict copy and the lenient copy end up in one process.
+
+**Alternatives.**
+- *Refuse with an `error` event on a `200`.* Expressible, and it lies in the status line. A client's retry logic reads status codes.
+- *`asyncio.Semaphore` with `locked()` checked in the route.* The current non-streaming shape, extended. Rejected: the check and the acquire are separated by the response starting.
+- *A larger cap and queue the overflow.* Moves the cliff without removing it, and converts refusal into latency — the failure mode clients handle worst.
+
+**Tradeoff.** Admission happens before the generator's `try`, so the release lives in the generator's `finally` and the two are textually apart. Nothing between them may raise; constructing an async generator cannot, which is what makes the arrangement safe rather than merely short. The slot is returned on completion, on failure, and on the client hanging up — Starlette closes the generator, which raises `GeneratorExit` at the `yield`. **A slot returned only on success is a slot a client can consume permanently by disconnecting**, which is a denial of service costing the attacker one connection each.
+
+**Generalises to:** a control that must be expressible in the response has to run before the response exists.
+
+---
+
+## ADR-040 — Startup opens the model, because naming it is not loading it
+
+**Status:** accepted · **Date:** 2026-08-07 · **Stage:** 1
+
+**Context.** `api.app._lifespan` states its purpose at the top of the module: touching every accessor eagerly moves configuration failures *"from the first request to the moment the process starts, where a deployment is watching and a rollback is still cheap."*
+
+It touched `resources.retriever` and logged `retriever.model_version`. That property returns the configured model **name** — a string, from settings, loading nothing. `SentenceTransformerEmbedder` holds `self._model = None` until its first `embed()`.
+
+So the process logged `ready`, `/ready` answered `ready`, and the checkpoint had never been opened.
+
+**What it cost, in two parts, and the second is what hid the first.**
+
+A missing, corrupt or undownloadable checkpoint surfaced on the **first request** rather than at startup — the exact failure the eager lifespan exists to prevent, in the one dependency that reaches the network to initialise.
+
+And the load costs roughly twenty seconds of CPU, paid by whoever asked first. That was invisible in the `steps` array, because retrieval and generation are timed together as a single `answer` stage. It went unnoticed long enough to be **recorded in PERFORMANCE.md as the cost of a model round trip** — a 29 s measurement attributed almost entirely to a rate-limited provider, on the strength of an aggregate that could not distinguish the two.
+
+**Decision.** The lifespan reads `retriever.dimensions`, which has no answer available without reading the checkpoint. The value is logged next to `model_version`, so the log line now reports something that could have failed.
+
+**Why `dimensions` rather than a `warm()` method.** It is the smallest honest way to say *"and actually load it"*: the property genuinely cannot be answered from configuration. A `warm()` on the port would be a method whose only purpose is its side effect, added to an interface whose docstring says it turns text into vectors and nothing more. `dimensions` is also the value worth having at startup for an independent reason — `RetrievalSettings.retriever_model` documents that *"a model of a different width is a migration, not a config change,"* and until now nothing read the width at all.
+
+**How it was found.** Not by reading the code. The per-stage `stage` events added for streaming split `answer` into `retrieve` and `generate`, and the first request showed retrieval taking twenty seconds against generation's two. Measured live: **21.8 s first request before, 2.9 s after, with steady-state answers between 0.6 s and 1.8 s.** This is the third time in this project a defect has been invisible in the code and obvious from the operation, and the second time the fix was a consequence of building instrumentation for something else.
+
+**Tradeoff.** Startup is now about twenty seconds slower, and it is honest about it: that time was always being spent, by a caller, inside a request that had no way to report it. A readiness probe that answers late is a deployment concern with an established answer; a first request that takes twenty seconds is a user-visible defect with none.
+
+**Generalises to:** an eager-initialisation check must touch something that can fail. A property answered from configuration proves the configuration was read, not that the thing it names exists.

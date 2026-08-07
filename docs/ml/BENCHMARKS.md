@@ -4,7 +4,7 @@
 
 Metric definitions: [EVALUATION.md](EVALUATION.md). Every row must be reproducible from the recorded command.
 
-> **A full-split run is in progress — 379 of 921 questions, 9 of 20 databases, paused on a daily token cap and resumable (§1.1). The four rows before it are smoke rows over 3 of 20 databases.** §0 records what the data all of it is computed from is worth; §1 says exactly what each sample covers, and why two of the smoke rows may not be quoted as a model's score. §4–§7 are still the recording format.
+> **A full-split run is in progress — 744 of 921 questions, 15 of 20 databases over two days, pausing on the daily token cap and resuming into the same directory (§1.1). The four rows before it are smoke rows over 3 of 20 databases.** §0 records what the data all of it is computed from is worth; §1 says exactly what each sample covers, and why two of the smoke rows may not be quoted as a model's score. §4–§7 are still the recording format.
 
 ---
 
@@ -79,42 +79,68 @@ python -m evals.run --questions <spider dev.json as JSONL> --split dev `
 
 ### 1.1 The full-split run, in progress
 
-**Started 2026-08-06 into `results/spider-full-20260806`. It is not finished, and it is not abandoned — it is paused on a spent daily budget and resumes into the same directory.** That distinction is the whole difference from the 2026-08-05 attempt below, which could not be resumed at all.
+**Started 2026-08-06 into `results/spider-full-20260806`. It is not finished, and it is not abandoned — it is paused on a spent daily budget and resumes into the same directory.** That distinction is the whole difference from the 2026-08-05 attempt below, which could not be resumed at all. **Day 2 was run on 2026-08-07 and it resumed correctly**, which is the first end-to-end proof that the resumption fix works on a real directory rather than a fixture.
 
-| | Day 1 |
-|---|---|
-| Recorded | **379** of 921 scoreable |
-| Scored | 367 |
-| Matched | 297 |
-| **Execution accuracy** | **80.9%** |
-| Model | `openai/gpt-oss-120b`, **`single_model: true`** |
-| Gold errors | 0 |
-| Infrastructure | 12 — all `llm_failed`, all the daily token cap |
-| Databases reached | **9 of 20** |
+| | Day 1 | **Day 2 (current)** |
+|---|---|---|
+| Recorded | 379 of 921 scoreable | **744** of 921 |
+| Scored | 367 | **732** |
+| Matched | 297 | **596** |
+| **Execution accuracy** | 80.9% | **81.4%** |
+| Model | `openai/gpt-oss-120b`, `single_model: true` | same |
+| Gold errors | 0 | **0** |
+| Infrastructure | 12 | **12** — all `llm_failed`, all the daily cap |
+| Databases reached | 9 of 20 | **15 of 20** |
+| Remaining | 542 untouched | **177 untouched** |
 
-**Still not a benchmark row**, for the reason every row above is not: it covers 9 of 20 databases. It is recorded because the trajectory matters and because two things were verified by it that no test could.
+**Still not a benchmark row**, for the reason every row above is not: it covers 15 of 20 databases. It is recorded because the trajectory matters and because things were verified by it that no test could.
 
-**`cre_Doc_Template_Mgt` scored for the first time in this project's history: 67/74, 90.5%.** Those are the 84 questions that were `scope_unavailable` on 2026-08-05 — a database the eval had been unable to name since the pipeline was wired. It is now the second-strongest database in the run.
+**The resumption worked, in the log, on the real directory.** Day 2 opened with:
 
-**The run halted rather than grinding.** The cap arrived at question 414; ten consecutive `llm_failed` tripped `--halt-after` and the run stopped with 542 questions **untouched** rather than recorded as failures. Verified on the real directory: `resume()` reports *367 answered, 12 to re-attempt*. Yesterday's equivalent recorded 308 permanent failures and could never be finished.
+> `resuming results/spider-full-20260806: 367 question(s) answered, 12 to re-attempt after infrastructure failure`
+
+That is [ADR-037](../architecture/DECISIONS.md#adr-037--resumption-skips-answered-questions-not-recorded-ones) doing exactly what it was written for. Day 1's 12 quota failures were re-attempted rather than retired as answers, and the run carried on from question 431.
+
+**It halted the same way twice, which is the halt rule working rather than a coincidence.** Day 2's cap arrived after 377 more questions; ten consecutive `llm_failed` tripped `--halt-after` and the run stopped with **177 untouched** rather than recording them as failures. One more day finishes the split.
+
+**Resuming required checking out the recorded commit.** The manifest names `15dcdf7`; the working tree had moved four commits past it, and **the fingerprint guard refused the resume** — correctly, since two of those commits touched code the harness runs through. The run was resumed from a `git worktree` at `15dcdf7` so that the remaining questions were answered by the same code as the first 379. That is the guard being obeyed rather than overridden, and it is the cost ADR-037 predicted arriving for the second time. See §1.3.
 
 Per-database, where the spread is the finding:
 
 | Database | Scored | Accuracy |
 |---|---|---|
+| **`poker_player`** | **40/40** | **100.0%** |
 | `employee_hire_evaluation` | 33/34 | 97.1% |
+| `battle_death` | 14/15 | 93.3% |
 | `pets_1` | 39/42 | 92.9% |
-| **`cre_Doc_Template_Mgt`** | **67/74** | **90.5%** |
+| `museum_visit` | 10/11 | 90.9% |
+| `cre_Doc_Template_Mgt` | 67/74 | 90.5% |
 | `concert_singer` | 27/30 | 90.0% |
+| `tvshow` | 52/59 | 88.1% |
+| `voter_1` | 12/14 | 85.7% |
 | `course_teach` | 22/26 | 84.6% |
+| `wta_1` | 43/52 | 82.7% |
+| `world_1` | 88/108 | 81.5% |
 | `flight_2` | 61/76 | 80.3% |
-| **`car_1`** | **46/83** | **55.4%** |
+| `student_transcripts_tracking` | 42/67 | 62.7% |
+| **`car_1`** | **46/84** | **54.8%** |
 
-**`car_1` at 55.4% is why a 3-database sample was never going to be enough.** It is one of the three databases every smoke row used, and it is the worst of the nine — so the smoke rows were not a random sample that happened to be small, they were weighted toward the hardest database in the set. A full-split number will move, and the per-database spread of 55% to 97% is a better description of the system than any single figure over a partial corpus.
+**The spread widened at both ends, which is the argument against the single figure.** `poker_player` is a clean 40/40 and `car_1` is 54.8% — and `student_transcripts_tracking` arrived at 62.7% as a second hard database, so `car_1` is no longer a lone outlier that could be dismissed. A system described as "81.4%" is one that is somewhere between perfect and coin-flip depending on the schema, and **which schema you get is not something the accuracy figure tells you**.
 
-**Recall improved with coverage**: R@1 0.687, R@5 **0.936**, R@10 0.982, R@20 **1.000** over 379 questions, against R@5 0.889 measured over the 150-question sample. R@20 staying at 1.000 across four times the questions and three times the databases strengthens the argument in §2 — there is little rank headroom on Spider for a fine-tune to recover.
+`car_1` was one of the three databases every smoke row used, and it remains the worst of the fifteen. The smoke rows were not a small random sample; they were weighted toward the hardest database in the set.
 
-Common to this run, per the recording rules: Spider `dev.json`, digest `00636695…c85b121b`, conversion **verified** (§0, `579e312`, 19/20 databases) · **113 questions excluded** — 97 `dialect_error`, 16 `undetermined_limit` · metric **execution accuracy (single DB)**, *not* Spider's Test Suite Accuracy · commit `15dcdf7` · retriever `sentence-transformers/all-MiniLM-L6-v2` · prompt `sql_gen/v1` · seed 0 · Windows 11, CPU-only inference, PostgreSQL 16 in Docker · 174k input / 73k output tokens, 21m24s wall clock.
+**Recall, and the claim that did not survive:**
+
+| | Day 1 (379 q) | **Day 2 (744 q)** |
+|---|---|---|
+| R@1 | 0.687 | **0.747** |
+| R@5 | 0.936 | **0.943** |
+| R@10 | 0.982 | **0.984** |
+| R@20 | **1.000** | **0.998** |
+
+**R@20 is no longer 1.000, and the argument built on it has to be weakened accordingly.** §2 used "R@20 held at 1.000 across four times the questions" as evidence that there is essentially no rank headroom on Spider for a fine-tune to recover. Over 744 questions it is 0.9983 — about one question in 600 where the right table is not in the top 20 at all. That is still very little headroom, and it is no longer *none*. The honest form of the claim is that a fine-tune's gain on Spider is bounded at roughly 5.7 points of R@5 and effectively nothing at R@20, which remains the argument for measuring on BIRD instead.
+
+Common to this run, per the recording rules: Spider `dev.json`, digest `00636695…c85b121b`, conversion **verified** (§0, `579e312`, 19/20 databases) · **113 questions excluded** — 97 `dialect_error`, 16 `undetermined_limit` · metric **execution accuracy (single DB)**, *not* Spider's Test Suite Accuracy · commit `15dcdf7` · retriever `sentence-transformers/all-MiniLM-L6-v2` · prompt `sql_gen/v1` · seed 0 · Windows 11, CPU-only inference, PostgreSQL 16 in Docker · 361k input / 136k output tokens cumulative, 44m13s wall clock cumulative.
 
 ```powershell
 $env:LLM_MODEL_FALLBACKS = ""     # single model, or the number is a blend
@@ -124,13 +150,28 @@ python -m evals.run --questions data/splits/spider-official-dev.jsonl --split de
     --run-id spider-full-20260806 --out results/
 ```
 
-**Re-run that exact command to continue it.** The same `--run-id` resumes: 367 answered questions are skipped, the 12 that failed on quota are re-attempted, and it carries on from question 431.
+**Re-run that exact command to continue it** — from a checkout of the commit in the manifest, for the reason in §1.3. The same `--run-id` resumes: answered questions are skipped and the ones that failed on quota are re-attempted. After day 2 that means 732 skipped and 12 re-attempted, carrying on from question 757.
+
+### 1.3 The fingerprint refused the resume, and was right to
+
+Day 2 could not simply re-run the command. `RunManifest.config_fingerprint` includes the **commit**, the manifest records `15dcdf7`, and the working tree had reached `f74f9e3` — so `RunStore` refused to open the directory:
+
+```
+recorded  15dcdf7 -> e651ff75ca239eec
+current   f74f9e3 -> a99c100e0254a905
+```
+
+**This is not a false positive.** Of the four commits in between, two are documentation, but `d2c146e` fixed defects in the resumption code itself and `ec4b23f` modified `src/answering/answerer.py` — both on the path the harness runs through. A run whose first half was answered by one version and second half by another is exactly the result the guard exists to prevent, and "the change probably didn't matter" is a claim about behaviour that nobody had measured.
+
+**The resolution was to obey it, not to override it.** A detached `git worktree` at `15dcdf7`, with `--out` and the split files pointed back at the main checkout, so the fingerprint matched and the remaining questions were answered by the same code as the first 379.
+
+**The structural problem this exposes is real and unfixed.** The free tier forces multi-day runs; multi-day runs mean either development stops for the duration or the fingerprint invalidates the next day's resume. Every day of work makes the next resume harder, and the guard cannot distinguish a documentation commit from a change to the answering path because a commit hash carries no such information. A fingerprint over the *code the harness actually loads* — a digest of `src/`, or of the modules on the answering path — would let docs commits pass and refuse the ones that matter. That is a change to what the fingerprint means and it is logged in [TASKS.md](../project/TASKS.md) rather than made mid-run, for the same reason as the defect below.
 
 **Known defect in this run's manifest, found while filling in the row above.** `retriever_model_version` is recorded as the **empty string**, because `--retriever` defaults to empty and the command did not pass it. The retriever is `sentence-transformers/all-MiniLM-L6-v2` — read back from `agent_meta.schema_elements`, which is where it should have come from in the first place — so the row is correct, and the *manifest* is not.
 
 That matters beyond bookkeeping: `retriever_model_version` is **in the configuration fingerprint**, the guard that refuses to resume a run whose configuration changed. Left to its default it is the same empty string for every retriever, so the one check standing between a baseline run and a fine-tuned one resuming into each other is inert unless an operator remembers a flag. It is the same shape as the two defects above it in the CHANGELOG: the check exists, its input is optional, nothing supplies it, and it passes silently.
 
-**Deliberately not fixed yet.** Deriving it from the catalog changes the fingerprint, which orphans this run's 367 answered questions — a full day of free-tier budget. That is the exact cost recorded in ADR-037's tradeoffs: *the commit is in the fingerprint, so a multi-day run cannot absorb a fix*. This is the first multi-day run and the constraint arrived immediately. The fix lands when the run completes; until then, **the retriever field on this row comes from the database, not the manifest.**
+**Deliberately not fixed yet.** Deriving it from the catalog changes the fingerprint, which orphans this run's answered questions — now **732** of them, two full days of free-tier budget. That is the exact cost recorded in ADR-037's tradeoffs: *the commit is in the fingerprint, so a multi-day run cannot absorb a fix*. This is the first multi-day run and the constraint arrived immediately, then arrived again on day 2 in the sharper form described in §1.3. The fix lands when the run completes; until then, **the retriever field on this row comes from the database, not the manifest.**
 
 ### 1.2 The attempt that produced no row
 
@@ -156,7 +197,8 @@ Measured from gold-SQL elements with aliases resolved. Recall is computed whethe
 | Date | Commit | Split | Retriever | R@1 | R@5 | R@10 | R@20 | Notes |
 |---|---|---|---|---|---|---|---|---|
 | 2026-08-02 | `12cd3d5` | Spider `dev.json` (150) | `all-MiniLM-L6-v2` (baseline) | 0.605 | 0.889 | 0.960 | **1.000** | 0 unresolved references |
-| 2026-08-06 | `15dcdf7` | Spider `dev.json` (379, 9 DBs) | `all-MiniLM-L6-v2` (baseline) | 0.687 | 0.936 | 0.982 | **1.000** | 2 unresolved references. **This is the number the fine-tune must beat** — it supersedes the row above, on 2.5× the questions and 3× the databases |
+| 2026-08-06 | `15dcdf7` | Spider `dev.json` (379, 9 DBs) | `all-MiniLM-L6-v2` (baseline) | 0.687 | 0.936 | 0.982 | 1.000 | 2 unresolved references. Superseded by the row below |
+| 2026-08-07 | `15dcdf7` | Spider `dev.json` (744, 15 DBs) | `all-MiniLM-L6-v2` (baseline) | 0.747 | **0.943** | 0.984 | **0.998** | 16 unresolved references. **This is the number the fine-tune must beat.** R@20 stopped being 1.000 as coverage doubled — the headroom is small, not absent |
 
 **R@20 held at exactly 1.000 across both rows** — 150 questions over 3 databases and 379 over 9. A ceiling that survives a 2.5× increase in sample and a 3× increase in databases is a property of the corpus, not an artefact of a small sample, which is a materially stronger claim than the first row could make on its own.
 

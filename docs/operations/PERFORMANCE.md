@@ -17,36 +17,56 @@
 | API startup | **< 5 s** | Process launch → `/ready` returns 200 | Two connections, the read-only assertion (three round trips), the catalog, and the embedder. All eager, deliberately: a lazy startup moves these costs onto the first request and moves configuration errors past the deploy |
 | `/health` | **< 5 ms** p95 | — | Serializes a fixed dict. It touches nothing, so anything larger is framework overhead worth looking at |
 | `/ready` | **< 20 ms** p95 uncached | — | Two `SELECT 1`s on held connections, then cached 5 s. The cache is the control that stops an unauthenticated endpoint being a load generator, not an optimization |
-| SSE first token | **< 500 ms** | Time to first event | Perceived responsiveness |
-| End-to-end (single query) | **< 8 s** p95 | `request_duration_seconds` | Dominated by LLM generation. **First measurement: 29 s** — see below. The budget was written before anything served a request and it is not close |
+| SSE first event | **< 500 ms** | Time to first event | Perceived responsiveness. **Measured: ~600–900 ms** for the `retrieve` stage event — see below |
+| End-to-end (single query) | **< 8 s** p95 | `request_duration_seconds` | **Met: 0.6–1.8 s** warm. The 29 s first recorded here was a cold start, not a provider cost — see below |
 | End-to-end (multi-step) | **< 25 s** p95 | — | N sub-queries plus synthesis |
 
 **These are budgets, not predictions.** The interesting outcome is where they are missed — a missed budget points at the component to fix.
 
-### The first end-to-end measurement missed its budget by 3.6x, and the split says why
+### Correction: the 29 s measurement was a cold start, and it was attributed to the wrong thing
 
-One served request against Spider's `concert_singer`, `k=30`, `openai/gpt-oss-120b` on a free tier:
+**The previous version of this section was wrong, and it is worth recording how rather than quietly replacing it.** It reported one served request as `answer` 29,081 ms against `execute` 28 ms, concluded that *"everything this project controls is already fast and the budget is spent somewhere it does not own"*, and identified the 29 seconds as one round trip to a rate-limited free tier.
 
-| Phase | Measured | Share |
+The split was real. The **attribution** was not. `answer` bundles retrieval and generation into a single timed stage, so an aggregate of 29 s was consistent with a slow provider and equally consistent with something slow in retrieval — and nothing in the measurement could tell them apart.
+
+The per-stage `stage` events added for SSE separated them, and the first streamed request showed this:
+
+```
+[20:05:33]  (stream opens)
+[20:05:48]  : keepalive            <- 15 s of silence, before retrieval finished
+[20:05:53]  event: stage  {"stage":"retrieve"}   ~20 s
+[20:05:55]  event: stage  {"stage":"generate"}   ~2 s
+[20:05:55]  event: rows
+```
+
+**Retrieval was taking twenty seconds and generation two.** The cause is [ADR-040](../architecture/DECISIONS.md#adr-040--startup-opens-the-model-because-naming-it-is-not-loading-it): `SentenceTransformerEmbedder` loads its checkpoint lazily, the lifespan only read `model_version` — a configured string that loads nothing — and so **the first caller paid the model load inside their request.**
+
+### The measurements, after the fix
+
+Freshly started process, Spider `concert_singer`, `k=30`, `openai/gpt-oss-120b` on a free tier:
+
+| | Before ADR-040 | **After** |
 |---|---|---|
-| `answer` — retrieval + generation | **29,081 ms** | 99.9% |
-| `execute` — validation + query | **28 ms** | 0.1% |
+| First request, `answer` | **21,845 ms** | **2,869 ms** |
+| Warm request, `answer` | — | **621 / 776 / 920 / 1,783 ms** |
+| Warm request, `execute` | — | **15.0 / 15.6 / 17.0 / 20.5 ms** |
+| Model load | inside the first request | **~19 s inside startup** |
 
-**Everything this project controls is already fast, and the budget is spent somewhere it does not own.** Retrieval is bounded by an ANN index over ~26 vectors; execution is 3–4 ms against a benchmark-sized table. The 29 seconds is one round trip to a free-tier provider under load, and no amount of work on this side of the boundary moves it.
+**The `< 8 s` budget is met, comfortably, and the earlier "missed by 3.6×" was measuring process startup.** Warm end-to-end is under two seconds including a live model call.
 
-Three things follow, and the third is the one that matters for what to build next:
+Three things follow:
 
-- **The budget is not wrong, it is unattributed.** An `< 8 s` end-to-end target with no per-phase split cannot distinguish a slow retriever from a slow provider, which are opposite problems. The `steps[]` array in every response carries the split, which is why it ships before any tracing does.
-- **A paid tier or a local Ollama would likely meet it**, and neither is a requirement of this project ([PROJECT.md](../../PROJECT.md)). So the honest form of this row is *"< 8 s p95 on a provider that is not rate-limited"*, and it stays unmet until there is one to measure against.
-- **This is the argument for streaming, restated as a number.** 29 seconds of silence is a broken-looking request; 29 seconds with a `sql` event at 2 s and rows at 29 s is a working one. SSE is not a nicety here — it is the difference between the measured latency being visible and being indistinguishable from a hang.
+- **`execute` at 15–21 ms confirms the original conclusion for the part it was actually about.** Validation and query execution are three orders of magnitude under budget. That part of the old section survives; what does not is the claim that the *remaining* 29 seconds belonged to the provider.
+- **An unattributed aggregate is not a measurement, it is a number.** A single `answer` stage could not distinguish a slow retriever from a slow provider — opposite problems with opposite fixes — and it produced a confident, documented, wrong diagnosis. The finer split shipped for a user-facing reason and immediately corrected a benchmark, which is the strongest argument this project has for instrumenting at component boundaries rather than at the request boundary.
+- **The streaming argument is weaker on latency and unchanged on cold start.** *"29 seconds of silence is indistinguishable from a hang"* was true of the run that was measured, and that run was pathological. A 1.8 s answer does not need streaming to look alive. What streaming still buys is the `sql` event arriving before execution, visible progress on the slow schemas, and — the actual reason it earned its place here — **the per-stage split that found this defect.**
 
-**What is not yet measured:** p95 of anything. These are single observations, which is the correct amount of measurement for a component that started serving today and the wrong amount to put in a benchmark row. `/health`, `/ready`, MCP overhead and retrieval latency all remain unmeasured against their budgets.
+**What is not yet measured:** p95 of anything. These are single observations on one small schema, which is the correct amount of measurement for a component that started serving two days ago and the wrong amount to put in a benchmark row. `/health`, `/ready`, MCP overhead and retrieval latency against a *realistic* corpus all remain unmeasured — the 15–21 ms execution figure is against benchmark-sized tables and says nothing about a large one.
 
-**First-token latency is the target most likely to be missed**, and the most user-visible. The first SSE event should be the `session` event, emitted before any model call — so a slow LLM cold start does not read as a hung request.
+**First-event latency is the target most likely to be missed**, and the most user-visible. It is currently the `retrieve` stage event at roughly 600–900 ms, which is over the 500 ms budget and now dominated by embedding the question rather than by anything remote.
 
 ## 2. Expected latency distribution
 
-Design assumption, to be confirmed or refuted:
+Design assumption, written before anything served a request:
 
 ```
 LLM generation   ████████████████████████████  ~70%
@@ -56,7 +76,11 @@ Validation       █                              ~3%
 Everything else  ███                            ~7%
 ```
 
-If LLM generation is not dominant, something is wrong upstream and the optimization target changes completely. Confirming this ordering is the first Stage 6 measurement, because optimizing the wrong component is the default failure mode here.
+**The first real split is roughly the right shape with query execution far too high.** Over the four warm requests in §1, `execute` is 15–21 ms against an `answer` of 621–1,783 ms — so execution is nearer **2%** than 15%, and generation correspondingly more dominant than assumed. That is against benchmark-sized tables, which is exactly the condition under which execution *should* be negligible; the assumption was written with a realistic corpus in mind and has not been tested against one.
+
+Retrieval is the number to watch. At ~600–900 ms for the first stage event it is already larger than the ~5% assumed, and that is over a schema with four tables. It is question-embedding cost, which is roughly constant, plus an ANN search, which is not — so the share will move in both directions as the corpus grows.
+
+If LLM generation stops being dominant, something is wrong upstream and the optimization target changes completely. Confirming this ordering **on a realistic corpus** is the first Stage 6 measurement, because optimizing the wrong component is the default failure mode here — and §1 is a worked example of how confidently that can happen.
 
 ## 3. Optimization levers, in order
 

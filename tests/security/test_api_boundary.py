@@ -85,6 +85,20 @@ class FakeCatalog:
 class FakeRetriever:
     model_version = "test-model"
 
+    def __init__(self) -> None:
+        self.model_opened = False
+
+    @property
+    def dimensions(self) -> int:
+        """Stands in for the property whose *side effect* is the point.
+
+        On the real retriever this reads the checkpoint. Recording the call is
+        how `TestStartupOpensTheModel` can assert the load happened without
+        putting a 90 MB download behind the security suite.
+        """
+        self.model_opened = True
+        return 384
+
     def search(self, *_: object, **__: object) -> object:
         raise AssertionError("no test here should reach retrieval")
 
@@ -417,3 +431,43 @@ class TestThePoolIsNotShared:
             resources = client.app.state.resources  # type: ignore[attr-defined]
 
         assert resources.closed
+
+
+class TestStartupOpensTheModel:
+    """The lifespan promises eager, and one dependency was quietly lazy.
+
+    `app._lifespan` states that touching each accessor moves configuration
+    failures from the first request to process start. It touched the retriever
+    -- but `model_version` returns a configured string and loads nothing, so a
+    sentence-transformer sat with its checkpoint unopened while the log line
+    said `ready`.
+
+    Two costs, and the second is what hid the first. A missing or corrupt
+    checkpoint surfaced on the first request rather than at startup, which is
+    the exact failure the eager lifespan exists to prevent. And the load is
+    tens of seconds of CPU, paid by whoever asked first -- invisible in the
+    `steps` array because retrieval and generation are timed together as one
+    `answer` stage. The per-stage events added for streaming are what
+    separated them, and the difference measured live was 21.8 s cold against
+    0.5 s warm.
+    """
+
+    def test_the_model_is_opened_before_the_first_request(self) -> None:
+        app = create_app(build_settings(), resource_factory=FakeResources)
+
+        with TestClient(app) as client:
+            retriever = client.app.state.resources.retriever  # type: ignore[attr-defined]
+            assert retriever.model_opened, "startup left the checkpoint unopened"
+
+    def test_reporting_readiness_is_not_enough_on_its_own(self) -> None:
+        """`model_version` must not be mistaken for a liveness signal again.
+
+        It answers from configuration, so it cannot fail and cannot report
+        anything about the model. This pins that it stays cheap -- if it ever
+        starts loading, the startup check above becomes redundant in a way
+        nobody would notice.
+        """
+        retriever = FakeRetriever()
+
+        assert retriever.model_version == "test-model"
+        assert not retriever.model_opened

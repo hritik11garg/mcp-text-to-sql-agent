@@ -132,16 +132,33 @@ async def _lifespan(
         catalog = resources.catalog
         retriever = resources.retriever
 
+        # `model_version` is the model *name*, and reading it loads nothing --
+        # which is how this line reported a ready retriever over an embedder
+        # that had not opened its model file. `dimensions` is the property that
+        # forces the load, so it is read here on purpose and not merely logged.
+        #
+        # Two things wrong without it, and the second is the one that hid the
+        # first. The lifespan's promise at the top of this module is that
+        # configuration failures surface at startup rather than on the first
+        # request; a missing or corrupt checkpoint surfaced on the first
+        # request. And the load costs about twenty seconds of CPU, which the
+        # first caller paid -- invisible in the `steps` array, because
+        # retrieval and generation are timed together as one `answer` stage.
+        # The stage events added for streaming are what separated them.
+        dimensions = retriever.dimensions
+
         logger.info(
-            "ready: %d tables in catalog, retriever model_version=%s",
+            "ready: %d tables in catalog, retriever model_version=%s, dimensions=%d",
             len(catalog.tables),
             retriever.model_version,
+            dimensions,
         )
 
         app.state.query_service = QueryService(
             build_answerer(resources),
             build_executor(resources),
             max_concurrent=settings.api.api_max_concurrent_requests,
+            keepalive_seconds=settings.api.api_stream_keepalive_seconds,
         )
 
         app.state.readiness.configure(

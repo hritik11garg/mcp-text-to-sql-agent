@@ -2,9 +2,14 @@
 
 **Every field here does something.** [API.md](../../docs/architecture/API.md)
 specifies a larger request than this one -- ``session_id`` for follow-up
-questions and ``stream`` for SSE -- and neither is built. They are therefore
-*absent* rather than accepted and ignored, and ``extra="forbid"`` turns sending
-one into a ``400`` naming the field.
+questions -- and it is not built. It is therefore *absent* rather than accepted
+and ignored, and ``extra="forbid"`` turns sending it into a ``400`` naming the
+field.
+
+``stream`` was in that category until the stream was built, and is now a real
+field. That is the rule working in the direction it is supposed to: a field
+appears when the behaviour behind it does, so the request shape and the served
+behaviour never disagree.
 
 That is the one design decision in this module. A field that parses and does
 nothing is the same defect as a config variable nothing reads: the caller sets
@@ -68,6 +73,18 @@ class QueryRequest(BaseModel):
     checked at request time, which is what an operator tunes. This annotation
     carries the *default* of that setting so the generated schema states a
     number rather than nothing -- the runtime check is the authority.
+    """
+
+    stream: bool = False
+    """Send the answer as server-sent events instead of one JSON body.
+
+    This field was **refused by name** until the stream existed, which is the
+    decision this module's docstring is about (ADR-038). It is accepted now for
+    the same reason it was refused then: it does something. ``session_id``
+    still is not here, because session memory still is not built.
+
+    Default ``false``, so the non-streaming contract is unchanged for every
+    caller written against it.
     """
 
     options: QueryOptions = Field(default_factory=QueryOptions)

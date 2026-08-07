@@ -175,6 +175,22 @@ class SchemaRetriever:
         """The vector space this retriever searches. Worth logging on startup."""
         return self._embedder.model_version
 
+    @property
+    def dimensions(self) -> int:
+        """Vector width, and **reading it opens the model.**
+
+        The side effect is the reason this exists rather than an inconvenience
+        to note. :attr:`model_version` returns a configured string and loads
+        nothing, so a startup that reads only that reports a ready retriever
+        over an embedder holding a closed file -- and the first request pays
+        the load, which for a CPU sentence-transformer is tens of seconds.
+
+        So a caller that wants the model *open* asks for this. It is the
+        smallest honest way to say "and actually load it": there is nothing to
+        answer with until the checkpoint is read.
+        """
+        return self._embedder.dimensions
+
     def search(
         self,
         query: str,

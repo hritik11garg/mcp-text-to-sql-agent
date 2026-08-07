@@ -1,6 +1,6 @@
 # Evaluation
 
-> **Status: the harness runs end to end, and a full-split run is under way — 379 of 921 questions and 9 of 20 databases so far, paused on a daily token cap and resuming into the same directory.** Result comparison, Recall@k, the failure taxonomy, per-question artifacts, resumable runs and the answerer seam ship in `src/evals/`. Spider's dev split is converted and verified — 19 of 20 databases reproduce every gold result (§2) — indexed, and answered against. The earlier smoke runs covered 3 of 20 databases and found five defects, moving execution accuracy 42.7% → 75.3% without a prompt or model change; see [BENCHMARKS.md](BENCHMARKS.md) §1, which states on every row why none of it is comparable to a published Spider number. This page defines what the numbers mean.
+> **Status: the harness runs end to end, and a full-split run is under way — 744 of 921 questions and 15 of 20 databases over two days, pausing on the daily token cap and resuming into the same directory each time.** Result comparison, Recall@k, the failure taxonomy, per-question artifacts, resumable runs and the answerer seam ship in `src/evals/`. Spider's dev split is converted and verified — 19 of 20 databases reproduce every gold result (§2) — indexed, and answered against. The earlier smoke runs covered 3 of 20 databases and found five defects, moving execution accuracy 42.7% → 75.3% without a prompt or model change; see [BENCHMARKS.md](BENCHMARKS.md) §1, which states on every row why none of it is comparable to a published Spider number. This page defines what the numbers mean.
 
 The eval harness is Stage 2 — deliberately before the MCP refactor, the agent layer, and the fine-tune. Without a baseline, every later change is an unfalsifiable claim of improvement.
 
@@ -185,12 +185,12 @@ Attributing a gain to the fine-tuned retriever requires knowing what the rest of
 | Configuration | Exec. acc. | Recall@5 | Invalid (pre) | Invalid (post) | p95 latency | $/query |
 |---|---|---|---|---|---|---|
 | Full schema, no retrieval | TBD — Stage 2 | — | TBD | TBD | TBD — Stage 6 | TBD |
-| Baseline retriever (`retrieval-only`, `k=30`) | **80.9%** | **0.936** | **3.3%** | — | TBD — Stage 6 | TBD |
+| Baseline retriever (`retrieval-only`, `k=30`) | **81.4%** | **0.943** | **3.3%** | — | TBD — Stage 6 | TBD |
 | Baseline + validation | TBD — Stage 2 | TBD | TBD | TBD | TBD — Stage 6 | TBD |
 | Baseline + validation + self-correction | TBD — Stage 4 | TBD | TBD | TBD | TBD — Stage 6 | TBD |
 | **Fine-tuned retriever (full pipeline)** | TBD — Stage 5 | TBD | TBD | TBD | TBD — Stage 6 | TBD |
 
-**The single measured row is not a benchmark result and the table must not be read as one.** It covers 379 of 921 scoreable questions — 9 of 20 databases — from a full-split run paused on a daily token cap and resuming into the same directory ([BENCHMARKS.md](BENCHMARKS.md) §1.1). `k` belongs to the row: the same configuration at `k=10` scores 42.7%.
+**The single measured row is not a benchmark result and the table must not be read as one.** It covers 744 of 921 scoreable questions — 15 of 20 databases — from a full-split run pausing on the daily token cap and resuming into the same directory ([BENCHMARKS.md](BENCHMARKS.md) §1.1). Per-database it spans 54.8% to 100%, so the average describes no individual schema. `k` belongs to the row: the same configuration at `k=10` scores 42.7%.
 
 All three figures now come from **one run**, which the previous version of this table could not say — accuracy and the invalid-query rate used to come from different runs with the `<think>` fix between them. The per-database spread inside this row is 55.4% to 97.1%, which is a better description of the system than the mean, and the weakest database is `car_1` — one of the three the earlier 150-question rows were made of.
 

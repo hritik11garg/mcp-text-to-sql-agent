@@ -6,6 +6,7 @@ See the package docstring for why execution is deliberately excluded.
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Protocol, runtime_checkable
 
@@ -17,7 +18,23 @@ __all__ = [
     "Candidate",
     "ContextSource",
     "QuestionAnswerer",
+    "StageObserver",
 ]
+
+StageObserver = Callable[[str], None]
+"""Called with a phase name as :meth:`QuestionAnswerer.candidate` completes it.
+
+Exists so a streaming caller can report progress **without sequencing the
+phases itself**, which the :meth:`~QuestionAnswerer.candidate` docstring gives
+the reason for: a caller that composes retrieve-then-generate is a caller that
+can compose it wrongly, and there would then be two orderings to keep in step.
+
+Synchronous, and it must not block. The only implementation puts an item on an
+:class:`asyncio.Queue` with ``put_nowait``. Declaring it synchronous is what
+keeps it un-awaited inside the composition -- an ``async`` observer would make
+every phase boundary a place the composition could suspend, which is a
+scheduling change disguised as an instrumentation hook.
+"""
 
 
 @runtime_checkable
@@ -88,6 +105,7 @@ class QuestionAnswerer:
         *,
         feedback: str | None = None,
         previous_sql: str | None = None,
+        on_stage: StageObserver | None = None,
     ) -> Candidate:
         """Retrieve context, generate SQL against it. The whole path, composed.
 
@@ -108,14 +126,27 @@ class QuestionAnswerer:
         ADR-036 recorded the risk of building this seam one commit before its
         second caller; this is what that risk cost. The eval reaches
         :meth:`retrieve` directly and is unaffected either way.
+
+        Args:
+            on_stage: Notified as each phase completes -- ``"retrieve"``, then
+                ``"generate"``. Optional, so the two existing callers are
+                unchanged. It reports the composition rather than performing
+                it, which is the distinction that keeps this method the single
+                statement of the order.
         """
         context = await asyncio.to_thread(self.retrieve, question)
-        return await self.generate(
+        if on_stage is not None:
+            on_stage("retrieve")
+
+        candidate = await self.generate(
             question,
             context,
             feedback=feedback,
             previous_sql=previous_sql,
         )
+        if on_stage is not None:
+            on_stage("generate")
+        return candidate
 
     def retrieve(self, question: str) -> RetrievalResult:
         """Phase 1, exposed because a benchmark needs what a request discards.

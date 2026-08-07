@@ -9,7 +9,8 @@
 | Error model | **Served** for every response, including 404s and unhandled exceptions |
 | `X-Request-Id` | **Served.** Honoured when safe to repeat, replaced when not — see below |
 | `POST /v1/query` — **non-streaming** | **Served.** Question in, SQL and rows out |
-| `POST /v1/query` with `stream: true` | Not built — the field is **refused**, not ignored |
+| `POST /v1/query` with `stream: true` | **Served.** `stage`, `sql`, `rows`, `done`, `error` events |
+| `session` / `answer_delta` events | Not built — no session memory, no prose synthesis |
 | `session_id` on any request | Not built — the field is **refused**, not ignored |
 | `answer` (prose synthesis) | Not built — absent from the response rather than empty |
 | `GET /v1/schema/search` | Not built |
@@ -17,7 +18,9 @@
 | `plan`, `tool_call`, `tool_result` events | Not built — these come from the agent loop, Stage 4 |
 | `steps[]` | **Served**, with the phases that exist: `answer`, then `execute` or `validate` |
 
-**Unimplemented fields are refused by name, not accepted and ignored.** `stream` and `session_id` produce a `400 invalid_request` naming the field. Accepting them silently would be the same defect as a config variable nothing reads — the caller sets it, gets no error, and concludes it took effect. `session_id` is the sharper case: ignoring it means a follow-up question is answered *without* the previous turn's context, and the answer comes back plausible rather than obviously wrong.
+**Unimplemented fields are refused by name, not accepted and ignored.** `session_id` produces a `400 invalid_request` naming the field. Accepting it silently would be the same defect as a config variable nothing reads — the caller sets it, gets no error, and concludes it took effect. It is the sharper case of the two: ignoring it means a follow-up question is answered *without* the previous turn's context, and the answer comes back plausible rather than obviously wrong.
+
+**`stream` was in that category until the stream existed, and is now a real field.** That is the rule running forwards: a field appears when the behaviour behind it does, so the request shape and the served behaviour never disagree. See [ADR-038](DECISIONS.md#adr-038--the-served-request-accepts-only-fields-that-do-something).
 
 **There is no authentication.** The server refuses to start on any bind address that is not loopback while that remains true. See [../operations/SECURITY.md](../operations/SECURITY.md) §13.1 and [../operations/CONFIG.md](../operations/CONFIG.md) §6.
 
@@ -42,9 +45,9 @@ Run it: `python -m api`, or `uvicorn api.app:create_app --factory --reload` whil
 
 Ask a natural-language analytical question. This is the primary endpoint.
 
-> **Served, non-streaming only.** The request the endpoint actually accepts is
-> `question` plus `options.{max_rows, timeout_ms, explain_only}`, and nothing
-> else — `stream` and `session_id` are refused by name. The response omits
+> **Served, both response shapes.** The request the endpoint actually accepts
+> is `question`, `stream`, and `options.{max_rows, timeout_ms, explain_only}`,
+> and nothing else — `session_id` is refused by name. The response omits
 > `answer`, because prose synthesis is Stage 4 and an empty string would be a
 > claim the system cannot back. Everything below describes the finished shape.
 
@@ -114,23 +117,54 @@ Any other field is a `400`. The body is capped at `API_MAX_BODY_BYTES` before pa
 
 ### Response — streaming (`stream: true`)
 
-`200 OK`, `Content-Type: text/event-stream`.
+`200 OK`, `Content-Type: text/event-stream`, plus `Cache-Control: no-cache` and `X-Accel-Buffering: no` — the last because a buffering reverse proxy holds every event until the response ends, which turns a stream back into a slow non-streaming reply.
 
-Event types:
+**Served events:**
 
 | Event | Payload | Meaning |
 |---|---|---|
-| `session` | `{"session_id": "..."}` | First event; always sent |
-| `plan` | `{"steps": ["...", "..."]}` | Decomposition result (multi-step only) |
-| `tool_call` | `{"tool": "...", "input_summary": "..."}` | About to invoke an MCP tool |
-| `tool_result` | `{"tool": "...", "status": "ok\|error", "duration_ms": 41}` | Tool returned |
+| `stage` | `{"stage": "retrieve", "status": "ok"}` | A phase completed. `retrieve`, `generate`, `validate` |
 | `sql` | `{"sql": "...", "attempt": 1}` | Candidate SQL generated |
 | `rows` | `{"columns": [...], "rows": [...], "truncated": false}` | Result set |
-| `answer_delta` | `{"text": "..."}` | Incremental natural-language answer |
-| `done` | `{"row_count": 2, "usage": {...}}` | Terminal success event |
-| `error` | Error envelope | Terminal failure event |
+| `done` | `{"row_count": 2, "executed": true, "steps": [...], "usage": {...}}` | Terminal success event |
+| `error` | Error envelope, same keys as the JSON error body | Terminal failure event |
 
-Exactly one of `done` or `error` terminates the stream.
+**Not served, and not emitted as empty:**
+
+| Event | Waiting on |
+|---|---|
+| `session` | Session memory (Stage 4). Specified as *"first event; always sent"* — a fabricated id would be the `session_id` defect wearing an event name |
+| `plan`, `tool_call`, `tool_result` | The agent loop (Stage 4) |
+| `answer_delta` | Prose synthesis (Stage 4) |
+
+`stage` is an addition to the original specification rather than one of its events. It exists because the specified list has nothing to send during retrieval and generation, which is where the time goes — and it earned its place immediately: separating `retrieve` from `generate` is what found [ADR-040](DECISIONS.md#adr-040--startup-opens-the-model-because-naming-it-is-not-loading-it).
+
+**Exactly one of `done` or `error` terminates the stream.** A stream that stops without one leaves a client waiting on a socket that will never say anything again, so every exit path — including an unhandled exception — emits a terminal event.
+
+**Comment frames (`: keepalive`) are sent after `API_STREAM_KEEPALIVE_SECONDS` of silence.** They are comments, not events, so a client cannot mistake one for a terminal event. See [CONFIG.md](../operations/CONFIG.md) §6 for why they are a liveness control rather than a cosmetic one.
+
+**A `429` is possible before the stream begins and never after it.** Admission happens synchronously, while the status line still exists — see [ADR-039](DECISIONS.md#adr-039--a-stream-is-admitted-before-it-is-a-stream). A client that receives `200` and `text/event-stream` has been admitted.
+
+Example:
+
+```
+event: stage
+data: {"stage":"retrieve","status":"ok"}
+
+event: stage
+data: {"stage":"generate","status":"ok"}
+
+event: sql
+data: {"sql":"SELECT COUNT(*) FROM singer;","attempt":1}
+
+event: rows
+data: {"columns":["count"],"rows":[[6]],"truncated":false}
+
+event: done
+data: {"row_count":1,"executed":true,"steps":[{"stage":"answer","duration_ms":621.4,"status":"ok"},{"stage":"execute","duration_ms":17.0,"status":"ok"}],"usage":{"input_tokens":346,"output_tokens":158}}
+```
+
+**Every payload is JSON, always.** SSE is newline-delimited — a field ends at `\n` and an event ends at `\n\n` — so a raw newline in a payload does not corrupt the frame, it *ends* it, and everything after is parsed as a new event. Generated SQL is routinely multi-line, so this is the ordinary case rather than an attack. JSON encoding is what makes it harmless; see [SECURITY.md](../operations/SECURITY.md) §13.11.
 
 ## `POST /v1/sessions`
 

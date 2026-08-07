@@ -102,12 +102,23 @@ class TestTheRequestAcceptsOnlyWhatItHonours:
     *plausible* rather than obviously missing the previous turn's context.
     """
 
-    @pytest.mark.parametrize("field", ["session_id", "stream"])
+    @pytest.mark.parametrize("field", ["session_id"])
     def test_an_unimplemented_field_is_refused_by_name(self, field: str) -> None:
         response = build_client().post("/v1/query", json={"question": "how many?", field: "x"})
 
         assert response.status_code == 400
         assert field in response.text, "a refusal that does not name the field is a mystery"
+
+    def test_stream_is_accepted_now_that_it_does_something(self) -> None:
+        """The rule running forwards.
+
+        ``stream`` was refused by name for exactly as long as there was no
+        stream behind it. A field appears when its behaviour does, which is
+        what keeps the request shape and the served behaviour from disagreeing.
+        """
+        response = build_client().post("/v1/query", json={"question": "how many?", "stream": False})
+
+        assert response.status_code == 200
 
     def test_an_unknown_option_is_refused(self) -> None:
         response = build_client().post(

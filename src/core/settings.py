@@ -453,6 +453,21 @@ class APISettings(BaseSettings):
     spike into an outage.
     """
 
+    api_stream_keepalive_seconds: float = Field(default=15.0, gt=0, le=300)
+    """How long a stream may be silent before it sends a comment frame.
+
+    Not cosmetic. Generation against a free-tier provider takes tens of seconds
+    -- PERFORMANCE.md measures 29 s end to end, essentially all of it one model
+    call -- and a proxy, a load balancer or a browser that sees no bytes for
+    that long is entitled to treat the connection as dead. Without this, the
+    slowest requests are the ones most likely to be killed, which is the
+    opposite of what a stream is for.
+
+    Fifteen seconds because the common idle timeout among the things in the way
+    is sixty, and a keepalive has to fit comfortably inside the smallest one to
+    be worth having.
+    """
+
     @model_validator(mode="after")
     def _check_cors(self) -> APISettings:
         if any(origin == "*" for origin in self.api_cors_origins):

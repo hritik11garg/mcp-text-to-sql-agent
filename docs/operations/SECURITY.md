@@ -362,7 +362,7 @@ Each was a prerequisite rather than a deferred finding: unexploitable while no e
 | **A real connection pool** | **Done** | `PoolConnectionSource` over `psycopg_pool`. Not a performance change: `statement_timeout` is set per transaction, so two concurrent requests on one connection would run one under the other's limit. Every pooled connection is proved by `assert_read_only` as the pool opens it, not just the first |
 | **Query execution off the event loop** | **Done** | `asyncio.to_thread` for execution, validation **and retrieval** — the last was found during this slice, in the shared answering path, where `candidate()` was `async` and called a blocking pgvector query inline |
 | **`explain_only` must not become an oracle** | **Partial** | The response message is fixed and names no identifier; the detail goes to the log and the audit trail under the same `request_id`. **The residual is timing** — validation resolves identifiers against an in-memory catalog and a real name still reaches `EXPLAIN`, so a determined caller may distinguish them by latency. Not closed, and not closable without authentication |
-| **SSE stream limits** | **Not yet** | Concurrent-stream cap, keepalive, cancellation on disconnect. Lands with streaming, which is the next slice |
+| **SSE stream limits** | **Done** | Streams share the one in-flight cap rather than getting their own allowance, and admission runs **before** the response begins, because a `429` is not expressible once `200` has been sent ([ADR-039](../architecture/DECISIONS.md#adr-039--a-stream-is-admitted-before-it-is-a-stream)). The slot is returned on completion, on failure and on disconnect — see §13.12. Keepalive frames are `API_STREAM_KEEPALIVE_SECONDS` |
 
 **Two of these are honestly partial, and both bottom out in the same missing thing.** A per-*client* cap and a timing-resistant oracle defence both require knowing who is calling. Until authentication exists, the loopback bind ([§13.1](#131-no-authentication-on-a-network-reachable-service--critical)) is what stands in for it, and it is a deployment control rather than a request control.
 
@@ -379,6 +379,36 @@ Each was a prerequisite rather than a deferred finding: unexploitable while no e
 **Why the fix is secure.** The published message no longer varies with the schema, which is what made it an oracle. The caller still learns the category, which is what they need to know a retry will not help.
 
 **CIA impact.** Confidentiality. Residual: the timing channel in §13.9 above, and the fact that a *successful* answer still reveals whatever the query returned — which is the endpoint's purpose.
+
+### 13.11 Event injection into the SSE stream — **High** (prevented)
+
+**Vulnerability.** Server-sent events are a newline-delimited text protocol: a field ends at `\n` and an event ends at `\n\n`. A raw newline reaching a `data:` line therefore does not corrupt the frame — it **terminates** it, and everything after is parsed by the client as a fresh event. A payload containing `\n\nevent: done\ndata: {...}` forges an event the server never sent. *(CWE-113 / CWE-93, CRLF and argument injection into a structured response; the same family as CWE-117 log injection, one layer out.)*
+
+**Why it's dangerous.** The consequence is worse than the log-injection case it resembles. A log reader sees a confusing line and a human interprets it; an SSE client sees a **well-formed, structurally valid event** and acts on it. A forged `done` ends the client's request early with an attacker-chosen `row_count`; a forged `rows` puts attacker-chosen data in front of the user as though the database returned it; a forged `error` reports a failure that did not happen.
+
+**Attack scenario, and why it is not hypothetical.** The field most likely to contain a newline is the one the endpoint exists to send: **generated SQL is routinely multi-line.** A naive implementation breaks on the first ordinary question, without an attacker. With one, the vector is a question crafted so the model emits SQL containing the framing sequence — a comment or a string literal is enough — turning a text-to-SQL endpoint into an event-forging primitive for anyone who can ask a question.
+
+**Secure implementation.** `api.sse.ServerSentEvent` accepts a **mapping, never a pre-formatted string**, and serialises it with `json.dumps`. JSON escapes `\n` as the two characters `\` and `n`, so a newline in generated SQL cannot reach the wire as a newline. `encode()` then asserts the result is single-line rather than trusting that reasoning to survive the next edit, and event *names* are validated against `[a-z][a-z_]{0,30}` because a name is written to its own line and is injectable the same way.
+
+**Why the fix is secure.** It removes the capability rather than filtering for it: there is no code path that places caller-influenced text on a `data:` line unescaped, because the only input the type accepts is a mapping it serialises itself. The assertion is defence in depth against a future caller handing it something pre-serialised. `ensure_ascii` is left at its default deliberately — it escapes U+2028 and U+2029, which are not newlines to Python and do not end an SSE field, but **are** line terminators to a JavaScript parser, which is what every browser client of this endpoint will be.
+
+**CIA impact.** Integrity, primarily — the client is shown data the server did not produce. Availability secondarily: a forged terminal event ends a stream early. Tested in `tests/unit/test_api_sse.py`, including the full forged-`done` payload; against a naive encoder those tests fail 19 ways.
+
+### 13.12 A disconnected stream holding its slot — **Medium** (prevented)
+
+**Vulnerability.** A streaming response occupies an in-flight slot for its whole duration. If the slot is released only when the stream completes normally, a client that opens a stream and hangs up never returns it. *(OWASP A04 insecure design; CWE-404, improper resource shutdown.)*
+
+**Why it's dangerous.** It is a denial of service that costs the attacker almost nothing — one TCP connection, opened and abandoned, per slot. With `API_MAX_CONCURRENT_REQUESTS` at 4, four abandoned connections take the endpoint out entirely, and it stays out until the process restarts, because nothing ever returns the slots. No sustained traffic is required, so rate limiting would not detect it.
+
+**Attack scenario.** Open `API_MAX_CONCURRENT_REQUESTS` streams, close each socket immediately, walk away. Every subsequent caller gets `429`.
+
+**Secure implementation.** The slot is released in the generator's `finally`, which runs on all three exits: normal completion, an exception, and the client hanging up — Starlette closes the generator, raising `GeneratorExit` at the `yield`. The worker task is cancelled in the same block, and `is_disconnected` is polled between events so a gone client stops costing an LLM call as well as a slot.
+
+**Why the fix is secure.** It ties the release to generator teardown rather than to an outcome, so the cases that return the slot are the cases that can happen, not the ones that were anticipated. `tests/unit/test_api_stream.py::TestTheSlotComesBack` asserts all three, and the abandoned case fails against an implementation that releases only on success.
+
+**Residual, and it is bounded.** `asyncio.to_thread` cannot be interrupted, so a cancelled request's database work may briefly outlive its slot — bounded by `statement_timeout`, which is set per request. The slot is returned promptly; the query finishes or is killed by PostgreSQL.
+
+**CIA impact.** Availability.
 
 ## 14. Multi-provider LLM risks
 

@@ -1,6 +1,6 @@
 # Text-to-SQL Analytics Agent (MCP-native)
 
-> **Status: Stage 1 core loop, the Stage 3 MCP layer, Stage 2's benchmark loaded and verified, and the eval pipeline running end to end.** The four servers run and are callable from any MCP host over stdio. Spider's dev split is converted to PostgreSQL, *verified* against its own gold results, indexed, and answered against. Still open: SSE streaming and the demo UI, and finishing the full-split run — it reached **9 of 20 databases** before a daily token cap paused it, and resumes into the same directory. See [BENCHMARKS](docs/ml/BENCHMARKS.md) for what has been measured and what bounds it, [ROADMAP](docs/project/ROADMAP.md) for stage status, [TASKS](docs/project/TASKS.md) for the working checklist.
+> **Status: Stage 1 core loop, the Stage 3 MCP layer, Stage 2's benchmark loaded and verified, and the eval pipeline running end to end.** The four servers run and are callable from any MCP host over stdio. Spider's dev split is converted to PostgreSQL, *verified* against its own gold results, indexed, and answered against. **SSE streaming is served** — `stage`, `sql`, `rows` and `done` events, with progress visible while a question is answered. Still open: the demo UI, and finishing the full-split run — it has reached **15 of 20 databases** and 744 of 921 questions across two days, pausing on the daily token cap and resuming into the same directory each time. See [BENCHMARKS](docs/ml/BENCHMARKS.md) for what has been measured and what bounds it, [ROADMAP](docs/project/ROADMAP.md) for stage status, [TASKS](docs/project/TASKS.md) for the working checklist.
 >
 > | Landed | Next |
 > |---|---|
@@ -15,7 +15,7 @@
 > | Generation — provider-agnostic, with a model fallback chain | |
 > | Profiling — column stats under a documented disclosure budget | |
 > | Eval harness — comparison, Recall@k, resumable runs | |
-> | **`POST /v1/query` — a question over HTTP, answered from a real schema** | SSE streaming, and the demo UI it feeds |
+> | **`POST /v1/query`, streaming and non-streaming — a question over HTTP, answered from a real schema** | The React demo UI the stream feeds |
 
 An agent that answers analytical questions in plain English against a real PostgreSQL database. Capabilities are exposed as **four MCP servers** rather than hardcoded functions, so any MCP host can point at them and query its own database — including the client this project ships.
 
@@ -56,13 +56,13 @@ The agent is an **MCP client** that discovers these tools at runtime. It decompo
 
 A fine-tuned schema-linking retriever (contrastive training on question→table/column pairs) sits inside the retrieval step, with Recall@k measured against the off-the-shelf embedding baseline.
 
-> Those two paragraphs describe the finished system. **Today**: the four servers and runtime discovery are built and tested, and the HTTP layer serves `/health`, `/ready`, a sanitized error envelope and **`POST /v1/query`** — a question in, generated SQL and rows out. Decomposition, session memory, self-correction, SSE and the fine-tune are not built. The status block at the top of this file is the authority on what exists.
+> Those two paragraphs describe the finished system. **Today**: the four servers and runtime discovery are built and tested, and the HTTP layer serves `/health`, `/ready`, a sanitized error envelope and **`POST /v1/query`** — a question in, generated SQL and rows out. SSE streaming is served too. Decomposition, session memory, self-correction and the fine-tune are not built. The status block at the top of this file is the authority on what exists.
 
 Why validation and execution are separate capabilities, how blast radius is bounded on the read-only role, and why the linker was fine-tuned rather than over-retrieved are all recorded in [DECISIONS.md](docs/architecture/DECISIONS.md).
 
 ## Demo
 
-> **A curl is the demo today.** A React UI over the SSE stream, plus a GIF and screenshots, land with streaming. Exact commands and expected output: [DEMO_SCRIPT.md](docs/project/DEMO_SCRIPT.md).
+> **A curl is the demo today** — though `curl -N` now shows the answer arriving in stages rather than all at once. A React UI over the SSE stream, plus a GIF and screenshots, are what is left. Exact commands and expected output: [DEMO_SCRIPT.md](docs/project/DEMO_SCRIPT.md).
 
 ```console
 $ curl -s -X POST http://127.0.0.1:8000/v1/query -H 'Content-Type: application/json'     -d '{"question": "How many singers are there?"}'
@@ -236,7 +236,7 @@ Directories marked *(stub)* exist with a docstring stating which stage fills the
 │                               # shared by the MCP servers and the API, which are peers
 │                               # one connection for stdio, a pool for HTTP
 │   └── api/                    # FastAPI — /health, /ready, POST /v1/query,
-│                               # the error envelope, the body cap. SSE is next
+│                               # the error envelope, the body cap, SSE
 ├── web/                        # (planned) React + TypeScript demo UI — Stage 1
 ├── .github/
 │   └── pull_request_template.md
@@ -265,8 +265,8 @@ Directories marked *(stub)* exist with a docstring stating which stage fills the
 | Metric | Baseline | Current | Stage |
 |---|---|---|---|
 | **Conversion fidelity** (Spider dev, 1034 questions) | — | **99.3%** — 915 / 921, 19 of 20 databases fully verified | 2 |
-| Execution accuracy (Spider dev, 9 of 20 DBs, `k=30`) | 42.7% @ `k=10` | **80.9%** — single model, `retrieval-only`; 55.4%–97.1% across databases | 2 |
-| Schema-linking Recall@5 | — | **0.936** (R@1 0.687, R@10 0.982, R@20 1.000) | 5 |
+| Execution accuracy (Spider dev, 15 of 20 DBs, `k=30`) | 42.7% @ `k=10` | **81.4%** — single model, `retrieval-only`; 54.8%–100% across databases | 2 |
+| Schema-linking Recall@5 | — | **0.943** (R@1 0.747, R@10 0.984, R@20 0.998) | 5 |
 | Schema-linking Recall@10 | — | **0.982** — the fine-tune's target is R@1, not coverage | 5 |
 | Invalid-query rate | 20.7% | **3.3%** — pre-correction; the retry loop is Stage 4 | 4 |
 | Multi-step task success | TBD | TBD | 4 |

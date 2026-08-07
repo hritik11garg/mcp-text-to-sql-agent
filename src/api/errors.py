@@ -180,6 +180,38 @@ def code_for(exc: TextToSQLError) -> ErrorCode:
     return INTERNAL_ERROR
 
 
+def published(exc: TextToSQLError, *, context: str = "") -> tuple[ErrorCode, str]:
+    """The code and the message a caller is allowed to see, for one exception.
+
+    Extracted because there are now **two** places a domain failure reaches a
+    caller, and they must not decide this differently. The exception handlers
+    below run before a response begins; a streaming response has already sent
+    ``200`` and its headers by the time anything can fail, so it cannot use
+    them and has to render the failure into a terminal ``error`` event itself.
+
+    Two renderers, one rule. The rule is the sanitisation: a code mapping to
+    :data:`INTERNAL_ERROR` means *this project wrote the message but did not
+    intend it for a caller*, so it is logged and :data:`GENERIC_FAILURE` is
+    published. Leaving that inline in the handler would have meant the SSE path
+    re-deriving it, and re-deriving a "which of our messages are publishable"
+    judgement is how the strict copy and the lenient copy end up in one process.
+
+    Args:
+        exc: The domain failure.
+        context: What was being served, for the log line only. Never published.
+
+    Returns:
+        The published code, and the message to put in front of the caller.
+    """
+    error = code_for(exc)
+    if error is INTERNAL_ERROR:
+        where = f" on {context}" if context else ""
+        logger.error("unpublishable domain error%s", where, exc_info=exc)
+        return INTERNAL_ERROR, GENERIC_FAILURE
+    logger.info("%s: %s", error.code, type(exc).__name__)
+    return error, str(exc)
+
+
 def install(app: FastAPI) -> None:
     """Register the handlers. Order does not matter; coverage does.
 
@@ -196,19 +228,14 @@ def install(app: FastAPI) -> None:
 
     @app.exception_handler(TextToSQLError)
     async def _domain_error(request: Request, exc: TextToSQLError) -> JSONResponse:
-        error = code_for(exc)
-        if error is INTERNAL_ERROR:
-            # Mapped to internal_error means "this project wrote the message
-            # but did not intend it for a caller". Log it, publish nothing.
-            # `exc_info=exc` rather than `logger.exception`: a FastAPI handler
-            # is called with the exception as an argument, not from inside an
-            # `except` block, so there is no ambient exception for the implicit
-            # form to pick up -- it would log the message and drop the
-            # traceback, which is the only part an operator needs.
-            logger.error("unpublishable domain error on %s", request.url.path, exc_info=exc)
-            return envelope(INTERNAL_ERROR, GENERIC_FAILURE, request_id=request_id_of(request))
-        logger.info("%s: %s", error.code, type(exc).__name__)
-        return envelope(error, str(exc), request_id=request_id_of(request))
+        # The sanitisation lives in `published` so the streaming path shares it
+        # rather than reimplementing it. `exc_info=exc` rather than
+        # `logger.exception` happens in there for the same reason it did here:
+        # a FastAPI handler is called with the exception as an argument, not
+        # from inside an `except` block, so the implicit form would log the
+        # message and drop the traceback -- the only part an operator needs.
+        error, message = published(exc, context=request.url.path)
+        return envelope(error, message, request_id=request_id_of(request))
 
     @app.exception_handler(RequestValidationError)
     async def _validation_error(request: Request, exc: RequestValidationError) -> JSONResponse:
@@ -296,5 +323,6 @@ __all__ = [
     "code_for",
     "envelope",
     "install",
+    "published",
     "request_id_of",
 ]
