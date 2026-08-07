@@ -64,7 +64,9 @@ Cut reasons: `scope` (good, doesn't fit 6 weeks) · `unproven` (needs a measurem
 ### Incremental / streaming results
 `scope` · Stream rows as they arrive rather than materializing the full set.
 
-**Why not v1.** Meaningful only for large result sets, which the row limit prevents by design.
+**Not the same thing as the SSE streaming that shipped**, and the names collide badly enough to be worth separating. `stream: true` streams *progress* — which stage finished, the SQL, then the result set as one `rows` event. This entry is about streaming the **rows themselves**, cursor-style, so a client can render the first row before the last is fetched.
+
+**Why not v1.** Meaningful only for large result sets, which the row limit prevents by design. It also conflicts with `truncated`: a client that has already rendered rows cannot be told afterwards that the set was clipped, so the flag would have to move into the terminal event and clients would have to honour it retroactively.
 
 ---
 

@@ -95,7 +95,8 @@ Checklist to be verified, not just written:
 - [ ] **Authentication in front of the service** — there is none in the application. Until `API_KEY` exists this means a proxy, a gateway, or a network boundary that does the work
 - [ ] **A per-client rate limit at that same proxy** — the application's in-flight cap is process-wide, so one caller can consume the whole allowance. The per-client half needs an identity to key on, which is the same thing the row above is missing
 - [ ] **`replicas × API_POOL_MAX_SIZE` sized against the database**, not the application. Scaling replicas without accounting for it scales load onto one PostgreSQL
-- [ ] Rate limits active (request, token, and concurrent-stream)
+- [~] **Rate limits active** — the global in-flight cap exists and covers streams and plain requests together (`API_MAX_CONCURRENT_REQUESTS`, `429` rather than a queue). Request-rate and token limits do not, and the per-client half of the in-flight cap needs the authentication two rows above
+- [ ] **Response buffering disabled on every proxy in the path** — see §5.1. A buffering proxy turns an event stream into a slow non-streaming reply, and it fails silently: the answer still arrives, just all at once and possibly after the client gave up
 - [ ] Statement timeout set on the role *and* per transaction
 - [ ] Connection pool sized against database capacity, not application concurrency
 - [ ] Vectors indexed for the configured `RETRIEVER_MODEL` (the recorded `model_version` comes from the embedder — there is deliberately no separate version variable, see [CONFIG.md](CONFIG.md) §5)
@@ -109,9 +110,26 @@ Checklist to be verified, not just written:
 
 - **API/agent is stateless** — sessions live in Postgres, so replicas scale horizontally.
 - **The database is the shared bottleneck.** Total concurrent queries = replicas × `DB_POOL_MAX_SIZE`. Scaling replicas without accounting for this scales load onto a single database.
-- **SSE holds a connection per in-flight request**, so per-replica concurrency is bounded by connections, not CPU.
-- **The embedding model loads into each replica's memory.** With CPU inference this is also per-replica CPU cost; a shared embedding service is the alternative if it becomes the constraint.
+- **SSE holds a connection per in-flight request**, so per-replica concurrency is bounded by connections, not CPU — and a stream holds its slot for the *whole* answer, not just the moment of work. `API_MAX_CONCURRENT_REQUESTS` was sized against a provider's requests-per-minute for the non-streaming shape; it binds sooner once callers stream.
+- **The embedding model loads into each replica's memory, at startup.** With CPU inference this is also per-replica CPU cost; a shared embedding service is the alternative if it becomes the constraint. **Startup takes roughly twenty seconds because of it** — deliberately, since that cost was previously paid by whoever sent the first request ([ADR-040](../architecture/DECISIONS.md#adr-040--startup-opens-the-model-because-naming-it-is-not-loading-it)). Size readiness probe `initialDelaySeconds` and any deployment timeout above it, or an orchestrator will kill replicas that are loading correctly.
 - **MCP servers over HTTP scale independently.** `execute_sql` is the one to scale carefully — it is the only one that puts real load on the database.
+
+### 5.1 Proxy buffering, and why it fails quietly
+
+**Every reverse proxy in front of this service must be told not to buffer the response.** nginx, and several others, buffer by default — which for `text/event-stream` means holding every event until the response ends. The answer still arrives and is still correct, so nothing errors; the stream simply stops being a stream, and a client that was showing progress shows nothing for the whole answer.
+
+The application sends `X-Accel-Buffering: no` and `Cache-Control: no-cache` on every streaming response. The first is honoured by nginx and by proxies that copied its convention, and it is **not a general standard** — anything else in the path needs configuring directly:
+
+| Proxy | What to set |
+|---|---|
+| nginx | `proxy_buffering off;` on the location, or rely on the `X-Accel-Buffering` header this service already sends |
+| Apache `mod_proxy` | `SetEnv proxy-sendchunked` and no `mod_deflate` on `text/event-stream` |
+| HAProxy | No response buffering by default; check `option http-buffer-response` is **not** set |
+| CloudFront / most CDNs | Do not put a CDN in front of this path |
+
+**Compression is the other one.** A gzip layer that buffers to compress defeats streaming just as completely, and `text/event-stream` should be excluded from it.
+
+Idle timeouts matter too: the service sends a `: keepalive` comment every `API_STREAM_KEEPALIVE_SECONDS` (default 15) so an idle-timeout of 60 s is safe. Anything shorter than the keepalive interval will close working streams.
 
 ## 6. Monitoring
 

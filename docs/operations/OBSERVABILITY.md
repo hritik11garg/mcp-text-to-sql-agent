@@ -32,6 +32,18 @@ query.request                                    (root)
 
 **The retry loop must be visible as sibling spans**, not collapsed into one. A single `validate_sql` span with a duration hides the fact that it ran three times — and the number of attempts is one of the more informative signals this system produces.
 
+### What exists today, and what it already caught
+
+**A coarse version of this shipped before any of the above**, and it is worth recording because it justified the whole section. Every `POST /v1/query` response carries a `steps[]` array — one entry per phase, with `stage`, `duration_ms` and `status` — and the streaming response emits the same boundaries as `stage` events as they are crossed.
+
+That is not OpenTelemetry and does not replace it: it is per-request, not exported, not correlated across processes, and has no sampling. What it does have is the property this section is about — **boundaries in the right places.**
+
+**It found a defect within one request of existing.** The first version had a single `answer` stage covering retrieval *and* generation. A measured 29 s over that pair is equally consistent with a slow provider and a slow retriever — opposite problems, opposite fixes — and [PERFORMANCE.md](PERFORMANCE.md) had confidently recorded the wrong one. Splitting them showed retrieval at twenty seconds and generation at two, which turned out to be a model checkpoint loading inside the request ([ADR-040](../architecture/DECISIONS.md#adr-040--startup-opens-the-model-because-naming-it-is-not-loading-it)).
+
+The lesson generalises to the span design above: **an unattributed aggregate is not a measurement, it is a number.** `agent.step[0]` collapsing retrieval, generation and validation would reproduce exactly this failure with better tooling. The reason `llm.generate_sql` and `mcp.call schema_search` are separate spans is not tidiness — it is that a combined one cannot be diagnosed.
+
+**When tracing lands, `steps[]` should stay.** It is the only latency attribution a *caller* can see, and a client deciding whether to show a progress indicator cannot query the trace backend.
+
 ### Span attributes
 
 | Span | Attributes |

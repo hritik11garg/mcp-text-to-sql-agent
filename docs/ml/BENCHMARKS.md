@@ -71,7 +71,7 @@ python -m evals.run --questions <spider dev.json as JSONL> --split dev `
     --baseline retrieval-only --top-k 30 --limit 150 --out results/
 ```
 
-**Row 1 → 2 is the finding worth keeping.** `RETRIEVAL_TOP_K` defaults to 10, which is tuned for a large schema; a Spider database holds 10–67 catalog elements total, so `k=10` shows the model a partial schema and it correctly refuses rather than guessing. That refusal being a *distinct outcome* — `unanswerable`, separate from a malformed answer — is what pointed at retrieval instead of the prompt. Recall@20 is 1.0, which is why 30 is enough.
+**Row 1 → 2 is the finding worth keeping.** `RETRIEVAL_TOP_K` defaults to 10, which is tuned for a large schema; a Spider database holds 10–67 catalog elements total, so `k=10` shows the model a partial schema and it correctly refuses rather than guessing. That refusal being a *distinct outcome* — `unanswerable`, separate from a malformed answer — is what pointed at retrieval instead of the prompt. Recall@20 over that sample was 1.0, which is why 30 is enough — 0.998 over the full-split run, which does not change the conclusion.
 
 **Row 3 → 4 is a bug, not a model improvement.** Several open-weight models emit their reasoning in the `content` field and the answer after `</think>`; the whole monologue was being submitted as a query. `qwen3.6-27b` went from **0% to 96%** once it was stripped. It was invisible for as long as the configured model answered every question, which is precisely how a fallback chain hides a defect it was added to prevent.
 
@@ -200,11 +200,15 @@ Measured from gold-SQL elements with aliases resolved. Recall is computed whethe
 | 2026-08-06 | `15dcdf7` | Spider `dev.json` (379, 9 DBs) | `all-MiniLM-L6-v2` (baseline) | 0.687 | 0.936 | 0.982 | 1.000 | 2 unresolved references. Superseded by the row below |
 | 2026-08-07 | `15dcdf7` | Spider `dev.json` (744, 15 DBs) | `all-MiniLM-L6-v2` (baseline) | 0.747 | **0.943** | 0.984 | **0.998** | 16 unresolved references. **This is the number the fine-tune must beat.** R@20 stopped being 1.000 as coverage doubled — the headroom is small, not absent |
 
-**R@20 held at exactly 1.000 across both rows** — 150 questions over 3 databases and 379 over 9. A ceiling that survives a 2.5× increase in sample and a 3× increase in databases is a property of the corpus, not an artefact of a small sample, which is a materially stronger claim than the first row could make on its own.
+**R@20 held at exactly 1.000 across the first two rows and then did not.** 150 questions over 3 databases, 379 over 9 — both 1.000 — and 0.9983 at 744 over 15. The previous version of this section drew the obvious conclusion from the first two, and it is kept here as written because it is instructive:
 
-**Recall@20 = 1.0 is why `k=30` was enough, and it also bounds what Stage 5 can buy on Spider.** A retriever that already finds every needed element by rank 20 cannot be improved into a higher execution accuracy here — only into finding them *sooner*, which matters for prompt cost and for schemas too large to show 30 elements of. That is the argument for BIRD, and [R-01](../project/RISKS.md) predicted exactly this shape of null result.
+> *"A ceiling that survives a 2.5× increase in sample and a 3× increase in databases is a property of the corpus, not an artefact of a small sample."*
 
-**The gap that does matter is R@1 = 0.687 against R@10 = 0.982.** Ranking, not coverage, is where this retriever is weak on Spider — and the gap narrowed with more data (0.605 → 0.687 at R@1) rather than widening, so the earlier sample was pessimistic about the baseline as well as about accuracy.
+**The reasoning was sound and the conclusion was wrong**, which is a distinction worth being able to make. Two agreeing samples are evidence; they are not proof of a property that a third sample can falsify, and this one did. The failure mode is specific: a metric at its maximum has **no visible variance**, so repeated agreement is exactly what a small-sample artefact looks like too. A ceiling can only be confirmed by the coverage that would break it.
+
+**Recall@20 = 0.998 is still why `k=30` is enough, and it still bounds what Stage 5 can buy on Spider — with the bound stated as a number rather than as "cannot".** About one question in 600 has no correct element in the top 20, so a fine-tune has ~0.2 points to recover there and **5.7 at R@5**. A retriever that already finds nearly every needed element by rank 20 can mostly only be improved into finding them *sooner*, which matters for prompt cost and for schemas too large to show 30 elements of. That is the argument for BIRD, and [R-01](../project/RISKS.md) predicted exactly this shape of null result.
+
+**The gap that does matter is R@1 = 0.747 against R@10 = 0.984.** Ranking, not coverage, is where this retriever is weak on Spider — and the gap narrowed with more data (0.605 → 0.687 → 0.747 at R@1) rather than widening, so each earlier sample was pessimistic about the baseline as well as about accuracy. **R@1 is where the 25 points of headroom are**, and it is the metric Stage 5 should be judged on.
 
 ## 3. Invalid-query rate
 

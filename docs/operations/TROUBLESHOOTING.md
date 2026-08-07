@@ -259,7 +259,7 @@ Worth knowing *which* model did it: the configured model may not, while a fallba
 
 The model is refusing rather than guessing, which is correct behaviour and points at **retrieval, not the prompt**. `RETRIEVAL_TOP_K` defaults to 10; a Spider database holds 10–67 catalog elements in total, so `k=10` shows a partial schema and one missing column is enough for an honest refusal.
 
-Check Recall@k in the summary. Measured on Spider dev: `k=10` gave 42.7% execution accuracy with 75 of 150 unanswerable; `k=30` gave 72.7% with none, and Recall@20 is 1.0. Raise `--top-k` before touching the prompt.
+Check Recall@k in the summary. Measured on Spider dev: `k=10` gave 42.7% execution accuracy with 75 of 150 unanswerable; `k=30` gave 72.7% with none, and Recall@20 is 0.998 over the full split. Raise `--top-k` before touching the prompt.
 
 ### Costs are far higher than expected
 
@@ -377,9 +377,49 @@ Two different causes with the same code, told apart by the message:
 - **`too many questions in flight; the limit is N`** — `API_MAX_CONCURRENT_REQUESTS` is saturated. The cap is process-wide, not per client, so one caller can consume it entirely. Requests are refused rather than queued deliberately: a queue makes every caller wait, a refusal is something a client can back off from.
 - **`model '...' is rate limited or out of quota`** — the provider, not this service. See the LLM section above.
 
-### `400 invalid_request` naming `stream` or `session_id`
+### `400 invalid_request` naming `session_id`
 
-Working as intended. Those fields are in [API.md](../architecture/API.md)'s design and are **not built**, so they are refused by name rather than parsed and ignored ([ADR-038](../architecture/DECISIONS.md#adr-038--the-served-request-accepts-only-fields-that-do-something)). Drop the field; SSE and session memory are later stages.
+Working as intended. Session memory is in [API.md](../architecture/API.md)'s design and is **not built**, so the field is refused by name rather than parsed and ignored ([ADR-038](../architecture/DECISIONS.md#adr-038--the-served-request-accepts-only-fields-that-do-something)). Drop it; follow-up questions arrive with the agent layer.
+
+`stream` used to be refused the same way and **is now accepted** — if you are looking at an older client that special-cases a 400 here, it can stop.
+
+### A stream arrives all at once, at the end
+
+The events are correct and the timing is not, which means something in the path is buffering the response. Almost always a reverse proxy: nginx and several others buffer by default, and for `text/event-stream` that means holding every event until the response closes.
+
+It fails quietly — the answer is right, so nothing errors and no log line says anything. Confirm by going direct:
+
+```bash
+curl -N -X POST http://127.0.0.1:8000/v1/query   -H 'Content-Type: application/json'   -d '{"question": "how many singers?", "stream": true}'
+```
+
+If events arrive progressively against the service and all at once through the proxy, the proxy is the cause. [DEPLOYMENT.md](DEPLOYMENT.md) §5.1 lists what to set per proxy. The service already sends `X-Accel-Buffering: no`, which nginx honours and other proxies ignore.
+
+`curl` without `-N` buffers on its own, so check that first.
+
+### A stream is cut off partway, with no `done` or `error`
+
+Every path emits exactly one terminal event, so a stream that ends without one was cut by something outside the process. An idle timeout is the usual cause — but the service sends a `: keepalive` comment every `API_STREAM_KEEPALIVE_SECONDS` (default 15), so this only happens when an intermediary's timeout is *shorter* than the keepalive interval, or the keepalive was configured longer than the timeout.
+
+Check `API_STREAM_KEEPALIVE_SECONDS` against the shortest idle timeout in the path, and leave real margin.
+
+### `429` on a stream, immediately, with capacity apparently free
+
+Streams hold their slot for the whole answer, not just the moment of work, and they share one allowance with non-streaming requests. Four slow streams saturate the default `API_MAX_CONCURRENT_REQUESTS=4`.
+
+If slots seem never to come back, that would be a leak — the release is in the generator's `finally` and covers completion, failure and client disconnect ([SECURITY.md](SECURITY.md) §13.12). The cap is process-wide, so a restart clears it and is worth trying once as a diagnostic.
+
+### The first request after startup used to take twenty seconds
+
+Fixed, and the symptom is worth recognising if it reappears. The retriever's model loaded lazily on first use, so whoever asked first paid it; startup now reads `retriever.dimensions`, which cannot be answered without opening the checkpoint ([ADR-040](../architecture/DECISIONS.md#adr-040--startup-opens-the-model-because-naming-it-is-not-loading-it)).
+
+**Startup is now the slow part, by about twenty seconds**, and the log line that says it finished is:
+
+```
+ready: N tables in catalog, retriever model_version=..., dimensions=384
+```
+
+If an orchestrator kills the container before that appears, raise the readiness probe's `initialDelaySeconds`. If the line never appears and startup hangs there, the process is downloading the model — check network access to the model host, or set `RETRIEVER_LOCAL_FILES_ONLY=true` with the checkpoint already cached.
 
 ### `422 sql_validation_failed` with no detail
 

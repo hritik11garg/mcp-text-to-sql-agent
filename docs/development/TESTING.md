@@ -119,6 +119,11 @@ A third kind appears here and nowhere else: **source-level assertions**. That no
 **Boundary tests** are the newest kind, and their adversary is different from every other file here: someone with nothing but the ability to send an HTTP request. Every other test in this suite assumes an attacker who already reached the machine.
 
 - `tests/security/test_api_boundary.py` — the service is closed by default (loopback enforced, OpenAPI off, no CORS origin trusted); the probes reveal nothing (a fixed body for `/health`, two words per dependency for `/ready`); the error envelope publishes no exception text; and `X-Request-Id` is replaced rather than echoed. Every I/O boundary is faked through `create_app(resource_factory=...)`, deliberately — a security suite that needed Docker would be the first thing to get skipped.
+- `tests/unit/test_api_sse.py` — the event framing, whose whole subject is the newline. SSE ends a field at `
+` and an event at `
+
+`, so a raw newline in a payload does not corrupt the frame, it *ends* it, and the rest is parsed as a forged event. **Generated SQL is routinely multi-line**, so this is the ordinary case rather than an attack. The tests include the full forged-`done` payload and both JavaScript line separators (U+2028/U+2029), which are not newlines to Python but are to every browser client.
+- `tests/unit/test_api_stream.py` — the four properties a stream has and a JSON response does not: a slot is taken *before* the response begins, a slot comes back however the stream ends **including a client hanging up**, exactly one terminal event, and a streamed failure publishes no more than the non-streaming path does. The last is the one that could quietly diverge, since a stream cannot use the exception handlers.
 - `tests/security/test_readonly_assertion.py` — `assert_read_only` against a real PostgreSQL, in **both directions**. It passes for the read-only role and *fails* for the owner connection, because a check that has only ever been run against a passing case is a check nobody has seen work.
 
 Two more lessons, both about what a test holds fixed rather than what it asserts:
@@ -186,6 +191,12 @@ Coverage is a floor, not a goal. The security suite would contribute a handful o
 **Each row above selects by marker, which is why markers cannot be optional.** An unmarked test is not skipped — it is *deselected*, so it runs in none of these rows and appears in no report. That drifted: thirteen files had no marker, two of them under `tests/security/`, and the security row was gating on **156 of 206** tests while reporting green.
 
 **What the API suite cannot reach, and what caught it instead.** The boundary tests drive the app with a fake pool, which is right — putting the security suite behind a Docker daemon makes it the first thing to get skipped. It also means three real defects were invisible to them: `psycopg_pool` discarding a connection its `configure` hook left in a transaction, a missing `search_path`, and an audit row written with an empty `db_role`. All three were found by starting the process and sending a request. A fake stands in for an interface; these were properties of the implementation behind it, and **the seam that makes a test fast is the seam the test cannot see past.**
+
+**It happened again, and the second time is the more useful example.** A fourth defect passed 1306 tests: the retriever's model loaded lazily, so the startup check touched the object and left the checkpoint closed, and the first request paid twenty seconds. No fake could have caught it — the fakes have no checkpoint to leave unopened, and that is exactly what makes them fast.
+
+What caught it was **not a test at all**. It was per-stage timing added for a user-facing feature, on a real process, against a real model. The test written afterwards (`TestStartupOpensTheModel`) asserts the startup *reads the property whose side effect is the load* — it can only protect the fix, never have found it.
+
+So the honest statement of this suite's coverage is: it verifies behaviour against interfaces, and **it cannot verify claims about what the implementations behind those interfaces cost.** Latency, laziness, connection state and resource lifetime all live on the far side of every seam here. The countermeasure is not more fakes; it is running the thing and measuring it, which is why [PERFORMANCE.md](../operations/PERFORMANCE.md) §1 records live numbers rather than test assertions.
 
 Markers are therefore derived from the directory in `tests/conftest.py` rather than declared per module: `tests/security/` **is** the security layer, a hand-written marker can disagree with the path, and a derived one cannot. A test outside the known layers fails collection instead of vanishing. Layers overlap where they should — a security test needing a real database carries both `security` and `integration`, so it runs in both rows.
 

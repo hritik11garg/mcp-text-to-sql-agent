@@ -11,7 +11,7 @@ Versions map to build stages in [ROADMAP.md](docs/project/ROADMAP.md). Every ent
 ## [Unreleased]
 
 ### Added
-- Documentation scaffolding: 28 documents across `docs/` plus root-level README, CHANGELOG, CONTRIBUTING, LICENSE.
+- Documentation scaffolding: 28 documents — 24 under `docs/` plus root-level README, CHANGELOG, CONTRIBUTING and PROJECT (the PRD), alongside LICENSE.
 - `requirements.txt` / `requirements-dev.txt` pinned to versions verified against PyPI for Python 3.12.
 - `.python-version` pinning the interpreter to 3.12.
 - `pyproject.toml`: ruff, mypy (strict on `src/`), pytest markers, coverage floor.

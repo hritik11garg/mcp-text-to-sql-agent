@@ -27,7 +27,7 @@ Two diagrams are needed:
 
 ## 3. Tables (`agent_meta`)
 
-**Built** — `migrations/versions/001_agent_meta.py` is the authority. The shapes below match what is deployed, column for column.
+**Built** — `migrations/versions/001_extensions_and_agent_meta.py` is the authority. The shapes below match what is deployed, column for column.
 
 ### `schema_elements`
 One row per table or column in the target schema — the retrieval corpus.

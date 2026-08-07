@@ -4,7 +4,7 @@
 >
 > | Landed | Next |
 > |---|---|
-> | **Four MCP servers over stdio, with runtime `tools/list` discovery** | **Finishing the full-split run — 9 databases of 20 reached, paused on a daily token cap** |
+> | **Four MCP servers over stdio, with runtime `tools/list` discovery** | **Finishing the full-split run — 15 databases of 20, 744 of 921 questions, one more day of budget** |
 > | **Spider loaded — 20 dev databases converted to Postgres, 19 verified against every gold result** | Authentication, and a *per-client* in-flight cap that needs it |
 > | Postgres 16 + pgvector, Alembic migrations | The agent loop that drives the discovered tools |
 > | **`SELECT`-only role, proven by 30 negative tests — and now proven to be *the role the app connects as*** | Authentication; the API refuses to bind beyond loopback until it exists |
@@ -70,13 +70,35 @@ $ curl -s -X POST http://127.0.0.1:8000/v1/query -H 'Content-Type: application/j
   "sql": "SELECT COUNT(*) FROM singer;",
   "columns": ["count"], "rows": [[6]], "row_count": 1,
   "truncated": false, "executed": true,
-  "steps": [{"stage": "answer",  "duration_ms": 29081.0, "status": "ok"},
-            {"stage": "execute", "duration_ms": 27.5,    "status": "ok"}],
-  "usage": {"input_tokens": 501, "output_tokens": 43}
+  "steps": [{"stage": "answer",  "duration_ms": 621.4, "status": "ok"},
+            {"stage": "execute", "duration_ms": 17.0,  "status": "ok"}],
+  "usage": {"input_tokens": 346, "output_tokens": 158}
 }
 ```
 
+Or streamed, which is the same work reported as it happens — the generated SQL arrives before any row does:
+
+```console
+$ curl -sN -X POST http://127.0.0.1:8000/v1/query -H 'Content-Type: application/json'       -d '{"question": "How many singers are there?", "stream": true}'
+event: stage
+data: {"stage":"retrieve","status":"ok"}
+
+event: stage
+data: {"stage":"generate","status":"ok"}
+
+event: sql
+data: {"sql":"SELECT COUNT(*) FROM singer;","attempt":1}
+
+event: rows
+data: {"columns":["count"],"rows":[[6]],"truncated":false}
+
+event: done
+data: {"row_count":1,"executed":true,"steps":[...],"usage":{...}}
+```
+
 Run against Spider's `concert_singer` schema, converted and loaded by this repo's own benchmark loader. Ask for `max_rows: 3` on a larger result and the limit is injected into the AST, with `truncated: true` on the way back — a client is never handed a clipped result that claims to be complete.
+
+**Those timings replaced a recording of 29,081 ms**, which was narrated as a rate-limited provider and was actually a model checkpoint loading inside the first request. The per-stage events added for streaming are what separated retrieval from generation and showed it ([PERFORMANCE.md](docs/operations/PERFORMANCE.md) §1).
 
 ## Architecture
 
@@ -101,7 +123,7 @@ Run against Spider's `concert_singer` schema, converted and loaded by this repo'
    request correlation            startup proves this role cannot write
 ```
 
-Everything in that sketch exists except the two things it is drawn around: the **agent loop** and **`POST /v1/query`**. The MCP servers, the database layer and the FastAPI process are built; what is missing is the path between a request and a tool call.
+Everything in that sketch exists except the thing it is drawn around: the **agent loop**. The MCP servers, the database layer, the FastAPI process and `POST /v1/query` are built — a request is answered end to end. What is missing is the path that reaches the tools *through MCP* rather than calling the components directly, plus the decomposition and self-correction that path is for.
 
 ## Features
 
@@ -187,7 +209,7 @@ GET /health   →  200 {"status": "ok"}
 GET /ready    →  200 {"status": "ready", "dependencies": {...}}   or 503
 ```
 
-`POST /v1/query` is the next slice; the table in [API.md](docs/architecture/API.md) says which routes answer today and which are still design intent.
+`POST /v1/query` answers in both shapes — one JSON body, or `text/event-stream` with `stream: true`. The table in [API.md](docs/architecture/API.md) says which routes and which *events* answer today and which are still design intent.
 
 **It has no authentication, and it refuses to start on any address but loopback until it does.** Not a warning — a `ConfigurationError` before the socket is bound. An endpoint that runs model-generated SQL against your database and spends your token budget should not become reachable because somebody was debugging. To deploy it, publish the port from a container runtime or front it with a proxy that authenticates, so exposing it is a decision somebody made. [SECURITY.md §13](docs/operations/SECURITY.md) reviews the boundary in full.
 
@@ -236,7 +258,8 @@ Directories marked *(stub)* exist with a docstring stating which stage fills the
 │                               # shared by the MCP servers and the API, which are peers
 │                               # one connection for stdio, a pool for HTTP
 │   └── api/                    # FastAPI — /health, /ready, POST /v1/query,
-│                               # the error envelope, the body cap, SSE
+│                               # the error envelope, the body cap,
+│                               # sse.py — event framing, which is a security control
 ├── web/                        # (planned) React + TypeScript demo UI — Stage 1
 ├── .github/
 │   └── pull_request_template.md
@@ -260,18 +283,18 @@ Directories marked *(stub)* exist with a docstring stating which stage fills the
 
 ## Benchmarks
 
-> **A full-split run is in progress and these are its partial numbers, not a benchmark result.** The accuracy figures below cover **379 of 921 scoreable questions** — **9 of 20 databases**, up from the 3 the earlier smoke rows reached. The run is paused on a free-tier daily token cap and resumes into the same results directory, so these move rather than being replaced. Each is single-database execution accuracy, *not* Spider's stricter Test Suite Accuracy, and 113 questions are excluded with reasons. Every measurement is recorded in [BENCHMARKS.md](docs/ml/BENCHMARKS.md) with the commit and command it came from; nothing appears here that is not traceable to a row there.
+> **A full-split run is in progress and these are its partial numbers, not a benchmark result.** The accuracy figures below cover **744 of 921 scoreable questions** — **15 of 20 databases**, up from the 3 the earlier smoke rows reached. The run pauses on a free-tier daily token cap and resumes into the same results directory, so these move rather than being replaced; one more day of budget finishes the split. Each is single-database execution accuracy, *not* Spider's stricter Test Suite Accuracy, and 113 questions are excluded with reasons. Every measurement is recorded in [BENCHMARKS.md](docs/ml/BENCHMARKS.md) with the commit and command it came from; nothing appears here that is not traceable to a row there.
 
 | Metric | Baseline | Current | Stage |
 |---|---|---|---|
 | **Conversion fidelity** (Spider dev, 1034 questions) | — | **99.3%** — 915 / 921, 19 of 20 databases fully verified | 2 |
 | Execution accuracy (Spider dev, 15 of 20 DBs, `k=30`) | 42.7% @ `k=10` | **81.4%** — single model, `retrieval-only`; 54.8%–100% across databases | 2 |
 | Schema-linking Recall@5 | — | **0.943** (R@1 0.747, R@10 0.984, R@20 0.998) | 5 |
-| Schema-linking Recall@10 | — | **0.982** — the fine-tune's target is R@1, not coverage | 5 |
+| Schema-linking Recall@10 | — | **0.984** — the fine-tune's target is R@1, not coverage | 5 |
 | Invalid-query rate | 20.7% | **3.3%** — pre-correction; the retry loop is Stage 4 | 4 |
 | Multi-step task success | TBD | TBD | 4 |
 
-**Recall@20 = 1.0 bounds what Stage 5 can buy on Spider**, and it held at 1.0 across four times the questions and three times the databases. A retriever that already finds every needed element by rank 20 can only be improved into finding them *sooner* — which is the argument for BIRD, and the null result [R-01](docs/project/RISKS.md) predicted the shape of.
+**Recall@20 = 0.998 bounds what Stage 5 can buy on Spider.** It was 1.000 over 379 questions and 9 databases, and dropped to 0.998 as coverage grew to 744 and 15 — so the headroom is about one question in 600, which is very little rather than none. A retriever that already finds nearly every needed element by rank 20 can mostly only be improved into finding them *sooner*: **R@1 at 0.747 is where the 25 points of headroom actually are.** That is the argument for BIRD, whose schemas are large enough for retrieval to fail properly, and the shape of the null result [R-01](docs/project/RISKS.md) predicted.
 
 ## Documentation
 

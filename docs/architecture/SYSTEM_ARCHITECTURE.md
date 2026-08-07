@@ -1,6 +1,6 @@
 # System Architecture
 
-> **Status: mostly built.** §2.1 (the API layer) is built as far as its probes, error envelope and startup assertions — `POST /v1/query` is not, so the part of §3.1 that runs through the agent has no HTTP entry point yet. §2.3–§2.8 describe code that exists. **§2.2 (the agent loop) is the one component still entirely design intent** — its *client* half exists, the loop that drives it does not. The diagram image and every measured latency remain `TBD`.
+> **Status: mostly built.** §2.1 (the API layer) is built: probes, the error envelope, the startup assertions, and **`POST /v1/query` in both response shapes** — a question in, SQL and rows out, streamed as `stage`/`sql`/`rows`/`done` events when asked. §2.3–§2.8 describe code that exists. **§2.2 (the agent loop) is the one component still entirely design intent** — its *client* half exists, the loop that drives it does not, so the events in §3.1 that come from *decomposition* (`plan`, `tool_call`, `tool_result`) have nothing behind them yet. The diagram image remains `TBD`; latency is now measured, in [PERFORMANCE.md](../operations/PERFORMANCE.md) §1.
 
 ---
 
@@ -49,7 +49,7 @@ Thin. Accepts a question, opens an SSE stream, delegates to the agent, streams p
 
 Responsibilities: request validation, session correlation, SSE framing, rate limiting, health/readiness probes.
 
-**Built:** `create_app()`, `GET /health`, `GET /ready`, **`POST /v1/query`** (non-streaming), the error envelope, request correlation, the body cap, the concurrency cap and the read-only pool. **Not built:** SSE, sessions, authentication. [API.md](API.md) carries the per-route table.
+**Built:** `create_app()`, `GET /health`, `GET /ready`, **`POST /v1/query` streaming and non-streaming**, SSE framing, the error envelope, request correlation, the body cap, the concurrency cap (taken *before* a stream begins, since a `429` is not expressible after a `200` — [ADR-039](DECISIONS.md#adr-039--a-stream-is-admitted-before-it-is-a-stream)) and the read-only pool. **Not built:** sessions, authentication, and the four event types that come from the agent loop. [API.md](API.md) carries the per-route table.
 
 This is the project's **first surface reachable by someone who does not already have the machine** — every other component runs as a local process an operator started, so "who can call this" was answered by the operating system. Three consequences shape the layer rather than sit beside it:
 
@@ -200,6 +200,28 @@ The two entrypoints need different connection disciplines, and the difference is
 
 **The concurrency slot is taken before any work and refused rather than queued.** A queue converts an overload into latency every caller pays; a `429` is a fact a client can back off from.
 
+**With `stream: true` the same work runs, reported as it happens.** The shape changes in three ways that are worth having on this page, because each is a consequence of the response having already started:
+
+```
+  request ──▶ … ──▶ concurrency slot        ◀── taken HERE, synchronously,
+                          │                     while a 429 is still expressible
+                          ▼
+              StreamingResponse ──▶ 200 + headers on the wire
+                          │
+              _produce()  ├── stage ──┐
+              (a Task)    ├── sql     ├──▶ asyncio.Queue ──▶ generator ──▶ client
+                          ├── rows    │                          │
+                          └── done ───┘         heartbeat ───────┘  (queue idle)
+                          │
+                    finally: terminal event, then the slot returns
+```
+
+- **Admission moves in front of the response.** After `200`, a `429` cannot be expressed — the only refusal left is an `error` event on a response that already claimed success. So `QueryService.stream()` is deliberately not `async`: an async generator's body does not run until the first `__anext__`, by which point the route has returned ([ADR-039](DECISIONS.md#adr-039--a-stream-is-admitted-before-it-is-a-stream)).
+- **The work becomes a task, because the generator has a second job.** It forwards events *and* notices silence, emitting a comment frame so an intermediary does not close an idle connection. One coroutine awaiting the work directly could not do both.
+- **The slot returns on teardown, not on success.** The release is in the generator's `finally`, so a client that hangs up gives its slot back — otherwise four abandoned sockets take the endpoint out until restart ([SECURITY.md](../operations/SECURITY.md) §13.12).
+
+**Errors cross the same boundary and must not diverge.** A stream cannot use the exception handlers, so it renders failures itself — through the one function that decides which of this project's messages a caller may read. Two renderers, one rule.
+
 ## 3. Data flow
 
 ### 3.1 Single-query path
@@ -254,6 +276,6 @@ Planned analysis:
 - **Connection pooling** — `execute_sql` is the contended resource. Pool sizing bounds concurrent queries; excess requests queue rather than exhausting the database.
 - **Embedding index** — HNSW build time and memory grow with schema size; measured on the largest BIRD schema.
 - **Bottleneck ranking** — expected order: LLM generation latency ≫ query execution > retrieval > validation. To be confirmed rather than assumed.
-- **Backpressure** — SSE streams hold connections open for the request's lifetime; concurrent-stream limits are needed before this is production-shaped.
+- **Backpressure** — SSE streams hold connections open for the request's lifetime, and the in-flight cap counts them: streams and plain requests share one allowance rather than getting one each. Over the cap is a `429` rather than a queue, because a caller that has not received a response cannot back off from it. What is still missing is a *per-client* cap, which needs an identity to key on and therefore needs authentication.
 
 **What is true today, stated plainly:** every limit in this system is calibrated for a *single caller*. There is one read-only connection, not a pool, so two concurrent `execute_sql` calls contend — a real bug that is unreachable over stdio and becomes reachable the moment `POST /v1/query` exists. The upgrade path from one caller to many, including why per-machine installation is the wrong deployment shape, is [../project/FUTURE.md](../project/FUTURE.md) § Scale and concurrency.

@@ -275,17 +275,26 @@ To deploy: publish the port from your container runtime (`-p 8000:8000`) or put 
 
 **Over-limit requests are refused, not queued.** A queue converts an overload into latency that every caller waits out, including the ones who arrived first; a `429` is a fact the caller can act on. The default of 4 comes from the provider's requests-per-minute rather than from anything about this process.
 
+### Shipped under different names
+
+**Four rows sat in the *planned* table below after the thing they described had been built.** They are recorded here rather than deleted, because a planned name that outlives its implementation is worse than a missing row: an operator searches for `SSE_KEEPALIVE_MS`, does not find it, and concludes there are no keepalives. The unit changed too — the planned name said milliseconds and the setting takes **seconds**, so `SSE_KEEPALIVE_MS=15000` would have been both ignored and, if it had worked, wrong by a factor of a thousand.
+
+| Planned name | Shipped as | Note |
+|---|---|---|
+| `MAX_QUESTION_LENGTH` | `API_MAX_QUESTION_CHARS` | Same 2000 default |
+| `MAX_REQUEST_BYTES` | `API_MAX_BODY_BYTES` | Same 64 KiB default |
+| `MAX_CONCURRENT_STREAMS` | `API_MAX_CONCURRENT_REQUESTS` | **One cap covers both response shapes.** A separate stream limit would be a second policy, and the effective limit would be whichever was checked |
+| `SSE_KEEPALIVE_MS` | `API_STREAM_KEEPALIVE_SECONDS` | **Seconds, not milliseconds** |
+
+This is the same defect the project has now recorded three times in different clothes — two names for one thing, disagreeing. Here the second name never reached the code, so nothing broke; what it did was make the documentation describe a system that does not exist.
+
 ### Planned
 
 | Variable | Type | Default | Notes |
 |---|---|---|---|
 | `API_KEY` | SecretStr | — | Lands with authentication; until then, loopback is the control |
-| `MAX_QUESTION_LENGTH` | int | `2000` | With `POST /v1/query` |
-| `MAX_REQUEST_BYTES` | int | `65536` | Required **before** the first endpoint that accepts a body |
-| `RATE_LIMIT_PER_MINUTE` | int | `30` | Per client |
-| `MAX_CONCURRENT_STREAMS` | int | `10` | Global |
-| `MAX_IN_FLIGHT_PER_CLIENT` | int | `2` | The `429` in API.md; nothing emits it yet |
-| `SSE_KEEPALIVE_MS` | int | `15000` | Prevents proxy idle-timeouts |
+| `RATE_LIMIT_PER_MINUTE` | int | `30` | Per client. Needs an identity to key on, so it lands with `API_KEY` |
+| `MAX_IN_FLIGHT_PER_CLIENT` | int | `2` | The *per-client* half of the in-flight cap. The global half exists — see above. Same prerequisite: authentication |
 
 ## 7. Observability — planned (Stage 6)
 

@@ -1,6 +1,6 @@
 # Demo Script
 
-> **Status: Segment 1 is real and recorded. The rest are TBD per stage.** Structure and discipline below were decided at Stage 0; the first segment now has output that was actually produced rather than imagined.
+> **Status: Segment 1 and 1b are real and recorded, non-streaming and streamed. The rest are TBD per stage.** Structure and discipline below were decided at Stage 0; the first segment has output that was actually produced rather than imagined — **and was re-recorded on 2026-08-07 because the original narration turned out to be wrong**, which is itself the most useful thing in this file.
 
 Exact commands, exact questions, expected output. Written so the demo can be run under pressure without improvising — an interview is not the place to discover that the database needs re-seeding.
 
@@ -44,21 +44,25 @@ python -m api
 |---|---|---|
 | 1 | `curl localhost:8000/ready` | `{"status":"ready","dependencies":{"database":"up","database_readonly":"up"}}` |
 | 2 | Ask the question below | Correct answer, with the SQL |
-| 3 | Point at `steps[]` | Generation is 99.9% of the time |
+| 3 | Point at `steps[]` | Generation dominates; execution is ~2% |
 
-**Recorded output** — run 2026-08-06, commit `ec4b23f`:
+**Recorded output** — re-run 2026-08-07, commit `4a907d9`:
 
 ```console
 $ curl -s -X POST localhost:8000/v1/query -H 'Content-Type: application/json'     -d '{"question": "How many singers are there?"}'
 {"sql": "SELECT COUNT(*) FROM singer;",
  "columns": ["count"], "rows": [[6]], "row_count": 1,
  "truncated": false, "executed": true,
- "steps": [{"stage": "answer",  "duration_ms": 29081.0, "status": "ok"},
-           {"stage": "execute", "duration_ms": 27.5,    "status": "ok"}],
- "usage": {"input_tokens": 501, "output_tokens": 43}}
+ "steps": [{"stage": "answer",  "duration_ms": 621.4, "status": "ok"},
+           {"stage": "execute", "duration_ms": 17.0,  "status": "ok"}],
+ "usage": {"input_tokens": 346, "output_tokens": 158}}
 ```
 
-**Say the latency out loud rather than hoping nobody notices.** 29 seconds is a free-tier provider under load, and `steps[]` is what proves it: everything this project owns took 28 ms. That is a better answer than a fast demo on a paid key, because it shows the instrumentation working. See [../operations/PERFORMANCE.md](../operations/PERFORMANCE.md).
+**This replaced a recording that said 29,081 ms, and the story of why is a better demo beat than the number.** The earlier run was narrated as *"29 seconds is a free-tier provider under load, and `steps[]` proves it"* — confident, plausible, and wrong. `answer` covered retrieval *and* generation, and an aggregate over the two cannot distinguish a slow provider from a slow retriever. Splitting them for the streaming segment showed retrieval taking twenty seconds: the embedding model was loading its checkpoint inside the first request, because startup had only read the model's *name*.
+
+**If asked about performance, tell that story rather than quoting the number.** It demonstrates the thing worth demonstrating — that the instrumentation is real enough to contradict the documentation — and it ends with a measured fix: first request 21.8 s → 2.9 s, warm 0.6–1.8 s. See [../operations/PERFORMANCE.md](../operations/PERFORMANCE.md) §1 and [ADR-040](../architecture/DECISIONS.md#adr-040--startup-opens-the-model-because-naming-it-is-not-loading-it).
+
+**Warm the process before demoing.** Startup now takes ~20 s deliberately, and the first request after it is ~2.9 s. Send one throwaway question before anyone is watching.
 
 **Second question, showing the row limit is real:**
 
@@ -73,6 +77,40 @@ $ curl -s -X POST localhost:8000/v1/query -H 'Content-Type: application/json'   
 The generated SQL has **no `LIMIT`** and three rows came back with `truncated: true`. The limit was injected into the AST, not asked for in the prompt — an instruction to a model is not an enforcement mechanism ([ADR-005](../architecture/DECISIONS.md#adr-005--limits-enforced-at-the-ast-level-not-by-prompting)). Worth 20 seconds of narration; it is the difference between a bound and a request.
 
 **If the provider is out of quota**, the answer is `429 rate_limited` with the model named. That is a legitimate thing to show — it is the failure mode a free tier actually produces, and the envelope handles it — but have the recorded output above on a second screen.
+
+### 1b — The same question, streamed
+
+**Point being made:** the answer arrives in stages, and the SQL is visible before any row is.
+
+`curl -N` — without `-N`, curl buffers and the whole point is lost.
+
+**Recorded output** — 2026-08-07, commit `4a907d9`:
+
+```console
+$ curl -sN -X POST localhost:8000/v1/query -H 'Content-Type: application/json'       -d '{"question": "How many singers are there?", "stream": true}'
+event: stage
+data: {"stage":"retrieve","status":"ok"}
+
+event: stage
+data: {"stage":"generate","status":"ok"}
+
+event: sql
+data: {"sql":"SELECT COUNT(*) FROM singer;","attempt":1}
+
+event: rows
+data: {"columns":["count"],"rows":[[6]],"truncated":false}
+
+event: done
+data: {"row_count":1,"executed":true,"steps":[...],"usage":{...}}
+```
+
+**Two things to say, and neither is "look, it streams".**
+
+**The SQL arrives before the rows.** That ordering is the feature — a viewer sees what the system decided to run while it is still running, which is the thing worth seeing in a text-to-SQL system and the thing a spinner cannot show.
+
+**The events are only the ones with something behind them.** [API.md](../architecture/API.md) specifies nine event types; five are emitted. `session` is specified as *"first event, always sent"* and carries an id for memory that does not exist — emitting a fabricated one would make a client send it back on the next question and believe the follow-up had context. If asked why the implementation diverges from the spec, that is the answer, and it is the same rule as refusing `session_id` on the request ([ADR-038](../architecture/DECISIONS.md#adr-038--the-served-request-accepts-only-fields-that-do-something)).
+
+**If someone asks about the security of this**, the short version: SSE is newline-delimited, so a newline in a payload ends the event and forges the next one — and generated SQL is routinely multi-line, so it is the ordinary case rather than an attack. Every payload is JSON-encoded for that reason ([SECURITY.md](../operations/SECURITY.md) §13.11).
 
 ## Segment 2 — The validation tier (Stage 1)
 

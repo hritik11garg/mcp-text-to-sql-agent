@@ -91,7 +91,8 @@ The HTTP path is async. **The database layer is not** — this project holds syn
 3. **Every await has a timeout.** No unbounded `await`. Timeouts come from config, not literals.
 4. **Concurrent tool calls use `asyncio.gather`** with `return_exceptions=True` — one failing tool must not cancel the others silently.
 5. **Async context managers for resources.** Connections, MCP sessions, HTTP clients. No manual close.
-6. **No fire-and-forget tasks.** A bare `asyncio.create_task` without a reference can be garbage-collected mid-flight; keep the reference and await it.
+6. **No fire-and-forget tasks.** A bare `asyncio.create_task` without a reference can be garbage-collected mid-flight; keep the reference and await it. If a generator owns a task, cancel and await it in `finally` — that block runs on `GeneratorExit` too, which is how a disconnected client's work gets cleaned up.
+7. **An async generator's body does not run until the first `__anext__`.** So nothing in it happens before the caller starts iterating — which for a `StreamingResponse` is *after* the route returned and the status line was sent. Anything that must happen while a status code is still expressible — admission, authorization, a cheap rejection — belongs in a plain `def` that acquires and then *returns* the generator. `QueryService.stream()` is the worked example, and this rule is why it looks like it forgot to be `async` ([ADR-039](../architecture/DECISIONS.md#adr-039--a-stream-is-admitted-before-it-is-a-stream)).
 
 ### Rule 1 and the sync database layer
 

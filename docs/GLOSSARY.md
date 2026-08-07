@@ -49,7 +49,10 @@ Retained prior results within a conversation, so follow-ups ("now just the top t
 Feeding a database or validation error back into the agent as a structured observation so it can revise the SQL, rather than surfacing the error to the user.
 
 **SSE (Server-Sent Events)**
-A one-directional HTTP streaming protocol used here to push agent progress to the client as it happens.
+A one-directional HTTP streaming protocol used here to push progress to the client as it happens. **Newline-delimited**: a field ends at a newline and an *event* ends at a blank line, which is the property that makes it easy to get wrong — a raw newline in a payload does not corrupt a frame, it terminates it, and everything after is parsed as a new event.
+
+**Event injection (SSE)**
+Forging an event by getting a newline into a payload. The consequence is worse than the log-injection defect it resembles: a log reader sees a confusing line, an SSE client sees a structurally valid `done` or `rows` event and acts on it. Not hypothetical here, because generated SQL is routinely multi-line. The defence is that a payload is always a mapping serialised as JSON, never a string placed on a line.
 
 ---
 
@@ -212,6 +215,15 @@ Two answers to more work than capacity. Queueing accepts it and makes everyone w
 
 **Liveness vs readiness**
 Two questions an orchestrator asks for two different reasons. Liveness (`/health`) means *is this process alive* — failing it triggers a **restart**. Readiness (`/ready`) means *can it serve* — failing it **removes the replica from the load balancer** and leaves it running. Conflating them is how a thirty-second database blip becomes a fleet restart.
+
+**Comment frame / keepalive**
+A line beginning `:` in an SSE stream. Clients ignore it, so it keeps a connection warm through an intermediary's idle timeout without a client being able to mistake it for an event. Necessary because the slowest answers are otherwise the ones most likely to be killed by something in the middle.
+
+**Cold start (as a measurement hazard)**
+The first operation after a process begins, paying one-time costs — a model checkpoint read, a connection opened, a cache filled — that no later operation pays. Recording one as if it were typical is how this project documented 29 s as a provider's latency when the steady state was under two seconds. A single observation cannot tell the two apart; a second observation can.
+
+**Unattributed aggregate**
+A measurement covering more than one component, reported as if it named one. A single `answer` timing over retrieval *and* generation is equally consistent with a slow provider and a slow retriever — opposite problems with opposite fixes — so it supports a confident diagnosis without supporting a correct one. The reason instrumentation goes at component boundaries rather than at the request boundary.
 
 **Deselected**
 A test that a marker expression did not match. Distinct from *skipped*: a skip is reported on its own line with a reason, a deselection produces no output at all. The third state, and the reason `pytest -m security` was gating on 156 of 206 tests while reporting green.

@@ -6,6 +6,20 @@
 
 **Falsifiability.** If the fine-tune does not beat baseline-at-equal-k, that is a result and gets published here as one. See [ADR-006](../architecture/DECISIONS.md#adr-006--fine-tune-the-schema-linker-rather-than-retrieve-more-candidates).
 
+**The baseline now exists, and it constrains this stage before it starts.** Over 744 Spider dev questions and 15 databases ([BENCHMARKS.md](BENCHMARKS.md) §2): **R@1 0.747, R@5 0.943, R@10 0.984, R@20 0.998.**
+
+Read those as a headroom budget rather than a scoreboard:
+
+| Metric | Baseline | Headroom to perfect |
+|---|---|---|
+| R@1 | 0.747 | **25.3 points** — where a fine-tune can actually show something |
+| R@5 | 0.943 | 5.7 points |
+| R@20 | 0.998 | **0.2 points** — effectively none |
+
+**A1 and A2 are therefore not equally winnable, and the plan should say so now rather than discover it.** A2 asks whether fine-tuning at `k=5` beats the baseline at `k=20`; the baseline at `k=20` retrieves the right elements 99.8% of the time, so A2 is close to unwinnable *on Spider* by construction. That is not a reason to drop it — it is ADR-006's core claim and a null result is publishable — but it is a reason to run it on **BIRD**, whose schemas are larger and where retrieval has somewhere to fail.
+
+**R@20 was 1.000 at 379 questions and 0.998 at 744.** The headroom appeared as coverage grew, which is worth remembering before quoting any of these as final: they are still moving, and the run is not finished.
+
 ---
 
 ## 1. Task definition
