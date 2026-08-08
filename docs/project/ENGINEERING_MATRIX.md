@@ -25,8 +25,8 @@ Every category answers five questions, in order:
 
 | | Count | |
 |---|---|---|
-| 🟢 Done and proven | **15** | No action |
-| 🟡 Partial | **17** | Gaps named per row |
+| 🟢 Done and proven | **16** | No action |
+| 🟡 Partial | **16** | Gaps named per row |
 | 🔴 Applicable and absent | **7** | §14, §15, §22, §28, §30, §37, §38 |
 | ⚪ Not applicable | **6** | Declined on the record |
 
@@ -506,7 +506,7 @@ Every category answers five questions, in order:
 
 ---
 
-## 33 · Secrets management 🟡
+## 33 · Secrets management 🟢
 
 **Rule.** Secrets never enter version control, logs, error messages or client bundles, and are rotated when exposed.
 
@@ -518,7 +518,7 @@ Every category answers five questions, in order:
 
 **Failure mode.** A connection error that includes the DSN puts the password in a log, a terminal and possibly a bug report at once.
 
-**🔴 Open item, and it is the one live security defect in this matrix.** **The database password was exposed in a terminal traceback and has not been rotated.** Until it is, every control that assumes that credential is secret rests on the exposure not having been observed. `.env.bak-before-port-move` should be deleted afterwards.
+**Closed 2026-08-08.** Both credentials rotated, the exposed one confirmed rejected, `.env.bak-before-port-move` deleted, and a stale `.env` copy inside a benchmark `git worktree` found and removed. See [SECURITY_INVARIANTS.md](../operations/SECURITY_INVARIANTS.md) I-8 — including the two lessons the rotation itself produced: the leak recurred through an ad-hoc script that bypassed `libpq_dsn`, and a *partial* rotation locked the owner role out of TCP entirely.
 
 ---
 
@@ -708,7 +708,7 @@ Ranked by leverage — value delivered per unit of work — not by category numb
 
 | # | Action | Category | Why first |
 |---|---|---|---|
-| 1 | **Rotate the exposed database password**, then delete `.env.bak-before-port-move` | §33 | A live exposure. Every other control assumes this secret holds |
+| 1 | ~~Rotate the exposed database password~~ — **done 2026-08-08** | §33 | Both credentials rotated, old one confirmed dead, backup and worktree copy removed |
 | 2 | ~~Add a CI workflow~~ — **done 2026-08-08** | §24 | Landed. Next in that category: wire the unused 85% coverage floor, add dependency scanning, turn on branch protection |
 | 3 | **Benchmark the MCP path** | §19 | The headline claim is unmeasured, and the baseline it must reproduce now exists |
 | 4 | **Resolve the `locust` pin** — write the first concurrency test or remove the dependency | §25, §28 | A dependency justified by a comment; the project's own precedent says it goes |

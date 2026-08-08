@@ -112,7 +112,13 @@ Ten statements that must be true of every build. Each names the test that proves
 
 **Proven by.** `tests/security/test_dsn_handling.py` — `TestRedaction` (removes a password from a URL and from a keyword DSN, keeps the role name, redacts every occurrence) and `TestConnectionFailuresDoNotLeak`; `tests/security/test_mcp_boundary.py::TestFailuresDoNotNarrateInfrastructure`.
 
-**🔴 Residual — open, and it is the one live defect on this page.** **A database password was exposed in a terminal traceback and has not been rotated.** Until it is, this invariant holds for the code and not for the deployment. `.env.bak-before-port-move` should be deleted after rotation.
+**Residual — closed 2026-08-08.** A database password had been exposed in a terminal traceback. Both credentials — the owner role and the read-only login role — were rotated, the old owner credential was confirmed rejected, `.env.bak-before-port-move` was deleted, and a stale `.env` copy inside a `git worktree` used for a benchmark resume was found and removed. This invariant now holds for the deployment as well as the code.
+
+**Two things that rotation taught, both worth keeping.**
+
+**The exposure recurred during the fix.** An ad-hoc script connected with the raw `DATABASE_URL` instead of `libpq_dsn`, psycopg rejected the SQLAlchemy-style scheme, and its `ProgrammingError` quoted the whole connection string — password included — before any project code could redact it. **The project's own code was not at fault**: every `psycopg.connect` in `src/` passes through `libpq_dsn` and wraps failures in `redact_dsn`. The lesson is that the control lives in the calling convention, not in the library, so anything written outside that convention re-opens the hole. The rotation is what makes it a non-event rather than a second incident.
+
+**A partial rotation is worse than none.** Altering the owner password and then reconnecting *with the old one* to alter the second role locked the owner out of TCP authentication entirely — a credential that existed only in a dead process's memory. Recovery came through the container's local socket, which uses trust authentication. **Rotate every credential in one session, or hold a recovery path that does not depend on the credential being changed.**
 
 ---
 
@@ -161,7 +167,7 @@ Ten statements that must be true of every build. Each names the test that proves
 | I-5 | Row limit is enforced, not requested | 🟢 Proven |
 | I-6 | Every query has a timeout | 🟢 Proven |
 | I-7 | No non-loopback bind without authentication | 🟢 Proven |
-| I-8 | Secrets never leak | 🟡 **Code proven; a live credential is unrotated** |
+| I-8 | Secrets never leak | 🟢 Proven · credentials rotated 2026-08-08 |
 | I-9 | Nothing renders as markup | 🟢 Proven · one untested build coupling |
 | I-10 | Database content is not an instruction | 🟢 Proven |
 
