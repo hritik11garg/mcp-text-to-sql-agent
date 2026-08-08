@@ -202,6 +202,34 @@ Markers are therefore derived from the directory in `tests/conftest.py` rather t
 
 The general rule this is an instance of: **a selection mechanism needs a way to fail, or "nothing matched" and "everything passed" are the same output.**
 
+## 13. The browser client's tests
+
+`web/` runs its own suite — **Vitest with jsdom, 112 tests** — separate from pytest because it is a separate language and toolchain, not because it is held to a different standard. `npm test` in `web/`; `npm run typecheck` is the other half of the gate.
+
+**The type checker is doing real work here and is treated as part of the suite.** `strict`, plus `noUncheckedIndexedAccess` and `exactOptionalPropertyTypes`. The first is the one that matters for this codebase: `rows[i][j]` on a result set is genuinely `unknown | undefined`, and a compiler that pretends otherwise is a compiler agreeing that a ragged row cannot happen.
+
+| Layer | What it covers |
+|---|---|
+| **Protocol** (`api/sse.test.ts`) | Framing: chunk boundaries in the middle of a payload, a field name, and a `\r\n`; `\r`, `\n` and `\r\n` all terminating; comments ignored; unknown fields ignored; both size bounds refusing |
+| **Contract** (`api/events.test.ts`) | Every event shape the server can send, and every malformed one it must reject rather than repair |
+| **Logic** (`state/reducer.test.ts`) | Ordering, settling exactly once, arrival times becoming durations |
+| **Rendering** (`components/*.test.tsx`) | The claims a person reads: truncation, NULL versus empty string, and that untrusted text renders as text |
+| **Integration** (`App.test.tsx`) | The whole tree driven by a fake `ReadableStream` — the joins nothing else covers |
+
+**Three of these test properties rather than behaviour**, and those are the ones worth keeping.
+
+**The round trip.** Concatenating every token the SQL scanner emits returns the input exactly. That is not a highlighting test; it is what stops the page from showing SQL that is not the SQL that ran.
+
+**No markup, ever.** A cell value and a *column name* containing `<img src=x onerror=...>` must render as characters — asserted by `document.querySelector('img')` being null, not by comparing strings. A string comparison passes on an escaped attribute that a browser would still execute in another context; asking the DOM whether an element exists does not.
+
+**Linearity.** The scanner is fed 50,000 doubled quotes with a wall-clock assertion. It is the input that makes the obvious regular expression catastrophically backtrack, and a frozen tab is not a failure any other test would report.
+
+**Why `fetch` is faked rather than a server started.** The transport is one function and it is the only thing in `web/` that needs a network, so replacing it keeps the whole suite runnable with no Postgres, no model and no provider. Same reasoning as the injected answerer seam in §3 — and the same known cost, recorded in §11: **the seam that makes a test fast is the seam the test cannot see past.** Nothing in `web/` proves the real server emits the events these tests assume; that is what the recorded `curl` output in [DEMO_SCRIPT.md](../project/DEMO_SCRIPT.md) and the browser verification are for, and both are manual.
+
+**One assertion earned its place by failing.** A test looked for the text `execute` on the page and matched two elements — the phase on the time rail and the step in the server's footer. That is not a flaky test; it is the page correctly showing **two different measurements of the same phase** ([ADR-044](../architecture/DECISIONS.md#adr-044--two-clocks-both-reported-neither-substituted-for-the-other)). The fix was to scope the query to the rail, and the ambiguity was the finding.
+
+**Not tested, deliberately:** appearance. There are no snapshot tests and no visual regression tests. A snapshot of markup asserts that nobody changed the markup, which is true of every change, and it would have to be regenerated on every one of them — a test whose failure means nothing is worse than no test. Layout is verified by looking at it, in a browser, and that is stated as manual rather than dressed up as automated.
+
 ## 12. What is not tested
 
 Stated so the gap is deliberate rather than accidental:
@@ -210,3 +238,5 @@ Stated so the gap is deliberate rather than accidental:
 - **Prompt effectiveness.** Same — a prompt change is validated by an eval run.
 - **Third-party library correctness.** sqlglot's parser is trusted; `EXPLAIN` is the second opinion.
 - **Postgres itself.** The privilege system is the foundation, not a subject.
+- **The UI's appearance.** See §13 — verified by looking at it, and said so plainly rather than approximated with snapshots.
+- **The MCP servers' *accuracy*.** The contract suite proves they answer; no eval measures whether they answer as *well* as the direct path. The full-split baseline now exists, so this is a gap with a number-shaped hole in it rather than an unmeasurable one.

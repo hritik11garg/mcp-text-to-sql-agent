@@ -131,6 +131,18 @@ The application sends `X-Accel-Buffering: no` and `Cache-Control: no-cache` on e
 
 Idle timeouts matter too: the service sends a `: keepalive` comment every `API_STREAM_KEEPALIVE_SECONDS` (default 15) so an idle-timeout of 60 s is safe. Anything shorter than the keepalive interval will close working streams.
 
+### 5.2 Serving the demo UI
+
+`API_STATIC_DIR` points the API at a built bundle and it serves the page itself. Three deployment consequences.
+
+**The build is a separate step with a separate toolchain.** `npm ci && npm run build` in `web/` needs Node; the API image does not. Either build in a first stage and copy `web/dist` into the runtime image, or serve the page from a CDN and leave `API_STATIC_DIR` empty — but see the next point before choosing the second.
+
+**Serving it from the API is what keeps CORS closed.** Page and API on one origin means `API_CORS_ORIGINS` stays empty, which matters because there is no authentication: every entry in that list is an origin allowed to drive this endpoint from a visitor's browser. **Hosting the UI elsewhere requires opening CORS**, and that is a materially weaker position, not a deployment preference. [SECURITY.md](SECURITY.md) §13.15.
+
+**A wrong path is a failed start, not a 404.** If `API_STATIC_DIR` names something missing, something that is not a directory, or a directory with no `index.html`, the process raises `ConfigurationError` before binding. The last case is what an interrupted build leaves behind — and serving it would answer every request with a 404 from a process reporting itself healthy, which is the failure an orchestrator cannot see.
+
+**Cache behaviour is already correct and worth not overriding.** Bundles under `/assets/` are content-hashed and safe to cache hard; `index.html` is served `no-cache` because it is the document that points at the current hashes. A proxy configured to cache the root document is how a browser ends up asking for a bundle a redeploy replaced.
+
 ## 6. Monitoring
 
 Detail in [OBSERVABILITY.md](OBSERVABILITY.md). Minimum for a deployment to be considered supportable:

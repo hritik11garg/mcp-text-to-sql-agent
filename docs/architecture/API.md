@@ -123,7 +123,7 @@ Any other field is a `400`. The body is capped at `API_MAX_BODY_BYTES` before pa
 
 | Event | Payload | Meaning |
 |---|---|---|
-| `stage` | `{"stage": "retrieve", "status": "ok"}` | A phase completed. `retrieve`, `generate`, `validate` |
+| `stage` | `{"stage": "retrieve", "status": "ok"}` | A phase completed. `retrieve`, `generate`, then either `execute` or — with `explain_only` — `validate` |
 | `sql` | `{"sql": "...", "attempt": 1}` | Candidate SQL generated |
 | `rows` | `{"columns": [...], "rows": [...], "truncated": false}` | Result set |
 | `done` | `{"row_count": 2, "executed": true, "steps": [...], "usage": {...}}` | Terminal success event |
@@ -138,6 +138,14 @@ Any other field is a `400`. The body is capped at `API_MAX_BODY_BYTES` before pa
 | `answer_delta` | Prose synthesis (Stage 4) |
 
 `stage` is an addition to the original specification rather than one of its events. It exists because the specified list has nothing to send during retrieval and generation, which is where the time goes — and it earned its place immediately: separating `retrieve` from `generate` is what found [ADR-040](DECISIONS.md#adr-040--startup-opens-the-model-because-naming-it-is-not-loading-it).
+
+**Every phase announces itself, including execution.** Until 2026-08-08 the ordinary path emitted `retrieve` and `generate` only, while `explain_only` also emitted `validate` — so a client watching progress had to infer that execution had finished from the arrival of the `rows` event. That is an inference about the server's control flow, and inferences are what these events exist to make unnecessary. `stage: execute` is now emitted **before** the `rows` it produced. Additive: no existing event changed shape, and a client that ignored unknown stages is unaffected.
+
+**`stage` and `steps[]` do not report the same phases, and this is worth knowing before writing a client.** The stream announces three phases — `retrieve`, `generate`, `execute`. The `steps[]` array on `done` reports two — `answer`, which covers retrieval *and* generation together, and `execute`. They are produced by different mechanisms: `stage` events come from an observer on the answering path, while `steps[]` is the timing wrapper around the two calls the route makes.
+
+**Do not merge them.** There is no correct way to distribute one `answer` duration across two `stage` events, so a client that tries produces a number that is neither measurement. Report them separately if both are needed, and label which is which — [ADR-044](DECISIONS.md#adr-044--two-clocks-both-reported-neither-substituted-for-the-other) is the same decision on the browser side, where the client's own arrival times are a third measurement again.
+
+**Unifying them is deliberately not done yet.** Splitting `steps[]` into `retrieve`/`generate` would change a published response field, and the split is only meaningful because `answer` covers a phase whose cost moves — which is precisely what [ADR-040](DECISIONS.md#adr-040--startup-opens-the-model-because-naming-it-is-not-loading-it) was about. It is recorded here rather than fixed silently.
 
 **Exactly one of `done` or `error` terminates the stream.** A stream that stops without one leaves a client waiting on a socket that will never say anything again, so every exit path — including an unhandled exception — emits a terminal event.
 
@@ -157,11 +165,14 @@ data: {"stage":"generate","status":"ok"}
 event: sql
 data: {"sql":"SELECT COUNT(*) FROM singer;","attempt":1}
 
+event: stage
+data: {"stage":"execute","status":"ok"}
+
 event: rows
 data: {"columns":["count"],"rows":[[6]],"truncated":false}
 
 event: done
-data: {"row_count":1,"executed":true,"steps":[{"stage":"answer","duration_ms":621.4,"status":"ok"},{"stage":"execute","duration_ms":17.0,"status":"ok"}],"usage":{"input_tokens":346,"output_tokens":158}}
+data: {"row_count":1,"executed":true,"steps":[{"stage":"answer","duration_ms":495.8,"status":"ok"},{"stage":"execute","duration_ms":10.2,"status":"ok"}],"usage":{"input_tokens":501,"output_tokens":43}}
 ```
 
 **Every payload is JSON, always.** SSE is newline-delimited — a field ends at `\n` and an event ends at `\n\n` — so a raw newline in a payload does not corrupt the frame, it *ends* it, and everything after is parsed as a new event. Generated SQL is routinely multi-line, so this is the ordinary case rather than an attack. JSON encoding is what makes it harmless; see [SECURITY.md](../operations/SECURITY.md) §13.11.

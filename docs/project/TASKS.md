@@ -91,24 +91,29 @@ Convention: `[ ]` open · `[x]` done · `[~]` in progress · `[!]` blocked
 - [x] **`question` length bound, concurrency cap, connection pool, blocking work off the event loop** — landed with `POST /v1/query`. See SECURITY.md §13.9 for what is done and what is honestly partial
 - [ ] **A *per-client* in-flight cap** — today's cap is process-wide, so one caller can consume the whole allowance. Needs an identity to key on, which needs authentication
 - [ ] **Close the `explain_only` timing channel** — the message no longer names identifiers, but a real name still reaches `EXPLAIN` and a determined caller may distinguish it by latency. Also needs authentication
-- [ ] **Fingerprint the code the harness loads, not the commit** — `RunManifest.config_fingerprint` includes the repo HEAD, so *any* commit refuses a resume, documentation included. Day 2 of the full-split run had to be resumed from a `git worktree` at the recorded commit. A digest over `src/`, or over the modules on the answering path, would refuse the changes that matter and pass the ones that do not. Not changed mid-run: it would orphan 732 answered questions. See BENCHMARKS.md §1.3
+- [ ] **Fingerprint the code the harness loads, not the commit** — **unblocked 2026-08-08; the run it would have orphaned is finished.** `RunManifest.config_fingerprint` includes the repo HEAD, so *any* commit refuses a resume, documentation included; days 2 and 3 both had to be resumed from a `git worktree` at the recorded commit. A digest over the modules on the answering path would refuse the changes that matter and pass the ones that do not — **and would close a second hole day 3 exposed**: the fingerprint is computed from the repository the process stands in, while the editable install can be importing `src/` from a different one, so the guard can pass on exactly the run it exists to refuse. See BENCHMARKS.md §1.3
+- [ ] **Derive `retriever_model_version` from the catalog** — **unblocked 2026-08-08.** It defaults to the empty string, so the one check standing between a baseline run and a fine-tuned one resuming into each other is inert unless an operator remembers a flag. Must land before Stage 5 produces a second retriever, or the guard is worthless exactly when it is first needed
+- [ ] **A `with-validation` run over the full split** — the completed run is `retrieval-only`, so `validation_attempts` is 0 on all 921 artifacts *by construction*. Self-correction has no measured value, the `Invalid (post)` column in BENCHMARKS §3 is empty, and the UI has a "self-corrected" state no run has ever reached. Cheap now; it was blocked by the run in progress
+- [ ] **An eval that routes through the MCP servers** — today's 79.9% measures the direct answering path. Stage 3's last checkbox ("accuracy unchanged") has been unmeasurable for want of a baseline; the baseline now exists. The servers are the only place a serialization or limit-clamping difference could hide, because they are the only place the components are reached over a wire
 - [ ] **Authentication** — the API has none. `API_HOST` is refused on anything but loopback until it does, which is a containment measure, not a substitute
 
 ### Demo UI
-- [ ] Vite + React + TypeScript app under `web/`, no server-side rendering
-- [ ] `POST /v1/query` over SSE — render each agent step as it arrives
-- [ ] Show the **generated SQL**, not just the answer — it is the thing worth seeing
-- [ ] Surface validation attempts and retries, since the self-correction loop is the point
-- [ ] Surface `truncated` explicitly — never present a cut result as complete
-- [ ] Served by FastAPI as static files in production; Vite dev server locally
+- [x] Vite + React + TypeScript app under `web/`, no server-side rendering — 112 tests, `tsc --noEmit` strict with `noUncheckedIndexedAccess`
+- [x] `POST /v1/query` over SSE — render each phase as it arrives. **The client frames the stream itself**: `EventSource` is `GET`-only and a question in a URL is logged by every intermediary, so the body is read from `fetch` and parsed by a bounded incremental parser (a chunk boundary is not a line boundary, and an unterminated line is a refusal rather than a truncation)
+- [x] Show the **generated SQL**, not just the answer — highlighted by a tokenizer returning React elements, because every highlighter that returns markup would need `dangerouslySetInnerHTML` on text a model wrote from a stranger's question
+- [x] Surface `truncated` explicitly — never present a cut result as complete. The browser's own display limit is reported **separately**, since "the database had more rows" and "this page is showing fewer than it received" are different facts
+- [x] Served by FastAPI as static files behind `API_STATIC_DIR`, with a CSP; Vite dev server proxies locally. Both keep page and API on one origin, so `API_CORS_ORIGINS` stays empty
+- [x] **Every phase drawn against a real time axis** — not on the original list. Added because a single `answer` aggregate once hid a 20-second model load, and a stepper with checkmarks would hide it again
+- [~] Surface validation attempts and retries, since the self-correction loop is the point — the UI renders `attempt > 1` as "self-corrected", but **no run has ever produced one**: `retrieval-only` executes no validator. Unverifiable against real data until a `with-validation` run exists
 - [ ] Screenshots + GIF for the README
 
 ### Stage 1 close-out
-- [ ] End-to-end from clean checkout
-- [ ] Fill in SYSTEM_ARCHITECTURE, API, CONFIG, PROMPTS with real content
-- [ ] Architecture diagram committed
-- [ ] First DEMO_SCRIPT entry verified
+- [ ] End-to-end from clean checkout — the last component blocker is loading a target dataset
+- [x] Fill in SYSTEM_ARCHITECTURE, API, CONFIG, PROMPTS with real content
+- [ ] Architecture diagram committed — `docs/assets/` is still empty
+- [x] **First DEMO_SCRIPT entry verified** — re-recorded 2026-08-08 against the current code, in both response shapes and in a browser
 - [ ] CHANGELOG v0.1
+- [ ] Screenshots and a GIF — the page is verified working in Chrome, but nothing is captured for the README yet
 
 ## Stage 2 — Eval harness
 
@@ -128,8 +133,8 @@ Convention: `[ ]` open · `[x]` done · `[~]` in progress · `[!]` blocked
 - [x] **Wire the pipeline into the answerer seam** — it was not one line. A benchmark is 20 databases and every component was single-schema, so the seam is a per-database scope (ADR-031); gold SQL must be the statement verification produced rather than one re-derived at run time (ADR-030); and the eval's query runner cannot be the production executor without truncating both sides of a comparison into a false mismatch (ADR-032). Three baselines are wired: `full-schema`, `retrieval-only`, `with-validation`
 - [x] **`benchmark.load index`** — builds the schema catalog per converted database, introspecting as the read-only role. Retrieval, identifier resolution and the full-schema prompt all read it; without it every question fails for the same uninformative reason
 - [x] **Run it** — Spider dev indexed (20 databases, 519 catalog elements) and answered against. The first runs found five more defects, two worth 30 accuracy points each: a `<think>` block submitted as SQL, and `RETRIEVAL_TOP_K=10` starving a schema that has 10–67 elements
-- [~] Baseline runs: no-retrieval, retrieval-only, +validation — `retrieval-only` measured over **744 of 921 questions / 15 of 20 databases** at k=30, single model, from a full-split run pausing on the daily token cap and resuming into the same directory; `full-schema` and `with-validation` are wired and unrun
-- [~] **A full-split run** — under way in `results/spider-full-20260806`, single model with the fallback chain disabled so a cap cannot silently produce a blend. Day 1 reached 379 questions and 9 databases; **day 2 resumed correctly and reached 744 of 921 and 15 of 20**, halting on the cap again with 177 untouched. One more day finishes it. Day 2 had to be run from a `git worktree` at the manifest's commit, because the fingerprint refused a resume from a moved tree — BENCHMARKS.md §1.3
+- [~] Baseline runs: no-retrieval, retrieval-only, +validation — `retrieval-only` measured over the **whole split, 921 of 921 questions and 20 of 20 databases** at k=30, single model; `full-schema` and `with-validation` are wired and unrun
+- [x] **A full-split run** — **complete 2026-08-08** in `results/spider-full-20260806`: 921 of 921 scoreable questions, 20 of 20 databases, **79.9%**, single model with the fallback chain disabled so a cap could not silently produce a blend. Three days and three daily budgets — 379 → 744 → 921 — resuming into the same directory each time, with days 2 and 3 run from a `git worktree` at the manifest's commit because the fingerprint refused a resume from a moved tree (BENCHMARKS.md §1.3). **Zero infrastructure errors in the final result**: each of days 1 and 2 ended with 12 quota failures, and day 3 re-attempted rather than retired them
 - [~] BENCHMARKS rows + DATASETS/EVALUATION filled in — §0 fidelity, §1 execution accuracy, §2 recall and §3 invalid-query rate all carry measured values; every row states what its own sample covers. EVALUATION §6 and the README table restate them instead of contradicting them
 - [x] **Make a run's commit trustworthy** — every recorded run named the commit *before* the code that produced it, because all five were made from working trees whose fixes were not yet committed. `current_commit()` now marks `-dirty` and `-unverified`
 - [ ] **Derive `retriever_model_version` from the catalog instead of a CLI flag** — it defaults to the empty string and is *in the configuration fingerprint*, so the guard that refuses to resume a run whose retriever changed is inert unless an operator remembers `--retriever`. A baseline run and a fine-tuned run would resume into each other. Deferred until the current run finishes, because changing a fingerprint input orphans its 367 answered questions; see BENCHMARKS §1.1

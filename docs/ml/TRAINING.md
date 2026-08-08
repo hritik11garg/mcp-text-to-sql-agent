@@ -6,19 +6,22 @@
 
 **Falsifiability.** If the fine-tune does not beat baseline-at-equal-k, that is a result and gets published here as one. See [ADR-006](../architecture/DECISIONS.md#adr-006--fine-tune-the-schema-linker-rather-than-retrieve-more-candidates).
 
-**The baseline now exists, and it constrains this stage before it starts.** Over 744 Spider dev questions and 15 databases ([BENCHMARKS.md](BENCHMARKS.md) §2): **R@1 0.747, R@5 0.943, R@10 0.984, R@20 0.998.**
+**The baseline is final, and it constrains this stage before it starts.** Over the **whole** Spider dev split — 921 questions, all 20 databases ([BENCHMARKS.md](BENCHMARKS.md) §2): **R@1 0.7445, R@5 0.9435, R@10 0.9828, R@20 0.9973.**
 
 Read those as a headroom budget rather than a scoreboard:
 
 | Metric | Baseline | Headroom to perfect |
 |---|---|---|
-| R@1 | 0.747 | **25.3 points** — where a fine-tune can actually show something |
-| R@5 | 0.943 | 5.7 points |
-| R@20 | 0.998 | **0.2 points** — effectively none |
+| R@1 | 0.7445 | **25.6 points** — where a fine-tune can actually show something |
+| R@5 | 0.9435 | 5.65 points |
+| R@10 | 0.9828 | 1.7 points |
+| R@20 | 0.9973 | **0.27 points** — effectively none |
 
-**A1 and A2 are therefore not equally winnable, and the plan should say so now rather than discover it.** A2 asks whether fine-tuning at `k=5` beats the baseline at `k=20`; the baseline at `k=20` retrieves the right elements 99.8% of the time, so A2 is close to unwinnable *on Spider* by construction. That is not a reason to drop it — it is ADR-006's core claim and a null result is publishable — but it is a reason to run it on **BIRD**, whose schemas are larger and where retrieval has somewhere to fail.
+**A1 and A2 are therefore not equally winnable, and the plan says so now rather than discovering it.** A2 asks whether fine-tuning at `k=5` beats the baseline at `k=20`; the baseline at `k=20` retrieves the right elements 99.73% of the time, so A2 is close to unwinnable *on Spider* by construction. That is not a reason to drop it — it is ADR-006's core claim and a null result is publishable — but it is a reason to run it on **BIRD**, whose schemas are larger and where retrieval has somewhere to fail.
 
-**R@20 was 1.000 at 379 questions and 0.998 at 744.** The headroom appeared as coverage grew, which is worth remembering before quoting any of these as final: they are still moving, and the run is not finished.
+**Every one of these numbers moved as coverage grew, and two moved in the direction that matters here.** R@20 read 1.000 at 150 questions, 1.000 at 379, 0.9983 at 744, and 0.9973 at 921 — it was never a ceiling, it was a metric at its maximum with no visible variance. R@1 read 0.605 → 0.687 → 0.747 → 0.7445; the first three rises invited reading a trend, and the full split settled fractionally *below* the third. **Both are now measured over the entire corpus, so they have stopped moving** — which is exactly what a baseline has to do before anything is compared against it.
+
+**Judge Stage 5 against this row and no earlier one.** A fine-tune compared against the 379-question baseline would be credited with about 6 points of R@1 that are sampling noise, and would be measured against an R@20 of 1.000 that never existed.
 
 ---
 

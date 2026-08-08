@@ -51,6 +51,19 @@ Feeding a database or validation error back into the agent as a structured obser
 **SSE (Server-Sent Events)**
 A one-directional HTTP streaming protocol used here to push progress to the client as it happens. **Newline-delimited**: a field ends at a newline and an *event* ends at a blank line, which is the property that makes it easy to get wrong — a raw newline in a payload does not corrupt a frame, it terminates it, and everything after is parsed as a new event.
 
+**`EventSource`**
+The browser's built-in SSE client. Issues **`GET` only**, which is why this project's UI does not use it: reaching it would mean putting the question in a URL, where every intermediary on the path logs it and the browser keeps it in history. The UI reads the response body from `fetch` and frames SSE itself. See [ADR-041](architecture/DECISIONS.md#adr-041--the-ui-frames-the-sse-stream-itself-because-eventsource-cannot-post).
+
+**Chunk boundary**
+Where one `read()` of a network stream ends. It bears **no relationship to a line or event boundary** — a single event can arrive in three pieces, and a `
+` can be split across two. An SSE parser that assumes otherwise passes every local test and fails intermittently against a real network, on the longest payloads first.
+
+**CSP (Content-Security-Policy)**
+A response header telling the browser which origins a page may load scripts, styles and connections from. Here it is `default-src 'self'` with `script-src 'self'` and no `unsafe-inline`, so an injected `<script>` would not execute and `connect-src 'self'` means an injected script could not send a result set anywhere. **Defence in depth, not the control** — the control is that the page never renders markup at all.
+
+**Time rail**
+The UI's progress display: each phase drawn as a segment whose length is that phase's real duration, on a square-root-compressed scale that is labelled as compressed. Distinguished from a stepper, which reports the same thing whether a phase took 12 ms or 20 s — the distinction that once let a twenty-second model load pass as a slow provider.
+
 **Event injection (SSE)**
 Forging an event by getting a newline into a payload. The consequence is worse than the log-injection defect it resembles: a log reader sees a confusing line, an SSE client sees a structurally valid `done` or `rows` event and acts on it. Not hypothetical here, because generated SQL is routinely multi-line. The defence is that a payload is always a mapping serialised as JSON, never a string placed on a line.
 

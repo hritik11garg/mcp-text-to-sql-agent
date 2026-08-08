@@ -258,6 +258,7 @@ The HTTP layer exists as of v0.1: `create_app()`, `/health`, `/ready`, the error
 | `API_POOL_MIN_SIZE` | int | `1` | Read-only pool floor |
 | `API_POOL_MAX_SIZE` | int | `8` | Read-only pool ceiling. **Must exceed `API_MAX_CONCURRENT_REQUESTS`** |
 | `API_STREAM_KEEPALIVE_SECONDS` | float | `15.0` | Silence allowed on a `stream: true` response before a `: keepalive` comment |
+| `API_STATIC_DIR` | str | `""` (none) | Built demo-UI directory served at `/`. Refuses to start if set and unusable |
 
 **Binding beyond loopback is a startup error, not a warning.** This page has said so since Stage 0, conditioned on `API_KEY`; the honest form today is stricter, because `API_KEY` does not exist yet. There is no authentication of any kind, so no non-loopback bind address is safe, and the process refuses to start on one. All four spellings of loopback are accepted (`127.0.0.1`, `127.0.0.2`, `::1`, `localhost`) so that nobody has to work around the control to get a legitimate configuration running.
 
@@ -266,6 +267,12 @@ To deploy: publish the port from your container runtime (`-p 8000:8000`) or put 
 `API_DOCS_ENABLED` governs all three documentation routes together, `openapi.json` included. Clearing only `docs_url` hides the rendered page while leaving the machine-readable route map reachable, which helps nobody except somebody enumerating the service.
 
 **`API_STREAM_KEEPALIVE_SECONDS` is a liveness setting, not a cosmetic one.** Generation against a free-tier provider takes tens of seconds — [PERFORMANCE.md](PERFORMANCE.md) measures 0.6–1.8 s warm on a small schema, and the slow schemas are slower — and a proxy, load balancer or browser that sees no bytes for that long is entitled to treat the connection as dead. Without the keepalive, **the slowest requests are the ones most likely to be killed**, which is the opposite of what streaming is for. Fifteen seconds because the common idle timeout among the things in the way is sixty, and a keepalive has to fit comfortably inside the smallest one to be worth having.
+
+**`API_STATIC_DIR` is empty by default because `web/dist` is a build artifact.** A fresh checkout does not have it, so a server that insisted on it would refuse to start for everyone who only wants the API. Set it and the process serves the built page at `/` and its hashed bundles under `/assets/` — and **nothing else**: there is deliberately no catch-all static mount, because a mount at `/` answers every unmatched path with the demo page, turning a typo'd `/v1/quary` into `200 text/html` and erasing the error contract on the endpoints most likely to be mistyped. Every other path keeps its JSON `404`.
+
+Set to a path that is missing, is not a directory, or holds no `index.html`, **the process refuses to start**. The last case is what an interrupted `npm run build` leaves behind, and serving it would answer every request with a 404 while the process reported itself healthy.
+
+Serving the UI here is also what lets `API_CORS_ORIGINS` stay empty: the page and the API are one origin, so no browser origin has to be trusted. A separately hosted UI would need an entry in that list, and every entry is an origin allowed to drive an endpoint that has no authentication. Locally, the Vite dev server proxies instead — same property, no exception needed.
 
 **The pool must be larger than the request cap, and startup refuses it otherwise.** Sized equal, saturated traffic holds every connection and leaves none for the readiness probe — so `/ready` fails *because* the service is busy, the orchestrator pulls the replica out of rotation, and its traffic moves to the replicas that are also busy. Load-induced failure that removes capacity is the shape that turns a spike into an outage, and it is two numbers apart.
 

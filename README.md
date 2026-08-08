@@ -1,12 +1,13 @@
 # Text-to-SQL Analytics Agent (MCP-native)
 
-> **Status: Stage 1 core loop, the Stage 3 MCP layer, Stage 2's benchmark loaded and verified, and the eval pipeline running end to end.** The four servers run and are callable from any MCP host over stdio. Spider's dev split is converted to PostgreSQL, *verified* against its own gold results, indexed, and answered against. **SSE streaming is served** — `stage`, `sql`, `rows` and `done` events, with progress visible while a question is answered. Still open: the demo UI, and finishing the full-split run — it has reached **15 of 20 databases** and 744 of 921 questions across two days, pausing on the daily token cap and resuming into the same directory each time. See [BENCHMARKS](docs/ml/BENCHMARKS.md) for what has been measured and what bounds it, [ROADMAP](docs/project/ROADMAP.md) for stage status, [TASKS](docs/project/TASKS.md) for the working checklist.
+> **Status: Stage 1 core loop complete and served with a UI, the Stage 3 MCP layer running, and Stage 2's full-split benchmark finished.** The four servers run and are callable from any MCP host over stdio. Spider's dev split is converted to PostgreSQL, *verified* against its own gold results, indexed, and answered against — **all 921 scoreable questions across all 20 databases, at 79.9% execution accuracy on a single model.** A browser asks a question and watches it being answered: `POST /v1/query` streams `stage`, `sql`, `rows` and `done` events, and the demo UI draws each phase against a real time axis as it arrives. Next is the agent loop. See [BENCHMARKS](docs/ml/BENCHMARKS.md) for what has been measured and what bounds it, [ROADMAP](docs/project/ROADMAP.md) for stage status, [TASKS](docs/project/TASKS.md) for the working checklist.
 >
 > | Landed | Next |
 > |---|---|
-> | **Four MCP servers over stdio, with runtime `tools/list` discovery** | **Finishing the full-split run — 15 databases of 20, 744 of 921 questions, one more day of budget** |
+> | **The full split, finished — 921 of 921 questions, 20 of 20 databases, 79.9%, zero infrastructure errors** | **The agent loop that drives the discovered tools** — planning, session memory, budget enforcement |
 > | **Spider loaded — 20 dev databases converted to Postgres, 19 verified against every gold result** | Authentication, and a *per-client* in-flight cap that needs it |
-> | Postgres 16 + pgvector, Alembic migrations | The agent loop that drives the discovered tools |
+> | **Four MCP servers over stdio, with runtime `tools/list` discovery** | An eval that measures the **MCP path** — today's accuracy is the direct path only |
+> | Postgres 16 + pgvector, Alembic migrations | A `with-validation` run, so self-correction has a number rather than a claim |
 > | **`SELECT`-only role, proven by 30 negative tests — and now proven to be *the role the app connects as*** | Authentication; the API refuses to bind beyond loopback until it exists |
 > | Schema catalog — introspection, serialization, embedding | |
 > | Retrieval — pgvector ANN, join-path expansion, clamped limits | |
@@ -15,7 +16,8 @@
 > | Generation — provider-agnostic, with a model fallback chain | |
 > | Profiling — column stats under a documented disclosure budget | |
 > | Eval harness — comparison, Recall@k, resumable runs | |
-> | **`POST /v1/query`, streaming and non-streaming — a question over HTTP, answered from a real schema** | The React demo UI the stream feeds |
+> | **`POST /v1/query`, streaming and non-streaming — a question over HTTP, answered from a real schema** | |
+> | **A demo UI over the stream** — generated SQL, rows, and every phase timed against a real axis | |
 
 An agent that answers analytical questions in plain English against a real PostgreSQL database. Capabilities are exposed as **four MCP servers** rather than hardcoded functions, so any MCP host can point at them and query its own database — including the client this project ships.
 
@@ -62,7 +64,9 @@ Why validation and execution are separate capabilities, how blast radius is boun
 
 ## Demo
 
-> **A curl is the demo today** — though `curl -N` now shows the answer arriving in stages rather than all at once. A React UI over the SSE stream, plus a GIF and screenshots, are what is left. Exact commands and expected output: [DEMO_SCRIPT.md](docs/project/DEMO_SCRIPT.md).
+> **There is a page now.** `npm run build` in `web/`, point `API_STATIC_DIR` at `web/dist`, and `http://127.0.0.1:8000/` asks a question and draws each phase against a real time axis as the events arrive — the generated SQL, the rows, and how long retrieval, generation and execution each took. Screenshots and a GIF are still to be captured. Exact commands and expected output: [DEMO_SCRIPT.md](docs/project/DEMO_SCRIPT.md).
+>
+> The `curl` below is the same thing without a browser, and it is still the fastest way to confirm the service works.
 
 ```console
 $ curl -s -X POST http://127.0.0.1:8000/v1/query -H 'Content-Type: application/json'     -d '{"question": "How many singers are there?"}'
@@ -70,9 +74,9 @@ $ curl -s -X POST http://127.0.0.1:8000/v1/query -H 'Content-Type: application/j
   "sql": "SELECT COUNT(*) FROM singer;",
   "columns": ["count"], "rows": [[6]], "row_count": 1,
   "truncated": false, "executed": true,
-  "steps": [{"stage": "answer",  "duration_ms": 621.4, "status": "ok"},
-            {"stage": "execute", "duration_ms": 17.0,  "status": "ok"}],
-  "usage": {"input_tokens": 346, "output_tokens": 158}
+  "steps": [{"stage": "answer",  "duration_ms": 1542.0, "status": "ok"},
+            {"stage": "execute", "duration_ms": 10.6,   "status": "ok"}],
+  "usage": {"input_tokens": 501, "output_tokens": 43}
 }
 ```
 
@@ -88,6 +92,9 @@ data: {"stage":"generate","status":"ok"}
 
 event: sql
 data: {"sql":"SELECT COUNT(*) FROM singer;","attempt":1}
+
+event: stage
+data: {"stage":"execute","status":"ok"}
 
 event: rows
 data: {"columns":["count"],"rows":[[6]],"truncated":false}
@@ -137,6 +144,7 @@ Everything in that sketch exists except the thing it is drawn around: the **agen
 - **Fine-tuned schema linker** — contrastive sentence-transformer over question→column pairs, with a committed before/after ablation.
 - **Bounded blast radius** — read-only role, statement timeouts, row limits, cost caps. The role is verified at startup, not assumed: a control tested only against the fixture that satisfies it has been tested against itself.
 - **SSE streaming + OpenTelemetry** — progress visible per agent step; traces span agent → MCP → database.
+- **A UI that shows the work, not just the answer** — the generated SQL, whether the row limit clipped the result, and each phase drawn against a real time axis. Built because an aggregate hid a 20-second model load once, and a split timing found it.
 
 ## Installation
 
@@ -215,6 +223,24 @@ GET /ready    →  200 {"status": "ready", "dependencies": {...}}   or 503
 
 Startup also **proves the read-only role cannot write** rather than trusting `DATABASE_RO_URL` to name one. Thirty negative tests already asserted what `sql_agent_ro` may do; none of them asserted that the application *connects as that role*, and the only check that existed compared the two connection strings for inequality — which two spellings of the same superuser pass. `assert_read_only` now asks PostgreSQL's privilege functions directly, and it asks rather than attempting a write, because the deployment this catches is exactly the one where a test `INSERT` would succeed.
 
+**With the demo UI.** Build it once, then point the API at the output:
+
+```powershell
+cd web; npm ci; npm run build       # produces web/dist
+$env:API_STATIC_DIR = "$PWD\..\web\dist"
+python -m api                       # http://127.0.0.1:8000/ now serves the page
+```
+
+While developing the UI, run Vite instead and leave `API_STATIC_DIR` empty — `npm run dev` proxies `/v1` to the API, so the browser still talks to one origin:
+
+```powershell
+cd web; npm run dev                 # http://localhost:5173
+```
+
+**Both arrangements keep `API_CORS_ORIGINS` empty**, and that is the reason for both. The page and the API share an origin, so no browser origin has to be trusted by an endpoint that has no authentication. A separately hosted UI would need an entry in that list; this one never does.
+
+`API_STATIC_DIR` is empty by default because `web/dist` is a build artifact and is absent from a fresh checkout. Set it to a path that is missing, is not a directory, or holds no `index.html`, and **the process refuses to start** rather than serving 404s while reporting itself healthy.
+
 Still planned:
 
 - **CLI** — eval harness and training runs via `typer` entrypoints.
@@ -260,7 +286,13 @@ Directories marked *(stub)* exist with a docstring stating which stage fills the
 │   └── api/                    # FastAPI — /health, /ready, POST /v1/query,
 │                               # the error envelope, the body cap,
 │                               # sse.py — event framing, which is a security control
-├── web/                        # (planned) React + TypeScript demo UI — Stage 1
+│                               # static.py — serving the UI, its CSP, and why
+│                               #   there is no catch-all mount
+├── web/                        # React + TypeScript demo UI over the SSE stream
+│   ├── src/api/                # the SSE parser and the typed event contract
+│   ├── src/state/              # the reducer — all of the logic, none of the DOM
+│   ├── src/sql/                # a tokenizer, so highlighting needs no innerHTML
+│   └── src/components/         # TimeRail draws each phase against a real axis
 ├── .github/
 │   └── pull_request_template.md
 ├── tests/
@@ -283,18 +315,25 @@ Directories marked *(stub)* exist with a docstring stating which stage fills the
 
 ## Benchmarks
 
-> **A full-split run is in progress and these are its partial numbers, not a benchmark result.** The accuracy figures below cover **744 of 921 scoreable questions** — **15 of 20 databases**, up from the 3 the earlier smoke rows reached. The run pauses on a free-tier daily token cap and resumes into the same results directory, so these move rather than being replaced; one more day of budget finishes the split. Each is single-database execution accuracy, *not* Spider's stricter Test Suite Accuracy, and 113 questions are excluded with reasons. Every measurement is recorded in [BENCHMARKS.md](docs/ml/BENCHMARKS.md) with the commit and command it came from; nothing appears here that is not traceable to a row there.
+> **The full-split run is complete: all 921 scoreable questions, all 20 databases, one model, zero infrastructure errors.** It took three days and three free-tier daily budgets, resuming into the same results directory each time. Each figure is single-database execution accuracy, *not* Spider's stricter Test Suite Accuracy, and 113 of the split's 1034 questions are excluded with reasons. Every measurement is recorded in [BENCHMARKS.md](docs/ml/BENCHMARKS.md) with the commit and command it came from; nothing appears here that is not traceable to a row there.
 
 | Metric | Baseline | Current | Stage |
 |---|---|---|---|
 | **Conversion fidelity** (Spider dev, 1034 questions) | — | **99.3%** — 915 / 921, 19 of 20 databases fully verified | 2 |
-| Execution accuracy (Spider dev, 15 of 20 DBs, `k=30`) | 42.7% @ `k=10` | **81.4%** — single model, `retrieval-only`; 54.8%–100% across databases | 2 |
-| Schema-linking Recall@5 | — | **0.943** (R@1 0.747, R@10 0.984, R@20 0.998) | 5 |
-| Schema-linking Recall@10 | — | **0.984** — the fine-tune's target is R@1, not coverage | 5 |
-| Invalid-query rate | 20.7% | **3.3%** — pre-correction; the retry loop is Stage 4 | 4 |
+| **Execution accuracy** (Spider dev, **all 20 DBs**, `k=30`) | 42.7% @ `k=10` | **79.9%** — 736 / 921, single model, `retrieval-only` | 2 |
+| Schema-linking Recall@5 | — | **0.9435** (R@1 0.7445, R@10 0.9828, R@20 0.9973) | 5 |
+| Schema-linking Recall@10 | — | **0.9828** — the fine-tune's target is R@1, not coverage | 5 |
+| Invalid-query rate | 20.7% | **1.4%** — pre-correction; the retry loop is Stage 4 | 4 |
+| Cost per question | — | **$0.00** — 494 in / 183 out tokens, free tier | 2 |
 | Multi-step task success | TBD | TBD | 4 |
 
-**Recall@20 = 0.998 bounds what Stage 5 can buy on Spider.** It was 1.000 over 379 questions and 9 databases, and dropped to 0.998 as coverage grew to 744 and 15 — so the headroom is about one question in 600, which is very little rather than none. A retriever that already finds nearly every needed element by rank 20 can mostly only be improved into finding them *sooner*: **R@1 at 0.747 is where the 25 points of headroom actually are.** That is the argument for BIRD, whose schemas are large enough for retrieval to fail properly, and the shape of the null result [R-01](docs/project/RISKS.md) predicted.
+**79.9% is an average over databases that range from 100% to 54.8%, and the average is the least useful number here.** `poker_player` is a clean 40/40; `car_1` is 46/84. Three databases sit below 63%. A 45-point spread across schemas in the same corpus, measured by the same code on the same day, means **which schema a user brings decides more than the headline does** — the per-database table is in [BENCHMARKS §1.1](docs/ml/BENCHMARKS.md).
+
+**The number went down when the run finished, which is why partial numbers are not quoted here.** It read 81.4% at 744 questions. The remaining 177 were not a random sample — they were whatever the walk had not reached — and they brought it to 79.9%. A partial run is a biased sample of its own corpus and the direction of the bias is unknowable until it completes.
+
+**Recall@20 = 0.9973 bounds what Stage 5 can buy on Spider.** It read exactly 1.000 over 150 questions and again over 379, then fell at every widening. The headroom at rank 20 is **0.27 points**; at R@5 it is 5.65. A retriever that already finds nearly every needed element by rank 20 can mostly only be improved into finding them *sooner*: **R@1 at 0.7445 is where the ~24 points of headroom actually are.** That is the argument for BIRD, whose schemas are large enough for retrieval to fail properly, and the shape of the null result [R-01](docs/project/RISKS.md) predicted.
+
+**Two things this run does not measure.** It runs `retrieval-only`, so no validator executes and self-correction has no number — `validation_attempts` is 0 on all 921 artifacts by construction, not because nothing needed fixing. And it exercises the **direct** answering path, the same one the HTTP API uses; **nothing here goes through the MCP servers.** They are proven to work by the contract suite and proven to answer as well by nothing.
 
 ## Documentation
 

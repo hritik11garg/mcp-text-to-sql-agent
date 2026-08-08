@@ -1029,3 +1029,93 @@ And the load costs roughly twenty seconds of CPU, paid by whoever asked first. T
 **Tradeoff.** Startup is now about twenty seconds slower, and it is honest about it: that time was always being spent, by a caller, inside a request that had no way to report it. A readiness probe that answers late is a deployment concern with an established answer; a first request that takes twenty seconds is a user-visible defect with none.
 
 **Generalises to:** an eager-initialisation check must touch something that can fail. A property answered from configuration proves the configuration was read, not that the thing it names exists.
+
+## ADR-041 — The UI frames the SSE stream itself, because `EventSource` cannot POST
+
+**Status:** Accepted · 2026-08-08 · Stage 1
+
+**Context.** The demo UI has to consume `POST /v1/query` with `stream: true`. The browser ships an SSE client — `EventSource` — and it issues **`GET` only**. Reaching it would mean putting the question in the query string.
+
+**Decision.** Read the response body from `fetch` and parse the SSE framing in the client (`web/src/api/sse.ts`).
+
+**Why not the query string.** A question is user input, and a URL is the single worst place to put user input that is not already public: it is written to access logs at every intermediary on the path, kept in browser history, and sent in `Referer` unless something suppresses it. "How many patients have diagnosis X" is a question *about the data*, and the data is the thing this service exists to keep behind a read-only role. The transport convenience is not worth the disclosure.
+
+**What the decision actually costs.** Framing becomes this project's problem, and it is not a formality:
+
+- **A network chunk has no relationship to an event.** One `read()` can deliver half a line, three events, or a `\r` whose `\n` arrives in the next chunk. A parser that treats chunk boundaries as line boundaries passes every local test and fails intermittently against a real network — on the *long* payloads, which here means the ones carrying rows.
+- **The protocol bounds nothing.** A server that sends `data: ` and never a newline makes the tab allocate until it dies. Both bounds — one line, and one event's accumulated data — are **refusals rather than truncations**, because a truncated event handed on as complete is worse than an error.
+- **`TextDecoder` needs `{stream: true}`**, or a multi-byte character split across two chunks becomes a replacement character inside a string the JSON parser then rejects.
+
+**Alternatives.**
+
+| Option | Why not |
+|---|---|
+| `EventSource` with the question in the URL | Disclosure, above. This is the whole reason |
+| A `GET` endpoint taking a question parameter | Same disclosure, and it makes the server complicit in it |
+| Poll a job id | Three round trips and a server-side job table, to avoid parsing a well-specified text format |
+| An SSE client library | The parser is ~120 lines with 21 tests; a dependency here is a supply-chain surface on the one page that renders untrusted output |
+
+**Tradeoff.** ~120 lines of protocol code this project now owns and tests, against a client that never puts a question anywhere it will be logged. It also buys a property `EventSource` cannot offer: **no automatic reconnection.** `EventSource` retries by itself, which for this endpoint means silently re-asking a question — another LLM call, another slot out of an in-flight cap of four. Here a retry is a person pressing the button again.
+
+**Generalises to:** when a platform primitive forces the shape of a request, check what that shape does to the *data* before accepting it. The convenient API and the safe one are frequently not the same API.
+
+## ADR-042 — Syntax highlighting returns tokens, never markup
+
+**Status:** Accepted · 2026-08-08 · Stage 1
+
+**Context.** The generated SQL is the thing worth seeing, so the UI highlights it. Every syntax highlighter worth using returns a **string of HTML**, and rendering that in React requires `dangerouslySetInnerHTML`.
+
+**Decision.** A hand-written scanner (`web/src/sql/tokenize.ts`) returns `{kind, text}` tokens. The component maps them to `<span>` elements and React escapes the text. **There is no `dangerouslySetInnerHTML` anywhere in `web/`**, and no path from any token's contents to markup.
+
+**Why this is a security decision rather than a preference.** Consider what is being highlighted: SQL that a language model wrote, from a question a stranger typed, against a schema loaded from a public archive. That is the input an attacker controls most of. A highlighter that emits markup turns a prompt-injection foothold into stored XSS on a page served from the same origin as the API — and this API has no authentication, so script running there can drive it.
+
+**Two properties are tested rather than assumed.**
+
+- **Round trip.** Concatenating every token's `text` returns the input exactly. If it did not, the page would be showing SQL that is not the SQL that ran, which is worse than no highlighting at all.
+- **Linearity.** A scanner cannot backtrack. The obvious regular expression for a quoted string with escapes is the classic catastrophic-backtracking shape, and the cost of it is a frozen tab on an input nobody thought to test. The test feeds it 50,000 doubled quotes.
+
+**Alternatives.** Prism or highlight.js with sanitisation — a sanitiser is a denylist maintained by someone else against an attacker who only needs to be right once, and it would be defending a page that never needed markup in the first place. Rendering the SQL unhighlighted was the fallback if the scanner proved awkward; it did not.
+
+**Tradeoff.** The scanner is deliberately approximate — it does not know every dialect corner, and being wrong costs one word the wrong colour. In exchange, the *only* thing that reaches the DOM is text.
+
+**Generalises to:** when a library returns a string of markup, the question is not whether the library is trustworthy — it is whether the data flowing through it is. Prefer the interface that **cannot express** an injection over the one that must be prevented from expressing it.
+
+## ADR-043 — The UI is two explicit routes, not a catch-all static mount
+
+**Status:** Accepted · 2026-08-08 · Stage 1
+
+**Context.** With `API_STATIC_DIR` set, FastAPI serves the built page. The standard way to serve a single-page app is `app.mount("/", StaticFiles(directory=dist, html=True))`.
+
+**Decision.** Serve exactly two things — `GET /` returns `index.html`, and `/assets/*` serves the hashed bundles. Every other path keeps the `404` and the JSON error envelope it already had.
+
+**Why the mount is wrong here.** A mount at `/` matches every path no route claimed. So `/v1/quary` — a typo — stops being `404 {"error": {"code": "not_found", ...}}` and becomes `200 text/html`. Three things follow, and none of them looks like a failure:
+
+1. A client that asked for JSON receives the demo page and reports a **parse error**, which points at the response body rather than at the URL.
+2. An operator reading access logs sees a **successful request**.
+3. The published error contract in [API.md](API.md) silently stops holding, for exactly the paths most likely to be mistyped.
+
+**The error contract is a published interface, and a static file server is not entitled to overwrite it.** The convenience being bought is client-side routing, which this UI does not have — it is one screen.
+
+**Also decided here:** the static routes are registered **after** the API routers, because Starlette matches in registration order; a misconfigured `API_STATIC_DIR` is a `ConfigurationError` at construction rather than a 404 an hour later; and a directory with no `index.html` is refused explicitly, because that is what an interrupted build leaves behind and serving it would answer every request with a 404 while the process reported itself healthy.
+
+**Tradeoff.** A real SPA with client-side routes would need a deliberate catch-all limited to a path prefix. That is a change to make when routing exists, not before — and the version that keeps the API's 404s is the one to grow from.
+
+**Generalises to:** a wildcard route is a claim over every URL nobody else claimed, including the ones that do not exist yet.
+
+## ADR-044 — Two clocks, both reported, neither substituted for the other
+
+**Status:** Accepted · 2026-08-08 · Stage 1
+
+**Context.** The UI shows how long each phase took. Two measurements are available and they disagree. The **client** can time from the request leaving to each event arriving. The **server** reports its own per-phase durations in `steps[]` on the `done` event.
+
+**Decision.** Show both, each labelled. The time rail down the side of the page is client-observed; the footer is the server's `steps[]`. Neither is presented as a correction of the other.
+
+**Why not only the server's.** It is the more precise number and it is not the number a person is experiencing. Client-observed time includes the network, the proxy, and any buffering in between — and buffering is a *real* failure mode for this endpoint that the server cannot see ([DEPLOYMENT.md](../operations/DEPLOYMENT.md) §5.1: a buffering proxy holds every event until the response ends, turning a stream into a slow non-streaming reply). A UI reporting only server time would render a perfect progressive timeline for a stream that arrived in one lump.
+
+**Why not only the client's.** It cannot separate slow work from a slow network, which is the distinction [ADR-040](#adr-040--startup-opens-the-model-because-naming-it-is-not-loading-it) turned on.
+
+**They do not have the same shape either**, which settles the question. The stream announces `retrieve`, `generate` and `execute`; `steps[]` reports `answer` and `execute`, with `answer` covering retrieval and generation together. There is no correct way to merge a three-phase observation with a two-phase report, so the attempt would produce a number that is neither. The word `execute` appears twice on the page for this reason, and that is the intended result: two measurements of the same phase, labelled as such. A test caught it by failing on an ambiguous match, which is the assertion doing its job.
+
+**Tradeoff.** A reader has to notice there are two. The alternative is a single unattributed figure, and this project has already been wrong in exactly that way once — a 29-second latency confidently attributed to a rate-limited provider when it was a model checkpoint loading inside the first request. **An unattributed aggregate is not a measurement, it is a number.**
+
+**Generalises to:** when two observers disagree about a duration, the disagreement is usually the finding. Publishing one and discarding the other throws away the only evidence that the gap exists.

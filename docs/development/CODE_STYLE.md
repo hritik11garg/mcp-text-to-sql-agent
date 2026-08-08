@@ -170,3 +170,25 @@ Detail in [TESTING.md](TESTING.md). Style rules:
 - **Names state the expectation:** `test_execute_sql_clamps_row_limit_to_ceiling`.
 - **No sleeps.** Wait on a condition or use a fake clock.
 - **Fixtures build data; tests assert on it.** A fixture that asserts is doing the test's job.
+
+## 12. TypeScript in `web/`
+
+The same principles, spelled in a different language. Only the rules that actually differ are listed.
+
+**The compiler is a test, so it is configured to be able to fail.** `strict`, plus `noUncheckedIndexedAccess` and `exactOptionalPropertyTypes`. The first is the one that earns its place here: `rows[i][j]` over a result set really is possibly `undefined`, and a compiler configured to pretend otherwise is a compiler agreeing that a ragged row cannot happen. `npm run typecheck` runs in the same breath as the tests.
+
+**Nothing that crossed a network is cast.** `JSON.parse` returns `any`, and `as SomeType` on the result is a claim about a value the server chose. Every event is passed through a narrowing function that returns `T | null`; those functions are the only things entitled to make that claim. This is the TypeScript form of *never trust external input*, and the compiler cannot enforce it — the reviewer has to.
+
+**A payload that does not match is rejected, not repaired.** Defaulting a missing field looks like robustness and is usually an assertion the server never made. The example that fixes the rule: a `rows` event without its `truncated` flag defaulted to `false` is the client promising a result is complete.
+
+**No `dangerouslySetInnerHTML`. Ever, anywhere in `web/`.** Not a guideline — the one hard prohibition in this document. Both the generated SQL and the row values are untrusted, and [ADR-042](../architecture/DECISIONS.md#adr-042--syntax-highlighting-returns-tokens-never-markup) records what it cost to keep it true. A library whose interface returns a string of markup is not usable here.
+
+**Logic lives in reducers and pure functions; components render.** Same separation as business logic staying out of controllers (§1). The test for it is whether a rule can be exercised without mounting anything — `reduce()`, `tokenize()`, `parseEvent()` and `segmentHeight()` all can be, and that is why they are where they are.
+
+**A reducer does not read a clock.** Time comes in on the action. A reducer calling `performance.now()` is not a pure function and cannot be tested by calling it, and the timestamps here are a *measurement* the page displays rather than an animation detail.
+
+**No web fonts, no CDN, no remote anything.** The API serves this page under `default-src 'self'`, so a stylesheet quietly depending on another origin produces a page that looks right in development and broken in production. The constraint is why the visual design carries its personality in setting rather than in a downloaded typeface.
+
+**Dependencies are a supply-chain decision on the page that renders untrusted output.** `react` and `react-dom` at runtime, nothing else. The SSE parser and the SQL scanner are each about a hundred lines with tests, and both were written rather than installed for that reason. `package-lock.json` is committed.
+
+**Comments follow §9's rule unchanged:** explain *why*, never *what*. The highest-value comments in `web/` are the ones next to a coupling a reader cannot see — that `assetsInlineLimit: 0` in the Vite config is what keeps `script-src 'self'` honest, or that a held `\r` is waiting for a `\n` that may be in the next chunk.

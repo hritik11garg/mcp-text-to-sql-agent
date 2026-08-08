@@ -1,6 +1,8 @@
 # Demo Script
 
-> **Status: Segment 1 and 1b are real and recorded, non-streaming and streamed. The rest are TBD per stage.** Structure and discipline below were decided at Stage 0; the first segment has output that was actually produced rather than imagined — **and was re-recorded on 2026-08-07 because the original narration turned out to be wrong**, which is itself the most useful thing in this file.
+> **Status: segments 1, 1b and 1c are real and recorded — non-streaming, streamed, and in a browser. The rest are TBD per stage.** Structure and discipline below were decided at Stage 0; these segments carry output that was actually produced rather than imagined. **Segment 1 was re-recorded on 2026-08-07 because the original narration turned out to be wrong**, which is still the most useful thing in this file, and everything here was re-run on 2026-08-08 against the current code.
+>
+> **Open with 1c.** It is the only segment a person can watch, and the two before it are the same work without a browser.
 
 Exact commands, exact questions, expected output. Written so the demo can be run under pressure without improvising — an interview is not the place to discover that the database needs re-seeding.
 
@@ -18,6 +20,8 @@ Run 10 minutes before, not 30 seconds before.
 - [ ] `LLM_API_KEY` set and working — `python -m generation.check` verifies the provider in one round trip
 - [ ] Target dataset loaded **and verified** — `python -m benchmark.load verify ...` exits 0
 - [ ] Terminal font large enough to read on a shared screen
+- [ ] **`web/dist` built and `API_STATIC_DIR` pointing at it** — `curl localhost:8000/` returns HTML, not a `404`. The process refuses to start if the path is wrong, so a successful start is the check
+- [ ] **One throwaway question already asked**, so the model checkpoint is loaded and the browser cache is warm. The first request after startup is the slow one
 - [ ] Recorded fallback video accessible offline
 - [ ] An MCP host configured (MCP Inspector via `npx` is the zero-account option; any stdio host works)
 
@@ -46,16 +50,16 @@ python -m api
 | 2 | Ask the question below | Correct answer, with the SQL |
 | 3 | Point at `steps[]` | Generation dominates; execution is ~2% |
 
-**Recorded output** — re-run 2026-08-07, commit `4a907d9`:
+**Recorded output** — re-run 2026-08-08, commit `81ea97f` plus the working tree of this slice:
 
 ```console
 $ curl -s -X POST localhost:8000/v1/query -H 'Content-Type: application/json'     -d '{"question": "How many singers are there?"}'
 {"sql": "SELECT COUNT(*) FROM singer;",
  "columns": ["count"], "rows": [[6]], "row_count": 1,
  "truncated": false, "executed": true,
- "steps": [{"stage": "answer",  "duration_ms": 621.4, "status": "ok"},
-           {"stage": "execute", "duration_ms": 17.0,  "status": "ok"}],
- "usage": {"input_tokens": 346, "output_tokens": 158}}
+ "steps": [{"stage": "answer",  "duration_ms": 1542.0, "status": "ok"},
+           {"stage": "execute", "duration_ms": 10.6,  "status": "ok"}],
+ "usage": {"input_tokens": 501, "output_tokens": 43}}
 ```
 
 **This replaced a recording that said 29,081 ms, and the story of why is a better demo beat than the number.** The earlier run was narrated as *"29 seconds is a free-tier provider under load, and `steps[]` proves it"* — confident, plausible, and wrong. `answer` covered retrieval *and* generation, and an aggregate over the two cannot distinguish a slow provider from a slow retriever. Splitting them for the streaming segment showed retrieval taking twenty seconds: the embedding model was loading its checkpoint inside the first request, because startup had only read the model's *name*.
@@ -84,7 +88,7 @@ The generated SQL has **no `LIMIT`** and three rows came back with `truncated: t
 
 `curl -N` — without `-N`, curl buffers and the whole point is lost.
 
-**Recorded output** — 2026-08-07, commit `4a907d9`:
+**Recorded output** — re-run 2026-08-08. Note the third `stage` event; it did not exist on 2026-08-07:
 
 ```console
 $ curl -sN -X POST localhost:8000/v1/query -H 'Content-Type: application/json'       -d '{"question": "How many singers are there?", "stream": true}'
@@ -96,6 +100,9 @@ data: {"stage":"generate","status":"ok"}
 
 event: sql
 data: {"sql":"SELECT COUNT(*) FROM singer;","attempt":1}
+
+event: stage
+data: {"stage":"execute","status":"ok"}
 
 event: rows
 data: {"columns":["count"],"rows":[[6]],"truncated":false}
@@ -111,6 +118,56 @@ data: {"row_count":1,"executed":true,"steps":[...],"usage":{...}}
 **The events are only the ones with something behind them.** [API.md](../architecture/API.md) specifies nine event types; five are emitted. `session` is specified as *"first event, always sent"* and carries an id for memory that does not exist — emitting a fabricated one would make a client send it back on the next question and believe the follow-up had context. If asked why the implementation diverges from the spec, that is the answer, and it is the same rule as refusing `session_id` on the request ([ADR-038](../architecture/DECISIONS.md#adr-038--the-served-request-accepts-only-fields-that-do-something)).
 
 **If someone asks about the security of this**, the short version: SSE is newline-delimited, so a newline in a payload ends the event and forges the next one — and generated SQL is routinely multi-line, so it is the ordinary case rather than an attack. Every payload is JSON-encoded for that reason ([SECURITY.md](../operations/SECURITY.md) §13.11).
+
+### 1c — The page, which is the segment to actually open with
+
+**Point being made:** a person can watch the machinery work, and the thing they watch is the measurement.
+
+**This is the demo now.** Segments 1 and 1b are the same work in a terminal and remain the fastest way to prove the service is up, but nobody evaluating this project will read `curl` output on a shared screen if a page is available.
+
+**Setup** — one extra step over segment 1, done well before the room:
+
+```powershell
+cd web; npm ci; npm run build           # produces web/dist
+$env:API_STATIC_DIR   = "$PWD\..\web\dist"
+$env:DB_TARGET_SCHEMA = "spider_concert_singer"
+$env:DATASET          = "spider_concert_singer"
+$env:RETRIEVAL_TOP_K  = "30"
+python -m api                           # then open http://127.0.0.1:8000/
+```
+
+The equivalent in `bash` is `API_STATIC_DIR=... DB_TARGET_SCHEMA=... python -m api` — the setup above is PowerShell, and `$env:` syntax pasted into `bash` sets nothing and fails silently on a schema the catalog does not have.
+
+**Verified 2026-08-08 in Chrome**, against `spider_concert_singer`, question *"Show the name and country of every singer, oldest first"*:
+
+| What appears | Value in that run |
+|---|---|
+| Generated SQL, highlighted | `SELECT name, country FROM singer ORDER BY age DESC;` |
+| Result | 6 rows, name and country |
+| Rail — observed, per phase | `retrieve` 342 ms · `generate` 674 ms · `execute` 12 ms · `done` 2 ms |
+| Footer — server's own timings | `answer` 698 ms · `execute` 12 ms · **server total 711 ms** · 506 in / 119 out |
+
+**Three things to narrate, in this order.**
+
+**1. The SQL appears before the rows do.** Same point as segment 1b, but now visible rather than described. Say it while it is happening.
+
+**2. The rail is a real time axis, not a progress bar.** Each phase's segment is as long as that phase took. This is worth dwelling on, because it is where the project's argument lives: a single `answer` timing once hid a twenty-second model checkpoint load and was written up confidently as a rate-limited provider. Splitting the phases is what found it. **A stepper with four checkmarks would have hidden it again** — it says the same thing whether a phase took 12 ms or 20 s.
+
+Mention that the scale is square-root compressed and labelled as such on the page. Linear would put a 12 ms execution and a 20 s retrieval on the same axis, and one of them would be invisible.
+
+**3. There are two clocks and both are shown.** The rail is what the browser observed, including the network; the footer is what the server measured inside itself. They do not even have the same phases — the stream reports `retrieve`/`generate`/`execute`, `steps[]` reports `answer`/`execute`. **Neither is a correction of the other, so neither is silently substituted** ([ADR-044](../architecture/DECISIONS.md#adr-044--two-clocks-both-reported-neither-substituted-for-the-other)). If someone notices `execute` appears twice on the page, that is the answer, and it is a good question to be asked.
+
+**Also on the page, if the conversation goes there:**
+
+- **Explain only** — tick it and ask again. The SQL is generated and validated against the schema and never runs; the result panel says *"Not executed"* rather than showing an empty table, because a query that returned no rows and a query that was never run are different facts with the same shape.
+- **Truncation** — ask for something with a `max_rows`, and the page says the server clipped the result in its own banner. The browser's display limit is reported **separately** and differently, because "the database had more rows" and "this page is showing fewer than it received" are not the same claim.
+
+**If asked why it is a hand-written SSE client:** `EventSource` only issues `GET`, so using it would mean putting the question in a URL, where every intermediary logs it and the browser keeps it in history ([ADR-041](../architecture/DECISIONS.md#adr-041--the-ui-frames-the-sse-stream-itself-because-eventsource-cannot-post)).
+
+**If asked about XSS:** the page renders a model's SQL and a database's row values, both untrusted. Nothing renders markup — highlighting is a tokenizer returning React elements, and `dangerouslySetInnerHTML` appears nowhere in `web/` — with a CSP behind it as defence in depth ([SECURITY.md](../operations/SECURITY.md) §13.13).
+
+**Failure mode to know before the room.** If the page loads but no events arrive and the answer lands all at once, a proxy is buffering the stream — [DEPLOYMENT.md](../operations/DEPLOYMENT.md) §5.1. It fails *silently*: the answer is still correct, so nothing looks broken except the thing being demonstrated. Locally there is no proxy, which is why the demo runs against `127.0.0.1` directly.
+
 
 ## Segment 2 — The validation tier (Stage 1)
 
@@ -142,13 +199,21 @@ Step 3 is the one worth doing deliberately. Blocking `DELETE` is the obvious con
 
 **Recorded output:** TBD
 
-## Segment 4 — Eval harness (Stage 2)
-
-> **TBD — Stage 2.**
+## Segment 4 — Eval harness (Stage 2) — **the numbers exist**
 
 **Point being made:** the numbers are reproducible, and the baseline exists before any claimed improvement.
 
-Run the harness on the smoke split live (fast), then show the full held-out results from BENCHMARKS.md. Walk through the failure taxonomy — including gold errors, counted rather than hidden.
+Run the harness on the smoke split live (fast), then show [BENCHMARKS.md](../ml/BENCHMARKS.md) §1.1. Walk through the failure taxonomy — including gold errors, counted rather than hidden.
+
+**The full split is complete as of 2026-08-08: 921 of 921 scoreable questions, 20 of 20 databases, 79.9%, one model, zero infrastructure errors.**
+
+**Do not lead with 79.9%.** Lead with the spread: `poker_player` 100%, `car_1` 54.8%, three databases below 63%. A 45-point range across schemas in one corpus, measured by the same code on the same day. The point to make is that **the average describes no database in the set**, and which schema a user brings decides more than the headline does.
+
+**The best thing to say about this run is that the number went down.** It read 81.4% at 744 questions and finished at 79.9%. The remaining 177 were not a random sample — they were whatever the walk had not reached — so a partial run is a biased sample of its own corpus and the direction of the bias is unknowable until it finishes. That is why the earlier figure is superseded rather than quoted, and it is in the regression log with "sample, not code" as the cause.
+
+**If asked how it was run on a free tier:** three days, three daily token budgets, resuming into the same directory. Days 1 and 2 each ended with 12 questions failed against a spent quota; day 3 re-attempted rather than retired them, so the final result has zero infrastructure errors. Without resumption this corpus was not measurable at all here — which is [ADR-037](../architecture/DECISIONS.md#adr-037--resumption-skips-answered-questions-not-recorded-ones), and it is a better answer than the accuracy figure.
+
+**Volunteer what it does not measure**, because both are easy questions to be caught by. It is `retrieval-only`, so no validator ran and **self-correction has no number** — `validation_attempts` is 0 on all 921 artifacts by construction. And it exercises the direct answering path, so **no accuracy figure measures the MCP servers**; they are proven to work by the contract suite and proven to answer as well by nothing.
 
 ## Segment 5 — MCP from any host (Stage 3)
 

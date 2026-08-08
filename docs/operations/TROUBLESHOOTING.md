@@ -259,7 +259,7 @@ Worth knowing *which* model did it: the configured model may not, while a fallba
 
 The model is refusing rather than guessing, which is correct behaviour and points at **retrieval, not the prompt**. `RETRIEVAL_TOP_K` defaults to 10; a Spider database holds 10–67 catalog elements in total, so `k=10` shows a partial schema and one missing column is enough for an honest refusal.
 
-Check Recall@k in the summary. Measured on Spider dev: `k=10` gave 42.7% execution accuracy with 75 of 150 unanswerable; `k=30` gave 72.7% with none, and Recall@20 is 0.998 over the full split. Raise `--top-k` before touching the prompt.
+Check Recall@k in the summary. Measured on Spider dev: `k=10` gave 42.7% execution accuracy with 75 of 150 unanswerable; `k=30` gave 72.7% with none, and Recall@20 is **0.9973 over the complete split** (921 questions, 20 databases). Raise `--top-k` before touching the prompt.
 
 ### Costs are far higher than expected
 

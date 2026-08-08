@@ -363,6 +363,7 @@ Each was a prerequisite rather than a deferred finding: unexploitable while no e
 | **Query execution off the event loop** | **Done** | `asyncio.to_thread` for execution, validation **and retrieval** — the last was found during this slice, in the shared answering path, where `candidate()` was `async` and called a blocking pgvector query inline |
 | **`explain_only` must not become an oracle** | **Partial** | The response message is fixed and names no identifier; the detail goes to the log and the audit trail under the same `request_id`. **The residual is timing** — validation resolves identifiers against an in-memory catalog and a real name still reaches `EXPLAIN`, so a determined caller may distinguish them by latency. Not closed, and not closable without authentication |
 | **SSE stream limits** | **Done** | Streams share the one in-flight cap rather than getting their own allowance, and admission runs **before** the response begins, because a `429` is not expressible once `200` has been sent ([ADR-039](../architecture/DECISIONS.md#adr-039--a-stream-is-admitted-before-it-is-a-stream)). The slot is returned on completion, on failure and on disconnect — see §13.12. Keepalive frames are `API_STREAM_KEEPALIVE_SECONDS` |
+| **Response security headers** | **Done** | `SecurityHeadersMiddleware` sets a CSP, `nosniff`, `X-Frame-Options` and `Referrer-Policy` on **every** response. Registered last so it is the *outermost* middleware — a request refused by the body cap never reaches a route, and a header applied only on the path that reached one is applied on the path that needed it least. §13.13 |
 
 **Two of these are honestly partial, and both bottom out in the same missing thing.** A per-*client* cap and a timing-resistant oracle defence both require knowing who is calling. Until authentication exists, the loopback bind ([§13.1](#131-no-authentication-on-a-network-reachable-service--critical)) is what stands in for it, and it is a deployment control rather than a request control.
 
@@ -409,6 +410,56 @@ Each was a prerequisite rather than a deferred finding: unexploitable while no e
 **Residual, and it is bounded.** `asyncio.to_thread` cannot be interrupted, so a cancelled request's database work may briefly outlive its slot — bounded by `statement_timeout`, which is set per request. The slot is returned promptly; the query finishes or is killed by PostgreSQL.
 
 **CIA impact.** Availability.
+
+### 13.13 The demo UI as an XSS target — **High** (prevented)
+
+**Vulnerability.** The page renders two kinds of untrusted text: the **generated SQL**, written by a language model from a question a stranger typed, and **row values**, read from whatever database the operator pointed at. Rendering either as markup would execute attacker-influenced script on the API's own origin. *(OWASP A03 injection; CWE-79, cross-site scripting.)*
+
+**Why it's dangerous.** The page is served by the API itself, so script running there is same-origin with an endpoint that **has no authentication**. It can issue `POST /v1/query` with any question, read any result, and exfiltrate it — subject only to the read-only role. The classic route in is a syntax highlighter: every good one returns a string of HTML, and rendering it needs `dangerouslySetInnerHTML`.
+
+**Attack scenario.** An attacker seeds a row value — or steers generation through the question — so the SQL or a cell contains `<img src=x onerror="fetch('/v1/query',{...})">`. A highlighter that emits markup, or one careless `dangerouslySetInnerHTML`, turns viewing a result into running the attacker's code against the operator's database.
+
+**Secure implementation.** Three layers, and the first is the one that matters:
+
+1. **Nothing renders markup.** React escapes text children, and `web/` contains **no `dangerouslySetInnerHTML` at all**. Highlighting is a tokenizer returning `{kind, text}` records that the component maps to `<span>` elements ([ADR-042](../architecture/DECISIONS.md#adr-042--syntax-highlighting-returns-tokens-never-markup)). There is no code path from a token's contents to markup.
+2. **A Content-Security-Policy** with `script-src 'self'` and no `unsafe-inline`, plus `object-src 'none'`, `base-uri 'none'` and `frame-ancestors 'none'`. `connect-src 'self'` means an injected script could not exfiltrate a result set to another host even if one ran.
+3. **`X-Content-Type-Options: nosniff`** on every response, so a JSON body containing caller-influenced text cannot be re-interpreted as HTML.
+
+**Why the fix is secure.** Layer 1 removes the capability rather than filtering for it — a sanitiser is a denylist maintained against an attacker who needs to be right once, while a renderer that cannot express markup has nothing to filter. Layers 2 and 3 are defence in depth for a mistake in layer 1. Tests assert markup in a cell and in a **column name** renders as characters (`document.querySelector('img')` is null), that `script-src` never gains `unsafe-inline`, and that the tokenizer's output concatenates back to its input exactly.
+
+**Note the build coupling.** `script-src 'self'` only holds because `vite.config.ts` sets `assetsInlineLimit: 0`, so every script has its own URL. A build option can silently weaken this policy, which is why both live next to a comment saying so.
+
+**CIA impact.** Confidentiality and integrity.
+
+### 13.14 An unbounded event stream as a client-side denial of service — **Medium** (prevented)
+
+**Vulnerability.** The SSE parser accumulates bytes until it sees a line terminator, and **the protocol bounds neither a line nor an event**. A server that sends `data: ` and never a newline makes the browser allocate until the tab dies. *(OWASP A04 insecure design; CWE-400, uncontrolled resource consumption.)*
+
+**Why it's dangerous.** It inverts the usual direction of trust. Everything else in this document defends the server from the client; here the *client* is the victim, and the attacker is whatever the page is pointed at — a hostile server, a compromised proxy, or an intermediary injecting into a plaintext connection. The standing rule is that input is untrusted because of what it is, not because of where it came from, and a UI configured to reach a host has no way to know what answers.
+
+**Attack scenario.** A proxy on the path answers `POST /v1/query` with `text/event-stream` and streams `data: ` followed by an endless run of bytes with no newline. The parser's buffer grows without limit until the tab is killed. A person who reloads gets the same result.
+
+**Secure implementation.** Two bounds — `MAX_LINE_CHARS` on a single unterminated line and `MAX_EVENT_CHARS` on one event's accumulated `data:` lines — and both are **refusals, not truncations**. The parser raises `SseProtocolError` and is not used again; the client surfaces a `protocol_error` and stops reading. The second bound cannot live on the line: each individual line can be legal while the accumulation is the attack.
+
+**Why the fix is secure.** A truncation would hand a partial event onward *as though it were complete*, so a clipped `rows` payload could be rendered as a whole result — trading an availability problem for an integrity one. Refusing keeps the failure visible. The same principle appears in `parseEvent`, where a `rows` event missing its `truncated` flag is rejected rather than defaulted to `false`: a default there is the client asserting completeness the server never claimed.
+
+**Residual.** The bounds are generous (1M characters per line, 8M per event) so that a legitimate large result is never refused. They stop unbounded growth, not large-but-finite payloads; a hostile server can still make the page do 8 MB of work per event. Bounding *that* would need a total-bytes budget for the whole stream, which is not built.
+
+**CIA impact.** Availability, and integrity in the truncation case.
+
+### 13.15 Serving the UI from the API's origin — **accepted, with the reasoning**
+
+**The tradeoff, stated rather than assumed.** The built page is served by the same process and origin as the API. That is a deliberate coupling and it cuts both ways.
+
+**What it buys.** `API_CORS_ORIGINS` stays **empty**. There is no authentication yet, so every entry in that list would be an origin allowed to drive an unauthenticated endpoint from a visitor's browser — the confused-deputy shape in §13.7. Same-origin means no browser origin has to be trusted at all, and the Vite dev server preserves the property by proxying rather than by being allowlisted.
+
+**What it costs.** Any XSS on the page runs with full access to the API, because they share an origin. §13.13 is therefore not defence in depth for the UI alone — it is the control keeping this arrangement safe, which is why it is layered three deep.
+
+**Why this is still the right trade while there is no authentication.** The alternative — a separately hosted UI — requires opening CORS, and an allowlisted origin is a standing grant to *every* page on that origin, including one an attacker gets script onto. Same-origin narrows the trusted set to one page this repository builds and tests. When authentication lands, this should be revisited: with a credential to steal, the calculus changes.
+
+**Off by default.** `API_STATIC_DIR` is empty unless set, so an API deployment that does not want to serve a page does not serve one, and the attack surface is not present at all.
+
+**CIA impact.** Confidentiality and integrity, conditionally.
 
 ## 14. Multi-provider LLM risks
 

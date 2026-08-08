@@ -1,6 +1,8 @@
 # System Architecture
 
 > **Status: mostly built.** §2.1 (the API layer) is built: probes, the error envelope, the startup assertions, and **`POST /v1/query` in both response shapes** — a question in, SQL and rows out, streamed as `stage`/`sql`/`rows`/`done` events when asked. §2.3–§2.8 describe code that exists. **§2.2 (the agent loop) is the one component still entirely design intent** — its *client* half exists, the loop that drives it does not, so the events in §3.1 that come from *decomposition* (`plan`, `tool_call`, `tool_result`) have nothing behind them yet. The diagram image remains `TBD`; latency is now measured, in [PERFORMANCE.md](../operations/PERFORMANCE.md) §1.
+>
+> **A browser client exists too, and it is not in the numbered sections below** because it is not a service. `web/` is a static bundle the API can serve; it holds no business logic and reaches nothing but `/v1/query` on its own origin. See §2.11.
 
 ---
 
@@ -221,6 +223,33 @@ The two entrypoints need different connection disciplines, and the difference is
 - **The slot returns on teardown, not on success.** The release is in the generator's `finally`, so a client that hangs up gives its slot back — otherwise four abandoned sockets take the endpoint out until restart ([SECURITY.md](../operations/SECURITY.md) §13.12).
 
 **Errors cross the same boundary and must not diverge.** A stream cannot use the exception handlers, so it renders failures itself — through the one function that decides which of this project's messages a caller may read. Two renderers, one rule.
+
+### 2.11 The browser client, and why it is barely a component
+
+`web/` is a Vite + React + TypeScript bundle. It is deliberately the thinnest layer in this document: **it holds no business logic, owns no state that outlives a request, and reaches exactly one endpoint on exactly one origin.**
+
+```
+  browser
+    │  POST /v1/query   (same origin, relative path, credentials: omit)
+    ▼
+  api/static.py ──► api/query.py ──► answering ──► retrieval / generation / execution
+   (serves the                          the same path the eval harness uses
+    bundle and /)
+```
+
+**Four things in it are load-bearing rather than presentational.**
+
+**It frames the SSE stream itself** (`src/api/sse.ts`). `EventSource` is `GET`-only, so reaching it would mean putting the question in a URL where every intermediary logs it. The parser is incremental because a network chunk boundary has no relationship to an event boundary, and bounded because the protocol bounds nothing — a server that opens `data: ` and never sends a newline would otherwise allocate until the tab dies. Both bounds refuse rather than truncate. [ADR-041](DECISIONS.md#adr-041--the-ui-frames-the-sse-stream-itself-because-eventsource-cannot-post).
+
+**It validates every event rather than casting it** (`src/api/events.ts`). `JSON.parse` returns `any`, and `as DoneEvent` on the result is a claim about a value that arrived over a network. The narrowing functions are the only things in the client entitled to make one. A payload that does not match is **rejected, not repaired** — a `rows` event missing `truncated` defaulted to `false` would be the client asserting completeness the server never claimed.
+
+**It renders no markup** (`src/sql/tokenize.ts`). Both the generated SQL and the row values are untrusted, for different reasons. [ADR-042](DECISIONS.md#adr-042--syntax-highlighting-returns-tokens-never-markup).
+
+**All of its logic is one reducer** (`src/state/reducer.ts`), which is why all of it is testable without rendering anything. The interesting states here are *combinations* — SQL arrived but rows have not, rows arrived and were clipped, the stream ended without executing because the question was explain-only, an error landed after the SQL was on screen. Held as separate pieces of state those are reachable in orders nobody intended.
+
+**The event clock is passed in, not read.** Each event is stamped with the elapsed time this browser saw it, measured by the component and handed to the reducer, which keeps the reducer pure and keeps the rail's positions a measurement rather than an animation. Those times are **not** the server's `steps[]`; both are displayed and neither is substituted for the other ([ADR-044](DECISIONS.md#adr-044--two-clocks-both-reported-neither-substituted-for-the-other)).
+
+**Deployment shape.** In production FastAPI serves the built files behind `API_STATIC_DIR`, as two explicit routes rather than a catch-all mount ([ADR-043](DECISIONS.md#adr-043--the-ui-is-two-explicit-routes-not-a-catch-all-static-mount)). In development the Vite dev server proxies `/v1` to the API. **Both arrangements put the page and the API on one origin**, which is what lets `API_CORS_ORIGINS` stay empty while a browser drives an endpoint that has no authentication — see [SECURITY.md](../operations/SECURITY.md) §13.15 for what that couples together.
 
 ## 3. Data flow
 

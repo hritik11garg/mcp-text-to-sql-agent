@@ -1,6 +1,6 @@
 # Performance
 
-> **Status: targets are set; results are TBD — Stage 6.** The targets below are budgets to design against, not measurements. Measured numbers go to [../ml/BENCHMARKS.md](../ml/BENCHMARKS.md) §5 and are reflected here.
+> **Status: targets are set; one end-to-end row is measured, the component rows are still Stage 6.** The targets below are budgets to design against, not measurements. Measured numbers go to [../ml/BENCHMARKS.md](../ml/BENCHMARKS.md) §5 and are reflected in §5 here — including why a row that meets its target still does not close the stage.
 
 ---
 
@@ -127,16 +127,22 @@ Provider quota therefore belongs in the capacity model alongside `DB_POOL_MAX_SI
 
 ## 5. Measured results
 
-> **TBD — Stage 6.** Populated from BENCHMARKS.md §5. Every row carries hardware — a latency number without it is not comparable to anything.
+> **One row is measured; the component rows are still Stage 6.** Populated from [BENCHMARKS.md](../ml/BENCHMARKS.md) §5. Every row carries hardware — a latency number without it is not comparable to anything.
 
 | Component | Target | p50 | p95 | p99 | Hardware | Status |
 |---|---|---|---|---|---|---|
 | Retrieval | < 100 ms | — | — | — | — | Not measured |
 | Validation | < 50 ms | — | — | — | — | Not measured |
-| Execution | < 2 s | — | — | — | — | Not measured |
+| Execution | < 2 s | — | — | — | — | Not measured — but observed at **10–26 ms** in the served path, so the budget is not the constraint |
 | SSE first token | < 500 ms | — | — | — | — | Not measured |
-| End-to-end (single) | < 8 s | — | — | — | — | Not measured |
-| End-to-end (multi) | < 25 s | — | — | — | — | Not measured |
+| **End-to-end (single)** | **< 8 s** | **3.09 s** | **7.62 s** | **14.97 s** | Windows 11, CPU-only inference, PostgreSQL 16 in Docker, free-tier provider over the public internet | **Measured, n=921** — and see the caveat below |
+| End-to-end (multi) | < 25 s | — | — | — | — | Not measured — no agent loop yet |
+
+**The measured row meets its p95 target and should not be read as meeting it.** The dominant term is a remote provider's queue: shared, rate-limited, and outside this repository's control. Minimum 0.50 s, maximum **71.4 s**, mean 3.72 s — the gap between p95 and p99, and that maximum, are what throttling looks like from the client side. The components this project actually controls are milliseconds by comparison.
+
+**So this is a measurement of the conditions, not of the system**, and it does not close Stage 6. A row that would needs the components separated, a local model or a paid tier with predictable queueing, and a stated concurrency. It is recorded because 921 samples under the conditions the project really runs in beats an empty table — and because it sets the honest expectation for the demo: **about three seconds, and occasionally a minute.**
+
+**What it does establish** is that the end-to-end budget is not being spent where the targets above assume. Retrieval, validation and execution together are a rounding error against generation; any optimisation effort aimed at the first three is aimed at the wrong place while the provider is a free tier.
 
 ## 6. Known costs accepted
 
