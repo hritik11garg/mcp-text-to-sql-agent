@@ -706,14 +706,16 @@ Every category answers five questions, in order:
 
 Ranked by leverage — value delivered per unit of work — not by category number.
 
+> **Struck-through rows are done and are kept rather than deleted**, so the list reads as a record of what was worked and in what order. **Rows 3, 4 and 7–10 are what remains.** The next one that needs no LLM quota is row 7.
+
 | # | Action | Category | Why first |
 |---|---|---|---|
 | 1 | ~~Rotate the exposed database password~~ — **done 2026-08-08** | §33 | Both credentials rotated, old one confirmed dead, backup and worktree copy removed |
 | 2 | ~~Add a CI workflow~~ — **done 2026-08-08** | §24 | Landed. Next in that category: wire the unused 85% coverage floor, add dependency scanning, turn on branch protection |
 | 3 | **Benchmark the MCP path** | §19 | The headline claim is unmeasured, and the baseline it must reproduce now exists |
 | 4 | **Resolve the `locust` pin** — write the first concurrency test or remove the dependency | §25, §28 | A dependency justified by a comment; the project's own precedent says it goes |
-| 5 | **`SECURITY_INVARIANTS.md`** — the ten claims, each mapped to the test that proves it | §12 | Documents work already done, and makes untested invariants visible |
-| 6 | **Indirect prompt injection through `profile_table`** | §11 | The one component that sends row data to a model by design, and it is untested |
+| 5 | ~~`SECURITY_INVARIANTS.md`~~ — **done 2026-08-08** | §12 | Ten claims, each naming the test that proves it. Writing it exposed the one invariant with no test |
+| 6 | ~~Indirect prompt injection through `profile_table`~~ — **done 2026-08-08** | §11 | 7 cases. Found that `profile_max_value_chars` doubles as an injection-payload cap |
 | 7 | **Property-based tests** for the five invariants in §38 | §38 | Stronger than examples, and the project's rules are already phrased as properties |
 | 8 | **Failure-injection tests** — kill Postgres, kill the provider, exhaust the pool | §30 | Documented behaviours nobody has demonstrated |
 | 9 | **Fuzz the SQL validator** | §37 | A parser whose job is hostile input, tested only with inputs someone chose |
