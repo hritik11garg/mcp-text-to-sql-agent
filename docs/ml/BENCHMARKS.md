@@ -263,7 +263,40 @@ Measured from gold-SQL elements with aliases resolved. Recall is computed whethe
 
 **3.3% → 1.4% is a sampling correction in the flattering direction, and it is stated as such.** The absolute count barely moved — 12 invalid queries at 367 scored, 13 at 921 — so almost all of the improvement is denominator. The 9 databases reached first happened to contain nearly every query PostgreSQL would reject, and the other 11 contributed one more between them. **The rate is genuinely 1.4% over the whole split**, and it would be dishonest to present that as the retry loop's problem getting smaller; nothing changed except how much of the corpus was measured.
 
-**Mean attempts is 1.0 on all 921 artifacts because this baseline runs no validator at all.** `retrieval-only` has no validation tier, so `validation_attempts` is 0 by construction — not because nothing needed correcting. The 13 failures here reached the database and were refused by PostgreSQL. **The post-correction column stays empty until a `with-validation` run over the same split exists**, and until then no claim about self-correction on this corpus has any evidence behind it.
+**Mean attempts is 1.0 on all 921 artifacts because this baseline runs no validator at all.** `retrieval-only` has no validation tier, so `validation_attempts` is 0 by construction — not because nothing needed correcting. The 13 failures here reached the database and were refused by PostgreSQL.
+
+**The `Invalid (post)` column will stay empty for longer than this page previously implied, and the reason is a correction.** An earlier version said a `with-validation` run would fill it. It will not. **`with-validation` is a gate, not a loop**: it validates once and drops a query that fails, with no retry and no feedback to the model — `validation_attempts` is 0 or 1 in every baseline and never more. Error-feedback self-correction is Stage 4 and does not exist in any code path, so **no run that can be executed today produces a post-correction number.**
+
+What a `with-validation` run *does* produce is the never-measured half of "validation is defence in depth": **how many of the queries PostgreSQL would reject are caught before they reach it.** `retrieval-only` let 13 through to the database. If the validation tier catches 13 of 13, it earns its place; if it catches 2, it is mostly theatre on this corpus. That is a different column, and it is worth having.
+
+### 3.1 The validation tier caught nothing, and the reason is structural
+
+**A `with-validation` run was started on 2026-08-08 (`spider-validation-20260808`) and halted on the daily cap at 120 of 921 questions.** No accuracy figure from it is quoted here — §1.1 is the whole argument for not quoting partial runs. One result from it is robust anyway, because it is a property of the validation run alone rather than a comparison.
+
+On the 110 questions both runs answered, excluding quota failures:
+
+| | `retrieval-only` | `with-validation` |
+|---|---|---|
+| Queries the validator refused to execute | — | **0** |
+| Queries PostgreSQL refused | 2 | **2 — the same two** |
+
+**The validator rejected zero of 110 queries, and passed both that the database then refused.**
+
+**This is structural, not a defect, and it reproduces.** The failing query casts a `text` column to `double precision`:
+
+```sql
+SELECT cn.model FROM cars_data cd JOIN car_names cn ON cd.id = cn.makeid
+ORDER BY CAST(cd.horsepower AS double precision) ASC LIMIT 1;
+```
+
+`EXPLAIN` **succeeds** on it — casting text to double is a valid *plan*. Execution fails with `invalid input syntax for type double precision: "null"`, because `spider_car_1.cars_data.horsepower` is `text` and holds the literal string `"null"` in 6 of 406 rows. **`EXPLAIN` plans; it does not evaluate.** No validation tier built on it can catch a cast that is type-correct and value-invalid, and this is the same root cause as the conversion residual in §0 — a column with no faithful static type.
+
+**The honest reading is not "validation is useless".** The tier catches unknown identifiers, non-read-only statements, multi-statement input and syntax errors. Across the completed 921-question baseline, **every one of those categories is zero** — `retrieval_miss`, `unknown_identifier`, `syntax_unrecoverable` and `not_read_only` all recorded 0. The model never produced an error of a kind validation catches.
+
+So the finding is: **on Spider, with this model, the validation tier has nothing to catch.** Its value is unmeasurable on benign data because the failure modes it defends against do not occur there. That says nothing about the adversarial case it was built for — a manipulated or broken model emitting a write, or an identifier that does not exist — and `tests/security/` is what speaks to that.
+
+**One confounder, stated rather than buried.** The two runs used the same model at different times and generation is not deterministic: `matched` went 90 → 89, `wrong_shape` 13 → 11, `wrong_values` 4 → 6 over the same questions. Those deltas are noise, not validation effects, and they are the reason no accuracy claim is made from this run. The zero-rejection count does not depend on the comparison.
+
 
 ## 4. Multi-step task success
 
@@ -291,9 +324,53 @@ Measured from gold-SQL elements with aliases resolved. Recall is computed whethe
 |---|---|---|---|---|---|---|---|---|
 | 2026-08-08 | `15dcdf7` | `openai/gpt-oss-120b` | default | **494** | **183** | **$0.00** | **79.9%** | Whole split, n=921. 455k in / 169k out total, free tier |
 
-**$0.00 is a real number here and it is the point of the constraint in [PROJECT.md](../../PROJECT.md).** The entire 921-question benchmark cost nothing but three days of daily quota. That is what makes the result reproducible by someone with no budget, which was the requirement the provider-agnostic port ([ADR-014](../architecture/DECISIONS.md#adr-014--provider-agnostic-llm-behind-an-llmclient-port)) exists to satisfy.
+**$0.00 is a real number and it is the point of the constraint in [PROJECT.md](../../PROJECT.md).** The entire 921-question benchmark cost nothing but three days of daily quota, which is what makes the result reproducible by someone with no budget — the requirement the provider-agnostic port ([ADR-014](../architecture/DECISIONS.md#adr-014--provider-agnostic-llm-behind-an-llmclient-port)) exists to satisfy.
 
-**It is also why the cost column cannot yet do its job.** This table exists so an accuracy gain can be read against what it cost — an improvement at 4× the tokens is a different result from a free one. With one free row there is nothing to compare against, so the useful figure for now is the **token** count, not the dollar count: 677 tokens per question end to end is the budget any future prompt change is spending against. `input_tokens` here is the retrieved schema plus the question; the 30-element retrieval budget (§1.1) is most of it.
+**But $0.00 tells a reader nothing about what this work costs**, and "free" is not the same as "cheap". §6.1 prices it.
+
+### 6.1 What it would cost on a paid provider
+
+Token counts are measured, not estimated — every run writes `input_tokens` and `output_tokens` per question, and the totals below are summed from the surviving `summary.json` files. Prices are per **1M tokens**, from the published Gemini list, and the arithmetic is the only estimated part.
+
+| Model | One full-split run (921 q) | Everything recorded (1,668 q) | …including the unrecorded 08-05 attempt |
+|---|---|---|---|
+| Gemini 3.1 Flash Lite (batch) | **$0.18** | $0.40 | $0.48 |
+| Gemini 3.1 Flash Lite | **$0.37** | $0.81 | $0.96 |
+| Gemini 3.5 Flash Lite | **$0.56** | $1.25 | $1.49 |
+| Gemini 3.6 Flash (batch) | **$0.97** | $2.11 | $2.53 |
+| Gemini 3.6 Flash | **$1.95** | $4.22 | $5.05 |
+| Gemini Pro Latest | **$2.93** | $6.44 | $7.70 |
+
+Measured volumes behind those figures: **454,607 in / 168,560 out** for one full split; **767,985 in / 408,931 out** recorded across all eight runs.
+
+**Embeddings are not in the table because they are free here and would nearly stay free.** The catalog is 519 elements embedded locally on CPU with `all-MiniLM-L6-v2`. Priced against Gemini Embedding 2 at $0.20/M it is a fraction of a cent, and it is a **one-off** — the catalog is indexed once per database, not per question.
+
+### 6.2 What it costs to reproduce this repository
+
+**One full-split evaluation: $0.18 to $2.93**, depending on model tier, or **$0.00** on the free tier that the default configuration uses.
+
+That is the number for someone who clones this repository and runs the benchmark once. It buys 921 questions across 20 databases and the row in §1.1. Everything else in the project — the API, the MCP servers, the demo UI, the whole test suite — makes **zero** LLM calls, so the cost of running the code is entirely the cost of evaluating it.
+
+Per question that is **0.04 cents** on Flash Lite and **0.21 cents** on 3.6 Flash. A single demo question in the UI costs a fifth of a cent at worst.
+
+### 6.3 The number that is actually uncomfortable
+
+**Total spend to date is 2.32× a single reproduction.**
+
+The corpus has been answered more than once — four 150-question smoke runs while defects were being found, a full split over three days, a `with-validation` run, a 12-question smoke test, and one abandoned attempt on 2026-08-05 whose summary no longer exists so its tokens are *estimated* rather than measured. Every prompt change, every defect fix and every baseline change means the model gets asked again from scratch. **There is no partial credit for a re-run**: `RunManifest.config_fingerprint` refuses to resume a run whose configuration changed, which is correct and is exactly what makes a re-run cost full price.
+
+So the honest framing of this project's cost is not "$1.95 for the benchmark". It is **"$1.95 per attempt, and there have been 2.32 attempts so far"** — and that multiplier only grows, because Stage 4 and Stage 5 each add baselines that must be run over the same corpus.
+
+**The free tier's real cost was never money.** At $1.95 the full split runs in one sitting, in under an hour. On the free tier it took **three days**, and it required building resumption ([ADR-037](../architecture/DECISIONS.md#adr-037--resumption-skips-answered-questions-not-recorded-ones)), a halt-on-repeated-failure rule, and a `git worktree` procedure to satisfy the fingerprint guard on each day's resume — plus the day-3 discovery that a worktree alone does not stop the editable install importing the wrong `src/` ([§1.3](#13-the-fingerprint-refused-the-resume-twice-and-was-right-both-times)).
+
+**That machinery exists to avoid a two-dollar bill, and it is still the right trade** — but the reason is not economy. It is that a portfolio project whose headline number cannot be reproduced without a funded account has a headline number most readers must take on trust. The constraint buys *reproducibility by strangers*, and it is paid for in engineering rather than in dollars. Naming the price is what stops "free and open source" reading as though it were free of cost.
+
+### 6.4 What this table still cannot do
+
+Its purpose is to let an accuracy gain be read against what it cost — an improvement at 4× the tokens is a different result from a free one. **With one accuracy row there is nothing to compare against**, so the useful figure remains the token count rather than the dollar count: **677 tokens per question** end to end is the budget any future prompt change spends against, and `input_tokens` is mostly the 30-element retrieval budget from §1.1.
+
+A second row arrives with the first configuration that changes the token profile — a `full-schema` baseline, which sends the whole schema and should cost visibly more, or a fine-tuned retriever at lower `k`, which should cost visibly less. Those are the comparisons this section was built for.
+
 
 ## 7. Ablations
 

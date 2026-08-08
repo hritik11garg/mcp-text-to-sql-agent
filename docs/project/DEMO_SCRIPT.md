@@ -230,7 +230,9 @@ Run the harness on the smoke split live (fast), then show [BENCHMARKS.md](../ml/
 
 **If asked how it was run on a free tier:** three days, three daily token budgets, resuming into the same directory. Days 1 and 2 each ended with 12 questions failed against a spent quota; day 3 re-attempted rather than retired them, so the final result has zero infrastructure errors. Without resumption this corpus was not measurable at all here — which is [ADR-037](../architecture/DECISIONS.md#adr-037--resumption-skips-answered-questions-not-recorded-ones), and it is a better answer than the accuracy figure.
 
-**Volunteer what it does not measure**, because both are easy questions to be caught by. It is `retrieval-only`, so no validator ran and **self-correction has no number** — `validation_attempts` is 0 on all 921 artifacts by construction. And it exercises the direct answering path, so **no accuracy figure measures the MCP servers**; they are proven to work by the contract suite and proven to answer as well by nothing.
+**Volunteer what it does not measure**, because both are easy questions to be caught by. It is `retrieval-only`, so no validator ran — the 13 invalid queries reached PostgreSQL and were refused there. And it exercises the direct answering path, so **no accuracy figure measures the MCP servers**; they are proven to work by the contract suite and proven to answer as well by nothing.
+
+**If asked about self-correction, say it is not built.** The `with-validation` baseline validates once and drops a failing query — a gate, with no retry and no feedback to the model. Error-feedback self-correction is Stage 4. Claiming otherwise is the mistake this file exists to prevent.
 
 ## Segment 5 — MCP from any host (Stage 3)
 

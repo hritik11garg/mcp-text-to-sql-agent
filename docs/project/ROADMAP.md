@@ -22,7 +22,7 @@ Percentages are checkbox counts from [TASKS.md](TASKS.md), not confidence — a 
 
 **Two things that had blocked this roadmap for weeks are done.** The full-split run finished on 2026-08-08 — all 921 scoreable questions, all 20 databases, 79.9% — and the demo UI is built, served and verified in a browser. Neither is a blocker any more.
 
-**What is genuinely blocking now, in order:** the **agent loop** (Stage 4), which is what makes the four MCP servers a system rather than four callable capabilities. Behind it, two measurement gaps that are cheap and were blocked until the run completed: a **`with-validation` run** over the same split, so self-correction has a number instead of a claim, and an **eval that goes through the MCP servers**, because today's 79.9% measures the direct path only.
+**What is genuinely blocking now, in order:** the **agent loop** (Stage 4), which is what makes the four MCP servers a system rather than four callable capabilities. Behind it, two measurement gaps that are cheap and were blocked until the run completed: a **`with-validation` run** over the same split — which measures the validation tier as a *gate*, not self-correction, because no baseline self-corrects — and an **eval that goes through the MCP servers**, because today's 79.9% measures the direct path only.
 
 **Stage 1 went 75% → 59% → 69% → 88%.** It dropped when the demo UI was added to its scope, which made the plan more honest and the number worse; it has climbed as the pool, the endpoint, streaming and now the UI landed. What remains in Stage 1 is close-out work — screenshots, an architecture diagram, an end-to-end run from a clean checkout — not components.
 
@@ -107,7 +107,9 @@ The pattern is worth keeping. Every one of those was invisible to a test suite t
 
 **The cost it charged was real too.** The configuration fingerprint includes the commit, so every day's resume was refused until it was run from a detached `git worktree` at the recorded commit. Day 3 also found that a worktree alone is not sufficient — the editable install puts the *main* checkout's `src/` on `sys.path`, so the guard can pass while the wrong code runs. Both are recorded in [BENCHMARKS §1.3](../ml/BENCHMARKS.md), and fingerprinting the loaded modules rather than the commit is now unblocked.
 
-**What is still unmeasured here, stated plainly.** The completed run is `retrieval-only`, so no validator executed and **self-correction has no number** — `validation_attempts` is 0 on all 921 artifacts by construction. And it runs the direct answering path, so **no accuracy figure measures the MCP servers**. Both are cheap now that the run is finished, and both were blocked by it.
+**What is still unmeasured here, stated plainly.** The completed run is `retrieval-only`, so no validator executed — `validation_attempts` is 0 on all 921 artifacts by construction, and the 13 invalid queries reached PostgreSQL and were refused there. And it runs the direct answering path, so **no accuracy figure measures the MCP servers**. Both are cheap now that the run is finished, and both were blocked by it.
+
+**Self-correction is unmeasured and no eval baseline can measure it.** `with-validation` is a *gate* — one validation pass, and a failing query is dropped rather than fed back to the model. `validation_attempts` is therefore 0 or 1 and never more. An earlier version of this section said a validation run would give self-correction a number; that was wrong, and the retry loop is Stage 4 work that does not exist yet.
 
 ## Stage 3 — MCP servers + client refactor
 

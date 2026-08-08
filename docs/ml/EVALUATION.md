@@ -194,7 +194,9 @@ Attributing a gain to the fine-tuned retriever requires knowing what the rest of
 
 **⚠ on the latency cell** — it is measured over 921 questions but the dominant term is a free-tier provider's queue, not this system; it does not close Stage 6. See [PERFORMANCE.md](../operations/PERFORMANCE.md) §5.
 
-**The `Invalid (post)` column is empty because this baseline runs no validator.** `retrieval-only` means `validation_attempts` is 0 on all 921 artifacts *by construction*, so the 1.4% is queries PostgreSQL refused, and self-correction has no measured value at all. The `Baseline + validation` row below is what fills it.
+**The `Invalid (post)` column is empty, and the `Baseline + validation` row will not fill it.** `retrieval-only` runs no validator, so `validation_attempts` is 0 on all 921 artifacts *by construction* and the 1.4% is queries PostgreSQL refused.
+
+The `with-validation` configuration is a **gate, not a loop** — it validates once and drops a failing query, with no retry and no feedback to the model. So it will produce a *different* useful number: how many of the queries PostgreSQL would reject are caught before they reach it, which is the never-measured half of "validation is defence in depth". **`Invalid (post)` stays empty until Stage 4 builds the retry loop**, and describing that column as awaiting a validation run was wrong.
 
 All three figures now come from **one run**, which the previous version of this table could not say — accuracy and the invalid-query rate used to come from different runs with the `<think>` fix between them. The per-database spread inside this row is **54.8% to 100%**, which is a better description of the system than the mean, and the weakest database is `car_1` — one of the three the earlier 150-question rows were made of.
 

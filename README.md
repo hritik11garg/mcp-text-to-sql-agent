@@ -7,7 +7,7 @@
 > | **The full split, finished — 921 of 921 questions, 20 of 20 databases, 79.9%, zero infrastructure errors** | **The agent loop that drives the discovered tools** — planning, session memory, budget enforcement |
 > | **Spider loaded — 20 dev databases converted to Postgres, 19 verified against every gold result** | Authentication, and a *per-client* in-flight cap that needs it |
 > | **Four MCP servers over stdio, with runtime `tools/list` discovery** | An eval that measures the **MCP path** — today's accuracy is the direct path only |
-> | Postgres 16 + pgvector, Alembic migrations | A `with-validation` run, so self-correction has a number rather than a claim |
+> | Postgres 16 + pgvector, Alembic migrations | A `with-validation` run, so the validation tier is measured rather than asserted |
 > | **`SELECT`-only role, proven by 30 negative tests — and now proven to be *the role the app connects as*** | Authentication; the API refuses to bind beyond loopback until it exists |
 > | Schema catalog — introspection, serialization, embedding | |
 > | Retrieval — pgvector ANN, join-path expansion, clamped limits | |
@@ -334,7 +334,7 @@ Directories marked *(stub)* exist with a docstring stating which stage fills the
 | Schema-linking Recall@5 | — | **0.9435** (R@1 0.7445, R@10 0.9828, R@20 0.9973) | 5 |
 | Schema-linking Recall@10 | — | **0.9828** — the fine-tune's target is R@1, not coverage | 5 |
 | Invalid-query rate | 20.7% | **1.4%** — pre-correction; the retry loop is Stage 4 | 4 |
-| Cost per question | — | **$0.00** — 494 in / 183 out tokens, free tier | 2 |
+| Cost per question | — | **$0.00** free tier · **0.04–0.21 cents** priced on Gemini | 2 |
 | Multi-step task success | TBD | TBD | 4 |
 
 **79.9% is an average over databases that range from 100% to 54.8%, and the average is the least useful number here.** `poker_player` is a clean 40/40; `car_1` is 46/84. Three databases sit below 63%. A 45-point spread across schemas in the same corpus, measured by the same code on the same day, means **which schema a user brings decides more than the headline does** — the per-database table is in [BENCHMARKS §1.1](docs/ml/BENCHMARKS.md).
@@ -343,7 +343,13 @@ Directories marked *(stub)* exist with a docstring stating which stage fills the
 
 **Recall@20 = 0.9973 bounds what Stage 5 can buy on Spider.** It read exactly 1.000 over 150 questions and again over 379, then fell at every widening. The headroom at rank 20 is **0.27 points**; at R@5 it is 5.65. A retriever that already finds nearly every needed element by rank 20 can mostly only be improved into finding them *sooner*: **R@1 at 0.7445 is where the ~24 points of headroom actually are.** That is the argument for BIRD, whose schemas are large enough for retrieval to fail properly, and the shape of the null result [R-01](docs/project/RISKS.md) predicted.
 
-**Two things this run does not measure.** It runs `retrieval-only`, so no validator executes and self-correction has no number — `validation_attempts` is 0 on all 921 artifacts by construction, not because nothing needed fixing. And it exercises the **direct** answering path, the same one the HTTP API uses; **nothing here goes through the MCP servers.** They are proven to work by the contract suite and proven to answer as well by nothing.
+**Reproducing the whole benchmark costs $0.18–$2.93, or nothing.** The default configuration uses a free tier, which is why the row above says `$0.00`; priced against paid Gemini tiers, one full 921-question run is between 18 cents and $2.93 depending on model. Nothing else in this repository makes an LLM call — the API, the MCP servers, the UI and the entire test suite are free to run — so **the cost of the project is the cost of evaluating it**.
+
+The number worth knowing is the one below that: **total spend to date is 2.32× a single reproduction**, because the corpus has been answered eight times across smoke runs, defect fixes and baseline changes, and a configuration change means starting from scratch. [BENCHMARKS §6](docs/ml/BENCHMARKS.md) prices all of it, including what the free tier actually cost — which was three days and a resumption mechanism rather than money.
+
+**Two things this run does not measure.** It runs `retrieval-only`, so **no validator executes** — the 13 invalid queries reached PostgreSQL and were refused there. And it exercises the **direct** answering path, the same one the HTTP API uses; **nothing here goes through the MCP servers.** They are proven to work by the contract suite and proven to answer as well by nothing.
+
+**Nothing here measures self-correction either, and no baseline can.** The `with-validation` configuration is a *gate*: it validates once and drops a query that fails, with no retry and no feedback to the model. Error-feedback self-correction is Stage 4 and does not exist in any code path, so `validation_attempts` is 0 or 1 and never more.
 
 ## Documentation
 
