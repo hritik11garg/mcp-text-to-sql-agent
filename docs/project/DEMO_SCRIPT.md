@@ -138,6 +138,8 @@ python -m api                           # then open http://127.0.0.1:8000/
 
 The equivalent in `bash` is `API_STATIC_DIR=... DB_TARGET_SCHEMA=... python -m api` — the setup above is PowerShell, and `$env:` syntax pasted into `bash` sets nothing and fails silently on a schema the catalog does not have.
 
+![The page answering a question](../assets/demo.gif)
+
 **Verified 2026-08-08 in Chrome**, against `spider_concert_singer`, question *"Show the name and country of every singer, oldest first"*:
 
 | What appears | Value in that run |
@@ -146,6 +148,21 @@ The equivalent in `bash` is `API_STATIC_DIR=... DB_TARGET_SCHEMA=... python -m a
 | Result | 6 rows, name and country |
 | Rail — observed, per phase | `retrieve` 342 ms · `generate` 674 ms · `execute` 12 ms · `done` 2 ms |
 | Footer — server's own timings | `answer` 698 ms · `execute` 12 ms · **server total 711 ms** · 506 in / 119 out |
+
+**A second recorded run, and the better question to ask on a shared screen** — *"Which stadiums have hosted more than one concert?"* It produces a `JOIN` with a `GROUP BY` and a `HAVING`, which reads as real SQL rather than a `COUNT(*)`:
+
+![The generated SQL and the result](../assets/ui-answer.jpg)
+
+![The rail, with per-phase timings](../assets/ui-timings.jpg)
+
+| | |
+|---|---|
+| Generated SQL | `SELECT s.name FROM stadium s JOIN concert c ON c.stadium_id = s.stadium_id GROUP BY s.stadium_id, s.name HAVING COUNT(c.concert_id) > 1;` |
+| Result | 1 row — `Somerset Park` |
+| Rail — observed | `retrieve` 344 ms · `generate` 930 ms · `execute` 27 ms · `done` 1 ms |
+| Footer — server-timed | `answer` 962 ms · `execute` 27 ms · **server total 989 ms** · 505 in / 218 out |
+
+**Use this question rather than the counting one if there is time for only one.** A `COUNT(*)` is a weak demonstration — a viewer cannot tell whether the model understood the schema or guessed. A join with a grouped having clause has to get four things right, and the read-only role and the validator both had to pass it.
 
 **Three things to narrate, in this order.**
 

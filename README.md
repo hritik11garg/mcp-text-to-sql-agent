@@ -64,9 +64,19 @@ Why validation and execution are separate capabilities, how blast radius is boun
 
 ## Demo
 
-> **There is a page now.** `npm run build` in `web/`, point `API_STATIC_DIR` at `web/dist`, and `http://127.0.0.1:8000/` asks a question and draws each phase against a real time axis as the events arrive — the generated SQL, the rows, and how long retrieval, generation and execution each took. Screenshots and a GIF are still to be captured. Exact commands and expected output: [DEMO_SCRIPT.md](docs/project/DEMO_SCRIPT.md).
+> **There is a page now.** `npm run build` in `web/`, point `API_STATIC_DIR` at `web/dist`, and `http://127.0.0.1:8000/` asks a question and draws each phase against a real time axis as the events arrive. Exact commands and expected output: [DEMO_SCRIPT.md](docs/project/DEMO_SCRIPT.md).
 >
 > The `curl` below is the same thing without a browser, and it is still the fastest way to confirm the service works.
+
+![Asking a question and watching it answered](docs/assets/demo.gif)
+
+*Recorded against Spider's `concert_singer` schema. The question is English; everything below it is the system's own output.*
+
+**What to look at, in the order it appears.** The **generated SQL** arrives before any row does — a `JOIN` with a `GROUP BY` and a `HAVING`, which the model wrote and which validation and the read-only role both had to pass. Then the rows. Then, down the left, **how long each phase actually took**, drawn to scale.
+
+That rail is the point. It is a time axis, not a progress bar: `retrieve` 344 ms, `generate` 930 ms, `execute` 27 ms — and the segments are that different in length. A stepper with four checkmarks would look identical whether execution took 27 milliseconds or twenty seconds, which is precisely how a model checkpoint load once hid inside an aggregate here and got written up as a slow provider ([ADR-040](docs/architecture/DECISIONS.md#adr-040--startup-opens-the-model-because-naming-it-is-not-loading-it)).
+
+The footer carries a **second** set of timings — the server's own, measured inside the process. The rail is what the browser observed, network included. They are different quantities, so both are shown and neither is quietly substituted for the other ([ADR-044](docs/architecture/DECISIONS.md#adr-044--two-clocks-both-reported-neither-substituted-for-the-other)).
 
 ```console
 $ curl -s -X POST http://127.0.0.1:8000/v1/query -H 'Content-Type: application/json'     -d '{"question": "How many singers are there?"}'

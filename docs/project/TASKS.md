@@ -105,15 +105,15 @@ Convention: `[ ]` open · `[x]` done · `[~]` in progress · `[!]` blocked
 - [x] Served by FastAPI as static files behind `API_STATIC_DIR`, with a CSP; Vite dev server proxies locally. Both keep page and API on one origin, so `API_CORS_ORIGINS` stays empty
 - [x] **Every phase drawn against a real time axis** — not on the original list. Added because a single `answer` aggregate once hid a 20-second model load, and a stepper with checkmarks would hide it again
 - [~] Surface validation attempts and retries, since the self-correction loop is the point — the UI renders `attempt > 1` as "self-corrected", but **no run has ever produced one**: `retrieval-only` executes no validator. Unverifiable against real data until a `with-validation` run exists
-- [ ] Screenshots + GIF for the README
+- [x] **Screenshots + GIF for the README** — `docs/assets/demo.gif` plus two stills, recorded 2026-08-08 against `spider_concert_singer`. No overlays and no tooling watermark, so the asset shows the product and nothing else
 
 ### Stage 1 close-out
 - [ ] End-to-end from clean checkout — the last component blocker is loading a target dataset
 - [x] Fill in SYSTEM_ARCHITECTURE, API, CONFIG, PROMPTS with real content
-- [ ] Architecture diagram committed — `docs/assets/` is still empty
+- [ ] Architecture diagram committed — `docs/assets/` now holds the demo GIF and two screenshots, but no diagram
 - [x] **First DEMO_SCRIPT entry verified** — re-recorded 2026-08-08 against the current code, in both response shapes and in a browser
 - [ ] CHANGELOG v0.1
-- [ ] Screenshots and a GIF — the page is verified working in Chrome, but nothing is captured for the README yet
+- [x] Screenshots and a GIF — captured 2026-08-08, embedded in README and DEMO_SCRIPT 1c
 
 ## Stage 2 — Eval harness
 
