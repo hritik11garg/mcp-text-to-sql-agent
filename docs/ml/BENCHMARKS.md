@@ -326,48 +326,69 @@ So the finding is: **on Spider, with this model, the validation tier has nothing
 
 **$0.00 is a real number and it is the point of the constraint in [PROJECT.md](../../PROJECT.md).** The entire 921-question benchmark cost nothing but three days of daily quota, which is what makes the result reproducible by someone with no budget — the requirement the provider-agnostic port ([ADR-014](../architecture/DECISIONS.md#adr-014--provider-agnostic-llm-behind-an-llmclient-port)) exists to satisfy.
 
-**But $0.00 tells a reader nothing about what this work costs**, and "free" is not the same as "cheap". §6.1 prices it.
+**But $0.00 tells a reader nothing about what this work costs**, and "free" is not the same as "cheap". §6.1 prices it — **$0.17 at the list rate of the model that actually ran it**, and $0.04 to $6.49 across the models a reader might substitute.
 
-### 6.1 What it would cost on a paid provider
+### 6.1 What it cost, and what it would cost elsewhere
 
-Token counts are measured, not estimated — every run writes `input_tokens` and `output_tokens` per question, and the totals below are summed from the surviving `summary.json` files. Prices are per **1M tokens**, from the published Gemini list, and the arithmetic is the only estimated part.
+**Token counts are measured; prices are not.** Every run writes `input_tokens` and `output_tokens` per question, so the volumes below are facts about work that happened. The rates are a snapshot of published list prices **as of 2026-08-07**, and they are the only part of this section that can quietly become wrong.
 
-| Model | One full-split run (921 q) | Everything recorded (1,668 q) | …including the unrecorded 08-05 attempt |
-|---|---|---|---|
-| Gemini 3.1 Flash Lite (batch) | **$0.18** | $0.40 | $0.48 |
-| Gemini 3.1 Flash Lite | **$0.37** | $0.81 | $0.96 |
-| Gemini 3.5 Flash Lite | **$0.56** | $1.25 | $1.49 |
-| Gemini 3.6 Flash (batch) | **$0.97** | $2.11 | $2.53 |
-| Gemini 3.6 Flash | **$1.95** | $4.22 | $5.05 |
-| Gemini Pro Latest | **$2.93** | $6.44 | $7.70 |
+That asymmetry is why this table is **generated, not maintained**:
 
-Measured volumes behind those figures: **454,607 in / 168,560 out** for one full split; **767,985 in / 408,931 out** recorded across all eight runs.
+```powershell
+python -m evals.cost      # reads results/*/summary.json, prices them, prints this table
+```
 
-**Embeddings are not in the table because they are free here and would nearly stay free.** The catalog is 519 elements embedded locally on CPU with `all-MiniLM-L6-v2`. Priced against Gemini Embedding 2 at $0.20/M it is a fraction of a cent, and it is a **one-off** — the catalog is indexed once per database, not per question.
+Repricing is an edit to one dated dictionary in `src/evals/cost.py` plus a command. A hand-maintained cost table is the drift risk [R-17](../project/RISKS.md) in its purest form — every figure rots on someone else's schedule and nothing detects it.
+
+| Provider | Model | Input $/1M | Output $/1M | One full split (921 q) | Everything recorded |
+|---|---|---:|---:|---:|---:|
+| **Groq** | **`openai/gpt-oss-120b`** | **0.15** | **0.60** | **$0.17** | **$0.36** |
+| Groq | `qwen/qwen3.6-27b` | 0.60 | 3.00 | $0.78 | $1.69 |
+| Groq | `llama-3.3-70b-versatile` | 0.59 | 0.79 | $0.40 | $0.78 |
+| Groq | `llama-3.1-8b-instant` | 0.05 | 0.08 | $0.04 | $0.07 |
+| Groq | `openai/gpt-oss-20b` | 0.075 | 0.30 | $0.08 | $0.18 |
+| DeepSeek | `DeepSeek V3.2` | 0.28 | 0.42 | $0.20 | $0.39 |
+| Google | `Gemini 3.1 Flash-Lite` | 0.25 | 1.50 | $0.37 | $0.81 |
+| OpenAI | `GPT-4.1 mini` | 0.40 | 1.60 | $0.45 | $0.96 |
+| Google | `Gemini 3 Pro` | 2.00 | 12.00 | $2.93 | $6.44 |
+| OpenAI | `GPT-4.1` | 2.00 | 8.00 | $2.26 | $4.81 |
+| Anthropic | `Claude Sonnet 5` | 2.00 | 10.00 | $2.59 | $5.63 |
+| Anthropic | `Claude Opus 5` | 5.00 | 25.00 | $6.49 | $14.06 |
+| local | Ollama / vLLM, self-hosted | 0 | 0 | $0.0000 | $0.0000 |
+
+**The first row is the only one that is not a hypothetical.** `openai/gpt-oss-120b` on Groq answered every question in §1.1, so **$0.17** is what the completed 921-question benchmark would have been billed at list price, and **$0.36** is the whole project's recorded LLM spend. Every other row answers a different question — *"what if a different model had done this work"* — and assumes the same token profile, which a different model would not reproduce exactly.
+
+Measured volumes: **454,607 in / 168,560 out** for one full split; **767,985 in / 408,931 out** across all eight recorded runs.
+
+**Embeddings are absent because they are effectively free and one-off.** The catalog is 519 elements embedded locally on CPU with `all-MiniLM-L6-v2`. Priced against a hosted embedding endpoint it is a fraction of a cent, and it is paid **once per database**, not per question — which is the distinction worth taking from this table more than any figure in it.
 
 ### 6.2 What it costs to reproduce this repository
 
-**One full-split evaluation: $0.18 to $2.93**, depending on model tier, or **$0.00** on the free tier that the default configuration uses.
+**One full-split evaluation: $0.17** at the rates the run was actually made against — or **$0.00** on the free tier the default configuration uses. Across every model listed, **$0.04 to $6.49**.
 
-That is the number for someone who clones this repository and runs the benchmark once. It buys 921 questions across 20 databases and the row in §1.1. Everything else in the project — the API, the MCP servers, the demo UI, the whole test suite — makes **zero** LLM calls, so the cost of running the code is entirely the cost of evaluating it.
+That is the number for someone who clones this repository and runs the benchmark once. It buys 921 questions across 20 databases and the row in §1.1. **Everything else in the project makes zero LLM calls** — the API, the four MCP servers, the demo UI and the entire 1,400-test suite are free to run — so the cost of the project is the cost of *evaluating* it.
 
-Per question that is **0.04 cents** on Flash Lite and **0.21 cents** on 3.6 Flash. A single demo question in the UI costs a fifth of a cent at worst.
+Per question that is **0.018 cents**. A demo question in the UI costs about **one fifty-thousandth of a dollar**.
 
 ### 6.3 The number that is actually uncomfortable
 
-**Total spend to date is 2.32× a single reproduction.**
+**Total recorded spend is 1.89× a single reproduction**, and closer to **2.3×** once the 2026-08-05 attempt is counted — it answered 395 questions and left no `summary.json`, so its share is estimated rather than measured and **every total on this page is a lower bound.**
 
-The corpus has been answered more than once — four 150-question smoke runs while defects were being found, a full split over three days, a `with-validation` run, a 12-question smoke test, and one abandoned attempt on 2026-08-05 whose summary no longer exists so its tokens are *estimated* rather than measured. Every prompt change, every defect fix and every baseline change means the model gets asked again from scratch. **There is no partial credit for a re-run**: `RunManifest.config_fingerprint` refuses to resume a run whose configuration changed, which is correct and is exactly what makes a re-run cost full price.
+The corpus has been answered eight recorded times: four 150-question smoke runs while defects were being found, the full split over three days, a `with-validation` run, a 12-question smoke test, and the abandoned attempt. Every prompt change, defect fix and baseline change means asking the model again from scratch. **There is no partial credit for a re-run** — `RunManifest.config_fingerprint` refuses to resume a run whose configuration changed, which is correct, and which is exactly what makes a re-run cost full price.
 
-So the honest framing of this project's cost is not "$1.95 for the benchmark". It is **"$1.95 per attempt, and there have been 2.32 attempts so far"** — and that multiplier only grows, because Stage 4 and Stage 5 each add baselines that must be run over the same corpus.
+So the honest framing is not "$0.17 for the benchmark". It is **"$0.17 per attempt, and there have been about two and a third attempts"** — and that multiplier only grows, because Stage 4 and Stage 5 each add baselines over the same corpus.
 
-**The free tier's real cost was never money.** At $1.95 the full split runs in one sitting, in under an hour. On the free tier it took **three days**, and it required building resumption ([ADR-037](../architecture/DECISIONS.md#adr-037--resumption-skips-answered-questions-not-recorded-ones)), a halt-on-repeated-failure rule, and a `git worktree` procedure to satisfy the fingerprint guard on each day's resume — plus the day-3 discovery that a worktree alone does not stop the editable install importing the wrong `src/` ([§1.3](#13-the-fingerprint-refused-the-resume-twice-and-was-right-both-times)).
+**The free tier's real cost was never money, and now there is a number for that.** At $0.17 the full split runs in one sitting in under an hour. On the free tier it took **three days**, and it required building resumption ([ADR-037](../architecture/DECISIONS.md#adr-037--resumption-skips-answered-questions-not-recorded-ones)), a halt-on-repeated-failure rule, and a `git worktree` procedure for each day's resume — plus the day-3 discovery that a worktree alone does not stop the editable install importing the wrong `src/` ([§1.3](#13-the-fingerprint-refused-the-resume-twice-and-was-right-both-times)).
 
-**That machinery exists to avoid a two-dollar bill, and it is still the right trade** — but the reason is not economy. It is that a portfolio project whose headline number cannot be reproduced without a funded account has a headline number most readers must take on trust. The constraint buys *reproducibility by strangers*, and it is paid for in engineering rather than in dollars. Naming the price is what stops "free and open source" reading as though it were free of cost.
+**Several days of engineering exist to avoid a seventeen-cent bill.** Stated that baldly it sounds indefensible, and the defence is not economy — it is that a portfolio project whose headline number cannot be reproduced without a funded account has a headline number most readers must take on trust. The constraint buys **reproducibility by strangers**, and it is paid for in engineering rather than in dollars. Naming the price is what stops "free and open source" reading as though it were free of cost.
+
+**It also cuts the other way, and that is worth admitting.** At these prices the free-tier constraint is close to ceremonial for the *evaluation* — anyone with a card can reproduce §1.1 for less than a coffee. Where it genuinely earns its place is Stage 5, where fine-tuning and repeated ablations multiply the corpus by the number of configurations, and where a paid tier stops being a rounding error.
 
 ### 6.4 What this table still cannot do
 
 Its purpose is to let an accuracy gain be read against what it cost — an improvement at 4× the tokens is a different result from a free one. **With one accuracy row there is nothing to compare against**, so the useful figure remains the token count rather than the dollar count: **677 tokens per question** end to end is the budget any future prompt change spends against, and `input_tokens` is mostly the 30-element retrieval budget from §1.1.
+
+It also has no column for the costs that are not tokens: **the CPU time for local embedding, the Postgres instance, and the three days of wall clock** the free tier imposed. The self-hosted row reading `$0.0000` is true about tokens and misleading about everything else.
 
 A second row arrives with the first configuration that changes the token profile — a `full-schema` baseline, which sends the whole schema and should cost visibly more, or a fine-tuned retriever at lower `k`, which should cost visibly less. Those are the comparisons this section was built for.
 
