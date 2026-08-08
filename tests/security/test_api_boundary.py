@@ -13,6 +13,7 @@ from collections.abc import Iterator
 import pytest
 from fastapi.testclient import TestClient
 from tests.conftest import build_settings
+from tests.fakes_api import FakeConnection, FakeResources, FakeRetriever
 
 from api.app import create_app
 from api.errors import GENERIC_FAILURE, REQUEST_ID_HEADER
@@ -21,107 +22,6 @@ from core.exceptions import ConfigurationError
 from core.settings import APISettings, Settings
 
 pytestmark = pytest.mark.security
-
-
-class FakeConnection:
-    """Enough psycopg surface for `ping`, and nothing that touches a network."""
-
-    closed = False
-
-    def cursor(self) -> FakeConnection:
-        return self
-
-    def __enter__(self) -> FakeConnection:
-        return self
-
-    def __exit__(self, *exc_info: object) -> None:
-        return None
-
-    def execute(self, *_: object) -> None:
-        return None
-
-    def fetchone(self) -> tuple[int]:
-        return (1,)
-
-    def close(self) -> None:
-        self.closed = True
-
-
-class FakePool:
-    """A pool that hands out one connection and counts the borrows.
-
-    The count is what makes this more than a stub: a request that leaks a
-    connection back into nothing is invisible until the pool is exhausted under
-    load, which is the least convenient moment to discover it.
-    """
-
-    def __init__(self) -> None:
-        self.conn = FakeConnection()
-        self.borrowed = 0
-        self.returned = 0
-        self.closed = False
-
-    def connection(self) -> FakePool:
-        return self
-
-    def __enter__(self) -> FakeConnection:
-        self.borrowed += 1
-        return self.conn
-
-    def __exit__(self, *exc_info: object) -> None:
-        self.returned += 1
-
-    def close(self) -> None:
-        self.closed = True
-
-
-class FakeCatalog:
-    tables = frozenset({"orders"})
-
-    def resolve(self, *_: object, **__: object) -> None:
-        return None
-
-
-class FakeRetriever:
-    model_version = "test-model"
-
-    def __init__(self) -> None:
-        self.model_opened = False
-
-    @property
-    def dimensions(self) -> int:
-        """Stands in for the property whose *side effect* is the point.
-
-        On the real retriever this reads the checkpoint. Recording the call is
-        how `TestStartupOpensTheModel` can assert the load happened without
-        putting a 90 MB download behind the security suite.
-        """
-        self.model_opened = True
-        return 384
-
-    def search(self, *_: object, **__: object) -> object:
-        raise AssertionError("no test here should reach retrieval")
-
-
-class FakeResources:
-    """The dependency graph, with every I/O boundary replaced.
-
-    Substituted through `create_app(resource_factory=...)`. Without that seam
-    these assertions would need a live PostgreSQL, which would put the security
-    suite behind a Docker daemon and make it the first thing to get skipped.
-    """
-
-    def __init__(self, settings: Settings) -> None:
-        self.settings = settings
-        self.owner = FakeConnection()
-        self.readonly = FakeConnection()
-        self.readonly_pool = FakePool()
-        self.catalog = FakeCatalog()
-        self.retriever = FakeRetriever()
-        self.closed = False
-
-    def close(self) -> None:
-        self.closed = True
 
 
 @pytest.fixture

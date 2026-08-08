@@ -11,8 +11,14 @@ is a boundary that a deployment can sit behind for a week before discovering it
 was never there.
 
 **Defaults are closed, and the open positions are configuration.** Docs are
-off, CORS trusts nobody, and the bind address is loopback. See
-:class:`core.settings.APISettings` for why each one is that way round.
+off, CORS trusts nobody, the bind address is loopback, and the demo UI is not
+served unless a directory is named. See :class:`core.settings.APISettings` for
+why each one is that way round.
+
+The UI, when it is served, is served from *this* origin -- which is why CORS
+can stay closed while a browser drives the API. A separately hosted page would
+need an entry in ``api_cors_origins``, and every entry there is an origin
+allowed to drive an endpoint that has no authentication.
 
 There is no authentication here yet, and that is a stated gap rather than an
 oversight -- see docs/operations/SECURITY.md. Until it lands, this service is
@@ -35,6 +41,7 @@ from api.errors import NOT_READY, ApiError
 from api.health import Probe, Readiness, build_router, ping
 from api.middleware import BodySizeLimitMiddleware, RequestIdMiddleware
 from api.query import QueryService
+from api.static import SecurityHeadersMiddleware, mount_ui, resolve_static_dir
 from composition import Resources
 from composition.answering import build_answerer, build_executor
 from core.settings import Settings
@@ -85,6 +92,11 @@ def create_app(
     # the body, and a correlation id it can attach itself is a smaller loss
     # than a limit that only applies to bodies already in memory.
     app.add_middleware(BodySizeLimitMiddleware, max_bytes=settings.api.api_max_body_bytes)
+    # Added last, so it is the **outermost** of the three. That ordering is the
+    # point: a request refused by the body cap never reaches a route, and a
+    # security header applied only on the path that reached a route is applied
+    # on the path that needed it least.
+    app.add_middleware(SecurityHeadersMiddleware)
 
     # Built here, filled in the lifespan. The route table and the middleware
     # stack are frozen when the app starts serving, so a router added later
@@ -95,6 +107,14 @@ def create_app(
     app.state.query_service = None
     app.include_router(build_router(app.state.readiness))
     app.include_router(query.build_router(_query_service))
+
+    # After the routers, and the order is load-bearing: Starlette matches in
+    # registration order, so `/v1/query` must be claimed before anything the UI
+    # serves. See `api.static` for why the UI is two explicit paths rather than
+    # a mount at `/`.
+    static_root = resolve_static_dir(settings.api.api_static_dir)
+    if static_root is not None:
+        mount_ui(app, static_root)
 
     if settings.api.api_cors_origins:
         app.add_middleware(

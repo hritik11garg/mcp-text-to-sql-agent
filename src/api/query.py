@@ -279,6 +279,14 @@ class QueryService:
             question=request.question,
             request_id=request_id,
         )
+        # Emitted before the rows, and the ordering is the point: a client
+        # should learn that a phase finished from a `stage` event, not by
+        # noticing that a data event turned up. Without this the `explain_only`
+        # branch above announces `validate` while the ordinary path announces
+        # nothing for the phase that actually touches the database -- so every
+        # client has to infer execution from `rows`, and an inference is what
+        # this event exists to make unnecessary.
+        emit("stage", stage="execute", status="ok")
         emit(
             "rows",
             columns=list(result.columns),

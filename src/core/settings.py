@@ -411,6 +411,20 @@ class APISettings(BaseSettings):
     that turns every visitor's browser into an authenticated client.
     """
 
+    api_static_dir: str = ""
+    """Directory of built UI files to serve, or empty to serve none.
+
+    ``web/dist`` after ``npm run build``. Empty by default because those files
+    are a build artifact that is not committed, so the usual state of a fresh
+    checkout is that they do not exist -- and a server that insisted on them
+    would refuse to start for everyone who only wants the API.
+
+    Configured rather than discovered. Looking for ``web/dist`` relative to the
+    source tree would make what a process serves depend on where it was
+    launched from, which is the kind of behaviour that differs between a
+    developer's shell and a container and is noticed in production.
+    """
+
     api_max_body_bytes: int = Field(default=64 * 1024, ge=1024, le=10 * 1024 * 1024)
     """Largest request body accepted, before parsing.
 

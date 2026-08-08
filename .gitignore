@@ -94,6 +94,11 @@ dist/
 .eggs/
 pip-wheel-metadata/
 
+# The demo UI's dependencies. `web/package-lock.json` *is* committed -- it is
+# the record of exactly which versions were resolved, and without it `npm
+# install` can produce a different tree tomorrow than it did today.
+node_modules/
+
 # ---------------------------------------------------------------------------
 # Tooling caches
 # ---------------------------------------------------------------------------
@@ -130,10 +135,6 @@ locust_report*.html
 *.swp
 *.swo
 *~
-
-# Agent/editor tooling: shared project settings would be committed, but the
-# .local variants hold machine-specific paths and permissions.
-.claude/settings.local.json
 
 # Merge and patch leftovers -- committing these is always a mistake.
 *.orig

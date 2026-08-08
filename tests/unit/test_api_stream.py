@@ -140,6 +140,33 @@ class TestTheStreamReportsTheWork:
         assert "sql" in names
         assert "rows" in names
 
+    def test_every_phase_announces_itself_including_execution(self) -> None:
+        """A client must not have to infer a phase from a data event.
+
+        `explain_only` announced `validate` from the day it shipped while the
+        ordinary path announced nothing for the phase that touches the
+        database -- so a client watching progress had to treat the arrival of
+        `rows` as the end of execution. That is an inference about somebody
+        else's control flow, which is the shape this project keeps removing.
+        """
+        stages = [
+            payload["stage"] for name, payload in events(stream(build_client())) if name == "stage"
+        ]
+
+        assert stages == ["retrieve", "generate", "execute"]
+
+    def test_execution_is_announced_before_the_rows_it_produced(self) -> None:
+        names = [name for name, _ in events(stream(build_client()))]
+        stage_positions = [i for i, name in enumerate(names) if name == "stage"]
+
+        assert stage_positions[-1] < names.index("rows")
+
+    def test_explain_only_announces_validate_and_never_execute(self) -> None:
+        body = stream(build_client(), options={"explain_only": True})
+        stages = [payload["stage"] for name, payload in events(body) if name == "stage"]
+
+        assert stages == ["retrieve", "generate", "validate"]
+
     def test_the_sql_arrives_before_the_rows(self) -> None:
         """The ordering is the feature. Seeing the SQL while it still runs is
         what a 29-second answer needs in order not to look like a hang."""
