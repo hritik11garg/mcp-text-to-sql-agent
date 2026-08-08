@@ -98,6 +98,10 @@ Convention: `[ ]` open · `[x]` done · `[~]` in progress · `[!]` blocked
 - [ ] **Decide whether finishing that run is worth a day's budget** — the zero-rejection finding is robust on 110 questions and the categories it depends on are empty across all 921. A completed run buys a firmer count and one more sample of generation noise
 - [ ] **Error-feedback self-correction** — Stage 4, and further away than this list previously implied. **No baseline self-corrects.** `with-validation` validates once and drops a failing query; there is no retry and no feedback to the model, so `validation_attempts` is 0 or 1 in every code path and never more. The `Invalid (post)` column in BENCHMARKS §3 cannot be filled by any run that exists today, and the UI has a "self-corrected" state nothing can currently reach
 - [ ] **An eval that routes through the MCP servers** — today's 79.9% measures the direct answering path. Stage 3's last checkbox ("accuracy unchanged") has been unmeasurable for want of a baseline; the baseline now exists. The servers are the only place a serialization or limit-clamping difference could hide, because they are the only place the components are reached over a wire
+- [x] **Continuous integration** — `.github/workflows/ci.yml`, four jobs on every push and PR. A missing Docker daemon now *fails* in CI rather than skipping, so the security gate cannot report green over tests it never ran; the guard has its own tests
+- [ ] **Wire the coverage floor into CI** — `fail_under = 85` sits configured in `pyproject.toml` and nothing runs it
+- [ ] **Dependency, secret and container scanning in CI** — `pip-audit`, `npm audit`, and an image scan once §22's Dockerfile exists
+- [ ] **Branch protection and required status checks** — repository settings rather than a file, and the half that makes a green run mean something
 - [ ] **Authentication** — the API has none. `API_HOST` is refused on anything but loopback until it does, which is a containment measure, not a substitute
 
 ### Demo UI

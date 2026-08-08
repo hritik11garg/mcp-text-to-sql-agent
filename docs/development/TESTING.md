@@ -230,6 +230,30 @@ The general rule this is an instance of: **a selection mechanism needs a way to 
 
 **Not tested, deliberately:** appearance. There are no snapshot tests and no visual regression tests. A snapshot of markup asserts that nobody changed the markup, which is true of every change, and it would have to be regenerated on every one of them — a test whose failure means nothing is worse than no test. Layout is verified by looking at it, in a browser, and that is stated as manual rather than dressed up as automated.
 
+## 14. How CI runs this suite
+
+`.github/workflows/ci.yml`, on every push to `main` and every pull request. Four jobs, deliberately separate so a failure names its own layer instead of reporting "CI failed": **lint** (`ruff check`, `ruff format --check`, `mypy --strict`), **python** (the whole suite, then the security layer again by name), **web** (`tsc`, `vitest`, and a production build), **docs** (relative links and anchors via `scripts/check_docs_links.py`).
+
+**The one design decision worth explaining is what happens when Docker is missing.**
+
+The Postgres-backed layers get their database from testcontainers, and without a daemon that fixture skips. Locally that is correct — the unit layer still runs and nobody is blocked. **In CI it is the worst available outcome**: integration and security evaporate, every remaining test passes, and the run reports green over the release gate that proves an LLM cannot write to the database.
+
+So `require_docker()` skips locally and **raises in CI**, keyed on the `CI` environment variable:
+
+```
+Docker is unavailable, but CI is set. Refusing to skip: the integration and
+security layers would vanish and the run would report green over the release
+gate. Fix the runner, not this check.
+```
+
+The message names the consequence and the correct fix on purpose — an error that reads as a flaky assertion is one somebody deletes at 2am.
+
+**The guard has its own tests** (`tests/unit/test_ci_guard.py`): that it skips without `CI`, raises with it, gets out of the way when Docker is present, and treats *any* value of `CI` as set — because a runner exporting `CI=1` would otherwise slip past a check for the literal `"true"`. §11's lesson applied to the gate itself: a safety mechanism nobody has watched fail is one that has never been tested.
+
+**The security layer runs twice**, once inside the full suite and once as its own step. The second invocation costs seconds and buys an unambiguous line in the log: if that step is green, the release gate passed *by name* rather than by being included in a total.
+
+**Not yet in the pipeline**, and named rather than implied: the 85% coverage floor configured in `pyproject.toml` and currently unused; dependency, secret and container scanning; branch protection and required status checks, which are repository settings rather than a file and are the half that makes a green run mean something.
+
 ## 12. What is not tested
 
 Stated so the gap is deliberate rather than accidental:

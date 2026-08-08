@@ -1,0 +1,155 @@
+# Continuous integration.
+#
+# Everything here already existed as a command someone had to remember to run.
+# The point of this file is that nobody has to remember.
+#
+# Four jobs, deliberately separate so a failure names its own layer rather than
+# reporting "CI failed": lint and types, the Python suite, the browser suite,
+# and the documentation link check.
+#
+# The security layer is a **release gate**, and it is the reason `python` runs
+# with Docker rather than being split into a fast unit-only job. Its tests
+# assert that the read-only role is *denied* -- an LLM cannot write to the
+# database -- against a real PostgreSQL, because the security model is Postgres
+# role enforcement and testing it against anything else tests nothing.
+#
+# `CI: true` is set on that job on purpose. `tests/conftest.py` turns a missing
+# Docker daemon from a skip into a hard failure when it is set, so a runner
+# where the container never came up fails loudly instead of reporting green
+# over a gate it never executed.
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# A new push supersedes an in-flight run for the same ref. Not a cost measure:
+# two runs racing on the same branch report two verdicts for one branch.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  PYTHON_VERSION: "3.12"
+  NODE_VERSION: "20"
+
+jobs:
+  lint:
+    name: Lint and types
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt -r requirements-dev.txt
+          pip install -e .
+
+      # Three separate steps rather than one `&&` chain: a formatting failure
+      # and a type error are different problems, and a chain reports only the
+      # first.
+      - name: Ruff (lint)
+        run: ruff check src tests scripts
+
+      - name: Ruff (format)
+        run: ruff format --check src tests scripts
+
+      - name: mypy (strict on src)
+        run: mypy src
+
+  python:
+    name: Python tests (unit, integration, security, contract)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      # Read by tests/conftest.py: refuse to *skip* the Docker-backed layers.
+      CI: "true"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt -r requirements-dev.txt
+          pip install -e .
+
+      # testcontainers starts PostgreSQL+pgvector itself and runs every
+      # migration against it, so there is no `services:` block here. That keeps
+      # one definition of the test database instead of two that can disagree --
+      # the compose file and the fixture would otherwise drift.
+      - name: Verify the Docker daemon is up
+        run: docker info --format '{{.ServerVersion}}'
+
+      - name: Run the suite
+        run: pytest -q -ra
+
+      # A separate invocation so the gate's verdict is its own line in the log.
+      # It re-runs the security layer, which is cheap and unambiguous: if this
+      # step is green, the release gate passed *by name*.
+      - name: Security gate
+        run: pytest -m security -q -ra
+
+  web:
+    name: Browser client
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      # `npm ci` and not `npm install`: it installs exactly the committed
+      # lockfile and fails if package.json and the lock disagree, which is the
+      # behaviour a pipeline wants and the behaviour a developer usually does
+      # not.
+      - name: Install
+        run: npm ci
+
+      - name: TypeScript
+        run: npm run typecheck
+
+      - name: Tests
+        run: npm test
+
+      # Proves the bundle still builds, and that `assetsInlineLimit: 0` still
+      # holds -- the build option the Content-Security-Policy depends on.
+      - name: Build
+        run: npm run build
+
+  docs:
+    name: Documentation links
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      # No dependencies: the checker is standard library only, so this job
+      # stays fast and cannot fail for a reason unrelated to the documents.
+      - name: Relative links and anchors
+        run: python scripts/check_docs_links.py

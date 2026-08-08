@@ -248,6 +248,39 @@ def _docker_available() -> bool:
     return result.returncode == 0
 
 
+def require_docker() -> None:
+    """Skip without Docker locally; **fail** without it in CI.
+
+    That asymmetry is the whole point. On a developer's machine skipping is
+    right: the unit layer still runs and nobody is blocked by a stopped daemon.
+    In CI it is the worst available outcome -- the integration and security
+    layers evaporate, every remaining test passes, and the run reports green
+    over the release gate it exists to enforce.
+
+    This project has already written down twice that *skipped* and *passed*
+    look alike, and that an invisible test is worse than a failing one. A
+    pipeline that silently dropped the read-only negative suite because a
+    container did not start would be the third instance and the most expensive:
+    that layer is what proves an LLM cannot write to the database.
+
+    A module-level function rather than inline in the fixture so the guard
+    itself is testable -- see ``tests/unit/test_ci_guard.py``. A safety
+    mechanism with no test is the shape this repository keeps finding.
+
+    Raises:
+        pytest.UsageError: Docker is unavailable and ``CI`` is set.
+    """
+    if _docker_available():
+        return
+    if os.environ.get("CI"):
+        raise pytest.UsageError(
+            "Docker is unavailable, but CI is set. Refusing to skip: the "
+            "integration and security layers would vanish and the run would "
+            "report green over the release gate. Fix the runner, not this check."
+        )
+    pytest.skip("Docker daemon not available -- these tests need a real PostgreSQL")
+
+
 @pytest.fixture(scope="session")
 def postgres_url() -> Iterator[str]:
     """Start Postgres+pgvector and apply every migration.
@@ -255,8 +288,7 @@ def postgres_url() -> Iterator[str]:
     Not SQLite and not a mock. The security model *is* Postgres role
     enforcement, so testing it against anything else tests nothing.
     """
-    if not _docker_available():
-        pytest.skip("Docker daemon not available -- these tests need a real PostgreSQL")
+    require_docker()
 
     from testcontainers.community.postgres import PostgresContainer
 
