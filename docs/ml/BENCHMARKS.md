@@ -322,7 +322,7 @@ So the finding is: **on Spider, with this model, the validation tier has nothing
 
 | Date | Commit | LLM | Effort | Input tok/q | Output tok/q | USD/q | Exec. acc. | Notes |
 |---|---|---|---|---|---|---|---|---|
-| 2026-08-08 | `15dcdf7` | `openai/gpt-oss-120b` | default | **494** | **183** | **$0.00** | **79.9%** | Whole split, n=921. 455k in / 169k out total, free tier |
+| 2026-08-08 | `15dcdf7` | `openai/gpt-oss-120b` | default | **494** | **183** | **$0.00** | **79.9%** | Whole split, n=921. 455k in / 169k out total, free tier. **$0.17** at standard on-demand list price (§6.1) |
 
 **$0.00 is a real number and it is the point of the constraint in [PROJECT.md](../../PROJECT.md).** The entire 921-question benchmark cost nothing but three days of daily quota, which is what makes the result reproducible by someone with no budget — the requirement the provider-agnostic port ([ADR-014](../architecture/DECISIONS.md#adr-014--provider-agnostic-llm-behind-an-llmclient-port)) exists to satisfy.
 
@@ -330,7 +330,9 @@ So the finding is: **on Spider, with this model, the validation tier has nothing
 
 ### 6.1 What it cost, and what it would cost elsewhere
 
-**Token counts are measured; prices are not.** Every run writes `input_tokens` and `output_tokens` per question, so the volumes below are facts about work that happened. The rates are a snapshot of published list prices **as of 2026-08-07**, and they are the only part of this section that can quietly become wrong.
+> **All prices on this page are standard on-demand rates recorded on 2026-08-08.** They are not batch rates, not cached-input rates and not priority rates. **Batch tiers are commonly half the standard rate**, and this workload — 921 independent questions with no latency requirement — is an ideal fit for one, so a reader who cares about cost should assume these figures can be roughly halved by not caring about latency. None of that is modelled here.
+
+**Token counts are measured; prices are not.** Every run writes `input_tokens` and `output_tokens` per question, so the volumes below are facts about work that happened. The rates are a snapshot of published **standard on-demand** list prices recorded on **2026-08-08** (the vendor lists carried their own `lastUpdated` of 2026-08-07), and they are the only part of this section that can quietly become wrong.
 
 That asymmetry is why this table is **generated, not maintained**:
 
@@ -339,6 +341,8 @@ python -m evals.cost      # reads results/*/summary.json, prices them, prints th
 ```
 
 Repricing is an edit to one dated dictionary in `src/evals/cost.py` plus a command. A hand-maintained cost table is the drift risk [R-17](../project/RISKS.md) in its purest form — every figure rots on someone else's schedule and nothing detects it.
+
+*Standard on-demand rates as of 2026-08-08. Batch tiers are commonly half these rates and are not modelled.*
 
 | Provider | Model | Input $/1M | Output $/1M | One full split (921 q) | Everything recorded |
 |---|---|---:|---:|---:|---:|
@@ -364,7 +368,7 @@ Measured volumes: **454,607 in / 168,560 out** for one full split; **767,985 in 
 
 ### 6.2 What it costs to reproduce this repository
 
-**One full-split evaluation: $0.17** at the rates the run was actually made against — or **$0.00** on the free tier the default configuration uses. Across every model listed, **$0.04 to $6.49**.
+**One full-split evaluation: $0.17** at the standard on-demand rate the run was actually made against — or **$0.00** on the free tier the default configuration uses. Across every model listed, **$0.04 to $6.49**. **Batched, roughly half that** on providers that offer it, which for a 921-question offline evaluation is the tariff a cost-conscious reader would actually pick.
 
 That is the number for someone who clones this repository and runs the benchmark once. It buys 921 questions across 20 databases and the row in §1.1. **Everything else in the project makes zero LLM calls** — the API, the four MCP servers, the demo UI and the entire 1,400-test suite are free to run — so the cost of the project is the cost of *evaluating* it.
 

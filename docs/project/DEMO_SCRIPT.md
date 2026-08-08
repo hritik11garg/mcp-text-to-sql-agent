@@ -230,6 +230,14 @@ Run the harness on the smoke split live (fast), then show [BENCHMARKS.md](../ml/
 
 **If asked how it was run on a free tier:** three days, three daily token budgets, resuming into the same directory. Days 1 and 2 each ended with 12 questions failed against a spent quota; day 3 re-attempted rather than retired them, so the final result has zero infrastructure errors. Without resumption this corpus was not measurable at all here — which is [ADR-037](../architecture/DECISIONS.md#adr-037--resumption-skips-answered-questions-not-recorded-ones), and it is a better answer than the accuracy figure.
 
+**If asked what it cost — and it is a good question to be asked — the answer is 17 cents.** The whole 921-question benchmark, at the standard on-demand list price of the model that actually ran it (`openai/gpt-oss-120b` on Groq, $0.15 in / $0.60 out per 1M). It was run on a free tier so nothing was billed, but the number is real and `python -m evals.cost` regenerates it from the artifacts.
+
+Three things worth adding, in this order:
+
+- **Name the tariff.** Standard on-demand, recorded 2026-08-08. Batch tiers are commonly half, and a 921-question offline evaluation is an ideal batch workload — so 17 cents is an upper bound.
+- **Total spend is ~2.3× one reproduction**, because the corpus has been answered eight times across smoke runs, defect fixes and baseline changes. A configuration change means re-running from scratch, since the fingerprint refuses to resume a run whose configuration moved.
+- **The free tier's real cost was three days, not money.** Resumption, a halt rule and a `git worktree` procedure exist to avoid a seventeen-cent bill. That is only defensible because it buys reproducibility by strangers — and saying so, rather than presenting "free and open source" as an unqualified win, is the more honest version.
+
 **Volunteer what it does not measure**, because both are easy questions to be caught by. It is `retrieval-only`, so no validator ran — the 13 invalid queries reached PostgreSQL and were refused there. And it exercises the direct answering path, so **no accuracy figure measures the MCP servers**; they are proven to work by the contract suite and proven to answer as well by nothing.
 
 **If asked about self-correction, say it is not built.** The `with-validation` baseline validates once and drops a failing query — a gate, with no retry and no feedback to the model. Error-feedback self-correction is Stage 4. Claiming otherwise is the mistake this file exists to prevent.

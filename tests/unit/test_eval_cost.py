@@ -16,6 +16,7 @@ import pytest
 from evals.cost import (
     PRICES,
     PRICES_AS_OF,
+    PRICING_BASIS,
     Price,
     load_usage,
     markdown_table,
@@ -76,6 +77,20 @@ class TestTheTableCannotSilentlyGoStale:
     def test_the_snapshot_date_is_recorded(self) -> None:
         """A cost table with no date claims prices do not move."""
         assert PRICES_AS_OF
+
+    def test_the_tariff_is_named_not_implied(self) -> None:
+        """Batch tiers are commonly half the standard rate, so a table that
+        does not say which tariff it quotes is off by up to 2x in a direction
+        the reader cannot see."""
+        assert "standard" in PRICING_BASIS
+
+    def test_the_generated_table_carries_its_own_date_and_tariff(self) -> None:
+        """A table copied into a document without them will be quoted against
+        the wrong tariff on a later date."""
+        caption = markdown_table((1, 1), (1, 1)).splitlines()[0]
+
+        assert PRICES_AS_OF in caption
+        assert "atch" in caption  # batch tiers named as unmodelled
 
     def test_every_price_names_its_provider(self) -> None:
         """The same model id costs different amounts on different hosts, so a
@@ -151,9 +166,9 @@ class TestTheGeneratedTable:
     def test_it_regenerates_rather_than_being_maintained(self) -> None:
         table = markdown_table((454_607, 168_560), (767_985, 408_931))
 
-        assert table.startswith("| Provider | Model |")
+        assert "| Provider | Model |" in table
         assert "openai/gpt-oss-120b" in table
-        assert len(table.splitlines()) == len(PRICES) + 2  # header + separator
+        assert len(table.splitlines()) == len(PRICES) + 4  # caption, blank, header, sep
 
     def test_the_cheapest_row_is_not_rounded_away(self) -> None:
         """A self-hosted row at $0 and a 5-cent row must stay distinguishable."""

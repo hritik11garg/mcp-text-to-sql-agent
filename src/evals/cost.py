@@ -28,11 +28,35 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Final
 
-PRICES_AS_OF: Final = "2026-08-07"
-"""The day the rates below were published. Print it next to every figure.
+PRICES_AS_OF: Final = "2026-08-08"
+"""The day these rates were recorded. Print it next to every figure.
 
 A cost table with no date is a claim that prices do not move, which is the one
-thing everybody knows to be false.
+thing everybody knows to be false. The vendor lists consulted carried their own
+``lastUpdated`` of 2026-08-07; this is the day they were read and written down,
+which is the date a reader can check a figure against.
+"""
+
+PRICING_BASIS: Final = "standard on-demand requests"
+"""**Which tariff these rates are, and naming it is the cheapest correction here.**
+
+Every price below is the ordinary synchronous per-request rate. Providers
+publish several others for the same model, and the differences are not small:
+
+- **Batch / asynchronous** tiers are commonly **half** the standard rate, and
+  this workload is a perfect fit for one -- 921 independent questions with no
+  latency requirement. A reader who cares about cost should assume these
+  figures can be roughly halved by not caring about latency.
+- **Cached input** is cheaper again where it is offered. This project builds a
+  stable prompt prefix precisely to be cacheable and plumbs
+  ``cache_read_tokens`` through, but has never observed it non-zero against a
+  real provider, so no cache discount is claimed.
+- **Priority / provisioned** tiers cost *more*.
+
+None of those are modelled. Quoting a batch price for a run made synchronously
+would understate what was spent; quoting a standard price at a reader who
+batches overstates what they will pay. So the tariff is named rather than
+implied.
 """
 
 PER_MILLION: Final = Decimal(1_000_000)
@@ -146,8 +170,16 @@ def usd(amount: Decimal) -> str:
 
 
 def markdown_table(one_run: tuple[int, int], everything: tuple[int, int]) -> str:
-    """The published table, regenerated rather than maintained."""
+    """The published table, regenerated rather than maintained.
+
+    The caption is part of the output on purpose: a table copied into a
+    document without its date and its tariff is a table that will be quoted
+    against the wrong tariff on a later date.
+    """
     lines = [
+        f"*Standard on-demand rates as of {PRICES_AS_OF}. Batch tiers are commonly "
+        f"half these rates and are not modelled.*",
+        "",
         "| Provider | Model | Input $/1M | Output $/1M | One full split (921 q) "
         "| Everything recorded |",
         "|---|---|---:|---:|---:|---:|",
@@ -171,7 +203,8 @@ def main() -> int:  # pragma: no cover - thin CLI over the tested functions
     full = next((r for r in runs if r.run_id == "spider-full-20260806"), None)
     one_run = (full.input_tokens, full.output_tokens) if full else everything
 
-    print(f"prices as of {PRICES_AS_OF} — verify before quoting\n")
+    print(f"prices as of {PRICES_AS_OF}, {PRICING_BASIS} -- verify before quoting")
+    print("batch tiers are commonly half these rates and are not modelled\n")
     print(f"{'run':38} {'q':>5} {'in':>10} {'out':>9}  baseline")
     for run in runs:
         print(
@@ -193,6 +226,7 @@ if __name__ == "__main__":  # pragma: no cover
 __all__ = [
     "PRICES",
     "PRICES_AS_OF",
+    "PRICING_BASIS",
     "Price",
     "RunUsage",
     "load_usage",
