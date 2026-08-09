@@ -36,13 +36,13 @@ Every category answers five questions, in order:
 
 | Layer | Cases collected |
 |---|---|
-| **Total** | **1,506** |
+| **Total** | **1,515** |
 | unit | 1,005 |
-| security | 286 |
+| security | 295 |
 | integration | 189 |
 | contract | 90 |
 | e2e | **0** |
-| *of which* `property` | *30* |
+| *of which* `property` | *39* |
 
 Layers overlap by design — a security test needing a real database carries both markers — so the rows sum to more than the total. 14 source packages · 112 web tests · 26 documents · `docker-compose.yml` present, **CI landed 2026-08-08** (§24), **no Dockerfile** (§22).
 
@@ -226,7 +226,7 @@ Layers overlap by design — a security test needing a real database carries bot
 
 **Applicable?** Yes — highest priority, because the system executes model-generated SQL.
 
-**Implemented?** Yes. **16 security test files, 286 collected cases.** `docs/operations/SECURITY.md` §13 carries 15 findings in a fixed format: vulnerability, why dangerous, attack scenario, severity, OWASP category, secure implementation, why the fix works, CIA impact.
+**Implemented?** Yes. **17 security test files, 295 collected cases.** `docs/operations/SECURITY.md` §13 carries 15 findings in a fixed format: vulnerability, why dangerous, attack scenario, severity, OWASP category, secure implementation, why the fix works, CIA impact.
 
 **Proof.** `tests/security/`, SECURITY.md §§1–15, and [SECURITY_INVARIANTS.md](../operations/SECURITY_INVARIANTS.md) — eleven claims that must be true of every build, each naming the test that fails if its mechanism is removed.
 
@@ -598,17 +598,21 @@ The behaviour it was pinned for is now asserted deterministically and in-process
 
 **Applicable?** Yes — the SQL validator parses adversarial input as its purpose, and the SSE parser frames untrusted network bytes.
 
-**Implemented?** **One of the three targets, narrowly**, as a side effect of §38 rather than as a campaign. `TestIllegalInputIsRefusedRatherThanCrashing` feeds `validate_static` generated text and asserts only that it **returns** — deliberately not that the text is rejected, since `SELECT 1` is generated text that should be accepted.
+**Implemented?** **Two of the three targets**, both shallow, and neither as a campaign.
 
-This row was 🔴 until 2026-08-09 and the status changed because **that strategy found the exact defect this category names**: `validate_static("$")` raised an unhandled `TokenError`, so a caller could crash the validation tier on an unauthenticated endpoint with four characters ([SECURITY.md §14.2.13](../operations/SECURITY.md)).
+**The SQL validator**, as a side effect of §38. `TestIllegalInputIsRefusedRatherThanCrashing` feeds `validate_static` generated text and asserts only that it **returns** — deliberately not that the text is rejected, since `SELECT 1` is generated text that should be accepted. This row was 🔴 until 2026-08-09 and moved because **that strategy found the exact defect this category names**: `validate_static("$")` raised an unhandled `TokenError`, so a caller could crash the validation tier on an unauthenticated endpoint with four characters ([SECURITY.md §14.2.13](../operations/SECURITY.md)).
 
-**Proof.** `tests/security/test_property_write_containment.py`; 500 generated inputs per CI run.
+**The request body**, added the same day. `tests/security/test_property_request_body.py` generates JSON bodies *and* field names against `POST /v1/query`, asserting the narrow claims that matter on an unauthenticated surface: no body of any shape produces a 5xx, every refusal answers in the one envelope with a request id, and no submitted value or field name comes back.
+
+**Proof.** `tests/security/test_property_write_containment.py`, `tests/security/test_property_request_body.py`; 500 generated inputs per property per CI run.
 
 **Failure mode.** A crash in the validator is a denial of service on an unauthenticated endpoint; a parser that accepts what it should reject is a bypass of the whole safety tier.
 
-**Why this is 🟡 and not 🟢.** It is 100–500 short strings per run from a general-purpose text strategy — **no corpus, no coverage guidance, no mutation, no dedicated fuzzing tool, and no persistence of interesting inputs between runs.** That is a smoke test wearing a generator, and it is worth exactly as much as the one crash it found.
+**What the second target found.** `api.errors._fields` strips pydantic's `input` and has a docstring explaining why — then joined the field *path* verbatim, and with `extra="forbid"` that path is the caller's chosen field name. The request body was reflected anyway, one level up, unbounded ([SECURITY.md §13.16](../operations/SECURITY.md), Low). **Found by reading the handler while writing the fuzzer, not by the fuzzer**; the generated tests are the regression guard rather than the discovery.
 
-**Targets still untouched.** The request body; the **SSE parser** in `web/`, where the hand-written bounds and the held-`\r` case are the most delicate code in the tree and would need `fast-check` rather than `hypothesis`. Neither has had a single generated input.
+**Why this is 🟡 and not 🟢.** Both targets are 100–500 short inputs per run from general-purpose strategies, with **no corpus, no coverage guidance, no mutation, no dedicated fuzzing tool, and no persistence of interesting inputs between runs.** That is a smoke test wearing a generator.
+
+**The target still untouched.** The **SSE parser** in `web/`, where the hand-written bounds and the held-carriage-return case are the most delicate code in the tree. It is TypeScript and would need `fast-check` rather than `hypothesis` — a second property-testing dependency in a second language, which is a decision rather than an afternoon.
 
 ---
 
@@ -743,7 +747,7 @@ This row was 🔴 until 2026-08-09 and the status changed because **that strateg
 
 Ranked by leverage — value delivered per unit of work — not by category number.
 
-> **Struck-through rows are done and are kept rather than deleted**, so the list reads as a record of what was worked and in what order. **Rows 3, 9 and 10 are what remains.** Row 9 is *partly* done (see §37), so the next full piece of work that needs no LLM quota is **row 10 — authentication**.
+> **Struck-through rows are done and are kept rather than deleted**, so the list reads as a record of what was worked and in what order. **Rows 3, 9 and 10 are what remains.** Row 9 is two-thirds done (see §37). **Row 3 is blocked on infrastructure, not on quota** — it needs a running PostgreSQL with the Spider databases loaded. The next full piece of work needing neither is **row 10 — authentication**.
 
 | # | Action | Category | Why first |
 |---|---|---|---|
@@ -755,7 +759,7 @@ Ranked by leverage — value delivered per unit of work — not by category numb
 | 6 | ~~Indirect prompt injection through `profile_table`~~ — **done 2026-08-08** | §11 | 7 cases. Found that `profile_max_value_chars` doubles as an injection-payload cap |
 | 7 | ~~**Property-based tests** for the five invariants in §38~~ — **three of five done 2026-08-09** | §38 | 30 tests. Found an unhandled `TokenError` on the first run — a truncated string literal crashed validation instead of being refused. The two left need a database and `fast-check` respectively |
 | 8 | ~~**Failure-injection tests** — kill Postgres, kill the provider, exhaust the pool~~ — **done 2026-08-09** | §30 | 38 tests. Found that `schema_search` started cleanly against an unreachable database and exited 0, while its own docstring promised the opposite |
-| 9 | **Fuzz the SQL validator** — *partly done 2026-08-09* | §37 | The generated-text strategy added with §38 found the `TokenError` crash. Still no corpus, no mutation, and nothing at all for the request body or the SSE parser |
+| 9 | **Fuzz the parsers** — *two of three targets done 2026-08-09* | §37 | The validator (found the `TokenError` crash) and the request body (found the reflected field name, SECURITY.md §13.16). The SSE parser is untouched and needs `fast-check` |
 | 10 | **Authentication** | §14, §15 | Highest value, highest cost; unblocks per-client limits and multi-tenancy |
 
 ## Maintaining this document

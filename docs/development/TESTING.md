@@ -274,7 +274,7 @@ The message names the consequence and the correct fix on purpose — an error th
 
 ## 15. Property-based tests
 
-`hypothesis`, 30 tests, marker `property`. They live **inside the existing layers** rather than in a directory of their own — `tests/security/` for the two that are security claims, `tests/unit/` for the one that is not — so the security gate selects them without needing to know they are generated.
+`hypothesis`, 39 tests, marker `property`. They live **inside the existing layers** rather than in a directory of their own — `tests/security/` for the two that are security claims, `tests/unit/` for the one that is not — so the security gate selects them without needing to know they are generated.
 
 **The premise, and why this project needed it.** An example-based test checks the inputs somebody thought of, and the failure this codebase keeps rediscovering is that *nobody chose easy inputs — everybody chose convenient ones*. Convenient SQL is lower case, single-spaced and uncommented. Three of these properties exist because the rules they assert were already written as invariants and had only ever been checked against a handful of instances.
 
@@ -282,6 +282,7 @@ The message names the consequence and the correct fix on purpose — an error th
 |---|---|---|
 | **No write is ever accepted** | `tests/security/test_property_write_containment.py` | Fifteen statement shapes × four table names × eight token separators × four casings, in five nesting positions — bare, stacked either way, inside a data-modifying CTE, inside a subquery |
 | **One payload is always one event** | `tests/security/test_property_sse_framing.py` | Arbitrary JSON, plus what a database actually returns (`Decimal`, `date`, `UUID`, `bytes`), plus a hand-written list of strings designed to forge a second SSE frame |
+| **No request body produces a 5xx, and no refusal echoes it** | `tests/security/test_property_request_body.py` | Generated JSON bodies *and* generated field names against `POST /v1/query` |
 | **`truncated` means the server's limit cut** | `tests/unit/test_property_row_limit.py` | Four interacting numbers — rows available, the caller's request, the query's own `LIMIT`, and the configured ceiling — checked against a reference model written independently of the executor |
 
 **Each suite carries its own dual, and that is not decoration.** "No write is accepted" is satisfied perfectly by a validator that refuses everything, so the same file asserts that generated `SELECT`s — including `UNION`, `INTERSECT` and CTEs — are accepted *outright*. A containment check with no false-rejection test is one that gets disabled the first time it blocks real work.

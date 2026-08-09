@@ -279,14 +279,61 @@ def _fields(exc: RequestValidationError) -> list[dict[str, str]]:
     there in any log or error tracker that records responses. The location and
     the rule are what a client needs to fix the call; the value is something
     they already have.
+
+    **The location is caller-supplied too, and that was missed.** ``QueryRequest``
+    sets ``extra="forbid"``, so an unknown field produces a ``loc`` containing
+    *the name the caller chose*. Dropping ``input`` while joining ``loc`` verbatim
+    reflected the request body anyway, one level up: a body of
+    ``{"question": "hi", "<script>alert(1)</script>": 1}`` came back as
+    ``body.<script>alert(1)</script>``, unbounded in length and unrestricted in
+    content. See :func:`_safe_part`.
     """
     return [
         {
-            "field": ".".join(str(part) for part in error.get("loc", ())),
+            "field": ".".join(_safe_part(part) for part in error.get("loc", ()))[
+                :MAX_FIELD_PATH_CHARS
+            ],
             "reason": error.get("msg", "invalid"),
         }
         for error in exc.errors()
     ]
+
+
+MAX_FIELD_PATH_CHARS: Final = 96
+"""Ceiling on a reported field path.
+
+Public because the security suite asserts against it, and a bound a test
+restates by hand is a bound that drifts.
+"""
+
+_UNPRINTABLE: Final = "<unnamed>"
+"""What a field name becomes when it is not one.
+
+Not the empty string: a caller with a genuine typo needs to see *something*
+occupying that position, and a silent gap reads as a schema that lost a field.
+"""
+
+
+def _safe_part(part: object) -> str:
+    """One segment of a field path, safe to publish.
+
+    Kept verbatim when it looks like an identifier or a list index, because
+    naming the offending field is the entire value of this response to a
+    developer fixing their call -- ``body.questoin`` is worth far more than
+    ``body.<unnamed>``.
+
+    Replaced wholesale otherwise. Not escaped and not filtered character by
+    character: a partially-cleaned string is still attacker-influenced text in
+    a response, and this is a diagnostic aid rather than a channel that owes
+    anyone fidelity. **A caller who sent a field name that is not a field name
+    already knows what they sent.**
+    """
+    text = str(part)
+    if not text or len(text) > 64:
+        return _UNPRINTABLE
+    if text.replace("_", "").replace("-", "").isalnum():
+        return text
+    return _UNPRINTABLE
 
 
 def _http_message(exc: StarletteHTTPException) -> str:

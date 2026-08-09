@@ -461,6 +461,49 @@ Each was a prerequisite rather than a deferred finding: unexploitable while no e
 
 **CIA impact.** Confidentiality and integrity, conditionally.
 
+### 13.16 The validation-error handler reflected the field name it was written to suppress — **Low**
+
+Found 2026-08-09 while reading `api.errors._fields` in preparation for fuzzing the request body ([ENGINEERING_MATRIX](../project/ENGINEERING_MATRIX.md) §37), and confirmed by hand before a line of the fuzzer existed.
+
+**Vulnerability.** `_fields` deliberately strips pydantic's `input` — the offending *value* — and its docstring explains why: a request body appearing in a response ends up in any log or error tracker that records responses. It then built the reported path with `".".join(str(part) for part in error["loc"])`. **With `extra="forbid"` on `QueryRequest`, the `loc` of an unknown field is the name the caller chose.** So the body was reflected anyway, one level up, unbounded in length and unrestricted in content. *(OWASP A03; CWE-116, improper encoding or escaping of output.)*
+
+```
+POST /v1/query   {"question": "hi", "<script>alert(1)</script>": 1}
+→ 400            {"details": {"fields": [{"field": "body.<script>alert(1)</script>", …}]}}
+```
+
+**Why it's dangerous — and the honest limits.** Not as XSS in this system: the response is `application/json`, and the demo UI renders no markup anywhere ([I-9](SECURITY_INVARIANTS.md#i-9--user-influenced-sql-and-database-values-are-never-rendered-as-executable-markup)). The realistic paths are narrower and worth naming rather than inflating:
+
+- **A different client renders it.** A generic API console or admin tool that displays `error.details` as HTML has no reason to expect attacker-controlled text there, precisely because the surrounding documentation says values are stripped.
+- **It lands in a log or an error tracker**, which is the exact scenario the docstring names. A field name containing newlines or a forged JSON fragment is CWE-117 one layer out.
+- **It is unbounded.** A caller could send a field name up to the body cap and have it echoed back, on an endpoint with no authentication.
+
+**The part that actually matters** is none of the above: **a control's docstring described behaviour the code did not have.** That is the failure this project keeps rediscovering, and it is worse than an unprotected surface, because a reader auditing the reflection question would have read that docstring and moved on.
+
+**Attack scenario.** An unauthenticated caller posts a body whose extra field name is a `<script>` fragment, an ANSI escape sequence, or a fake log line. It comes back in the response and lands wherever responses are recorded. No credential and no prior access required — `API_HOST` refuses non-loopback binds, so reachability presumes a deployment that has accepted that risk knowingly.
+
+**Severity — Low.** No confidentiality loss, nothing executes in this project's own client, and the body cap bounds the volume. Rated Low rather than informational because it is remotely reachable, unauthenticated, and contradicts a written control.
+
+**Secure implementation.** Each path segment is passed through `_safe_part`, and the joined result is capped at `MAX_FIELD_PATH_CHARS` (96):
+
+```python
+def _safe_part(part: object) -> str:
+    text = str(part)
+    if not text or len(text) > 64:
+        return _UNPRINTABLE
+    if text.replace("_", "").replace("-", "").isalnum():
+        return text
+    return _UNPRINTABLE
+```
+
+**Why the fix is secure.** It is an **allowlist that replaces wholesale**, not an escape or a character filter. A partially-cleaned string is still attacker-influenced text in a response, and every escaping scheme is correct for one rendering context and wrong for the next. Anything that is not plainly an identifier or an index becomes a fixed token, so the output is drawn from a set this project controls entirely.
+
+It also keeps the diagnostic that made the field worth reporting: `body.questoin` still names a real typo, which is the whole value of this response to a developer fixing a call. **A caller who sent a field name that is not a field name already knows what they sent.**
+
+**CIA impact.** Integrity of downstream logs and any client that renders the field. No confidentiality or availability impact.
+
+**Regression guard.** `tests/security/test_property_request_body.py` — generated bodies and generated field *names*, asserting that no submitted value appears in a response, that every reported path is bounded and drawn from a safe character set, and that no body of any shape produces a 5xx. The bound is imported from `api.errors` rather than restated, because a limit a test copies by hand is a limit that drifts.
+
 ## 14. Multi-provider LLM risks
 
 Introduced by [ADR-014](../architecture/DECISIONS.md#adr-014--provider-agnostic-llm-behind-an-llmclient-port). Making the LLM endpoint configurable is necessary, but it adds two attack surfaces that a hardcoded vendor SDK did not have.
