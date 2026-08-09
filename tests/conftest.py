@@ -22,6 +22,8 @@ from urllib.parse import urlsplit, urlunsplit
 
 import psycopg
 import pytest
+from hypothesis import HealthCheck
+from hypothesis import settings as hypothesis_settings
 
 from adapters.llm.fake import FakeLLMClient
 from core.settings import (
@@ -45,6 +47,45 @@ type Conn = psycopg.Connection[tuple[object, ...]]
 
 TEST_LAYERS = frozenset({"unit", "integration", "security", "contract", "e2e"})
 """The directories under ``tests/``, which are also the marker names."""
+
+
+# --- property-based testing ------------------------------------------------
+
+hypothesis_settings.register_profile(
+    "dev",
+    max_examples=100,
+    deadline=None,
+    print_blob=True,
+    suppress_health_check=[HealthCheck.too_slow],
+)
+hypothesis_settings.register_profile(
+    "ci",
+    max_examples=500,
+    deadline=None,
+    print_blob=True,
+    suppress_health_check=[HealthCheck.too_slow],
+)
+hypothesis_settings.load_profile("ci" if os.environ.get("CI") else "dev")
+"""Two profiles, and the difference between them is the point of having any.
+
+**A property test that runs the same hundred examples everywhere is an
+example-based test with extra machinery.** The value is in the examples nobody
+would have chosen, and finding those costs time -- so the developer loop stays
+at 100 for speed and CI runs 500, where a few extra seconds buys coverage
+nothing else in this repository provides.
+
+``deadline=None`` on both, deliberately. Hypothesis' default is a 200 ms
+per-example wall clock, and the code under test here parses SQL: on a shared
+runner a slow example fails a *timing* assertion while the *property* holds
+perfectly. That is a red build for a reason unrelated to correctness, and the
+project has no latency budget expressed in this suite -- those live in
+``pytest-benchmark`` (docs/operations/PERFORMANCE.md), where a deadline means
+something.
+
+``print_blob=True`` so a CI failure prints a reproduction blob. Without it the
+failing example is a paragraph of output to retype by hand, and the example
+database (``.hypothesis/``) is not shared between a runner and a laptop.
+"""
 
 
 # --- layer markers ---------------------------------------------------------

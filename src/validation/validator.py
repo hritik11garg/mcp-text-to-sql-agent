@@ -27,7 +27,7 @@ import psycopg
 import sqlglot
 from psycopg import Connection
 from sqlglot import exp
-from sqlglot.errors import ParseError
+from sqlglot.errors import SqlglotError
 
 from core.settings import ExecutionSettings
 from schema.catalog import SchemaCatalog
@@ -179,7 +179,23 @@ class SQLValidator:
 
         try:
             statements = sqlglot.parse(text, read=self._dialect)
-        except ParseError as exc:
+        except SqlglotError as exc:
+            # The **base** class, not `ParseError`. `TokenError` is its sibling,
+            # not its subclass, and it is what sqlglot raises for an
+            # unterminated string, identifier, comment or dollar-quote -- which
+            # is precisely the shape of a generation that ran out of output
+            # tokens mid-literal. `... WHERE name = 'Rob` is not an exotic
+            # input on a free tier with a low token cap; it is the ordinary
+            # failure of the provider this project defaults to.
+            #
+            # Catching the leaf meant that input escaped as an unhandled
+            # exception: the caller got `internal_error` instead of an
+            # actionable `syntax_error`, the self-correction loop aborted the
+            # request rather than correcting it, and -- worst -- the executor
+            # raised before reaching its `outcome="rejected"` audit write, so
+            # the attempt left no trail. Found by
+            # tests/security/test_property_write_containment.py on its first
+            # run; no example-based test had thought to end a string early.
             return _fail(sql, ValidationStage.PARSE, "syntax_error", _first_line(str(exc)))
 
         parsed = [s for s in statements if s is not None]

@@ -1,8 +1,8 @@
 # Security Invariants
 
-Ten statements that must be true of every build. Each names the test that proves it.
+Eleven statements that must be true of every build. Each names the test that proves it.
 
-> **This document exists because 168 security test functions across 13 files do not, by themselves, state an argument.** A reader can see that things are tested; they cannot see *what the suite collectively claims*. Ten sentences can be checked against the code in an afternoon — a test suite cannot.
+> **This document exists because 286 security test cases across 15 files do not, by themselves, state an argument.** A reader can see that things are tested; they cannot see *what the suite collectively claims*. Eleven sentences can be checked against the code in an afternoon — a test suite cannot.
 >
 > **A statement with no test is a wish.** Where an invariant is only partly proven, the row says so and names what is missing, rather than describing the tested half and stopping.
 
@@ -50,9 +50,11 @@ Ten statements that must be true of every build. Each names the test that proves
 
 **Enforced by.** `SQLExecutor` **re-validates every statement itself** rather than assuming `validate_sql` ran. Validation is five stages, cheapest first: parse → single-statement → read-only tree walk (the *whole* tree, so data-modifying CTEs and `SELECT … INTO` are caught, not just the root) → identifier resolution against the catalog → `EXPLAIN` with a cost ceiling.
 
-**Proven by.** `tests/security/test_execution_sandbox.py::TestWritesStillRefused::test_execution_revalidates_and_refuses`; `tests/security/test_sql_validation.py::test_validator_refuses_the_write_attempt` and `::test_the_database_refuses_it_independently` — the same statement refused by both layers, independently.
+**Proven by.** `tests/security/test_execution_sandbox.py::TestWritesStillRefused::test_execution_revalidates_and_refuses`; `tests/security/test_sql_validation.py::test_validator_refuses_the_write_attempt` and `::test_the_database_refuses_it_independently` — the same statement refused by both layers, independently. Since 2026-08-09 also over **generated** statements: `tests/security/test_property_write_containment.py` varies fifteen write shapes across keyword casing, whitespace, interleaved comments and five nesting positions, and asserts the dual — that generated `SELECT`s are still accepted.
 
 **Residual, and it is measured.** Validation catches what `EXPLAIN` can *plan*. It cannot catch a cast that is type-correct and value-invalid: over 110 questions the tier rejected **zero** queries and passed both that PostgreSQL then refused ([BENCHMARKS §3.1](../ml/BENCHMARKS.md)). **`EXPLAIN` plans; it does not evaluate.** I-1 is what holds when this one lets something through.
+
+**A second residual, found by those property tests and now closed.** The tier could be made to raise instead of refuse. `validate_static` caught sqlglot's `ParseError`; `TokenError` is its **sibling**, not its subclass, and is what an unterminated string, identifier, comment or dollar-quote produces — the ordinary shape of a generation cut off by an output-token cap. The statement never reached the database, so this invariant held; but the *attempt* escaped as an unhandled exception **before** the executor's `outcome="rejected"` audit write, so nothing recorded it. **An invariant that holds without leaving evidence is one you cannot prove held.** Fixed by catching the base `SqlglotError`.
 
 ---
 
@@ -74,7 +76,7 @@ Ten statements that must be true of every build. Each names the test that proves
 
 **Enforced by.** The limit is **injected into the AST**, not asked for in the prompt ([ADR-005](../architecture/DECISIONS.md#adr-005--limits-enforced-at-the-ast-level-not-by-prompting)). Smaller-wins against the caller's request, clamped to `MAX_ROWS_CEILING`. A `truncated` flag distinguishes a server-imposed cut from the caller's own `LIMIT`.
 
-**Proven by.** `tests/security/test_execution_sandbox.py` — `TestTheCallerCannotRaiseALimit` (the ceiling holds against any request; nonsense counts are floored rather than crashing; a limit written into the SQL cannot exceed the ceiling) and `TestLimitInjectionCannotBeEscaped` (the limit survives hostile query shapes; a comment cannot swallow it).
+**Proven by.** `tests/security/test_execution_sandbox.py` — `TestTheCallerCannotRaiseALimit` (the ceiling holds against any request; nonsense counts are floored rather than crashing; a limit written into the SQL cannot exceed the ceiling) and `TestLimitInjectionCannotBeEscaped` (the limit survives hostile query shapes; a comment cannot swallow it). Since 2026-08-09 also `tests/unit/test_property_row_limit.py`, which generates all four interacting numbers — rows available, the caller's request, the query's own `LIMIT`, the configured ceiling — and checks the outcome against a reference model written independently of the executor.
 
 **Residual.** Row count is bounded; **result *size* is not** — one row of a very large value is within the limit.
 
@@ -156,6 +158,22 @@ Ten statements that must be true of every build. Each names the test that proves
 
 ---
 
+## I-11 · A payload can never forge a second server-sent event
+
+**Why.** SSE is a newline-delimited text protocol carrying attacker-influenced data: a field ends at `\n` and an event ends at `\n\n`. A raw newline reaching a `data:` line does not corrupt the frame — it **ends** it, and everything after becomes a second event the client parses and believes. **The client has no way to tell a forged event from a real one**, so a value in a result set could deliver a `rows` or `done` event the server never sent, and the page would render fabricated results as though they came from the database. Log injection (CWE-117) one layer out, with a worse consequence.
+
+**Not theoretical.** The payload most likely to contain a newline is the one this endpoint exists to send: **generated SQL is routinely multi-line.** The first question ever streamed carried one.
+
+**Enforced by.** A payload is always a mapping, always serialised by `json.dumps`, and never a caller-supplied string placed on a line — JSON escapes `\n` as two safe characters, and `ensure_ascii` makes ` `/` ` harmless too. `ServerSentEvent.encode` then **asserts** the result is single-line rather than trusting that reasoning to survive the next edit. Event *names* are validated against a regex for the same reason: a name is written to its own line and is never serialised, so `json.dumps` does not protect it.
+
+**Proven by.** `tests/security/test_property_sse_framing.py` — over arbitrary generated JSON, over what a database actually returns (`Decimal`, `date`, `UUID`, `bytes`, which reach `default=str` and are therefore *unescaped* on the way in), and over a hand-written list of strings built to forge a frame. The assertion is a count: exactly three newlines, exactly one line beginning `event:`, exactly one beginning `data:`. Heartbeat comment frames are concatenated in, because that is what the route does and a frame ending one character short would swallow the next.
+
+**Added 2026-08-09**, after the property tests were written. **The mechanism predates the invariant** — `src/api/sse.py` was built as a security control and says so in its docstring — but nothing in this document claimed it, which meant nothing here would have noticed it being removed. That is the same gap writing I-1…I-10 exposed once already.
+
+**Residual.** The invariant is about *framing*, not about *termination*. Nothing here proves every stream reaches a terminal `done` or `error` event; the route has a broad handler that emits one, and no test generates the ways a stream can end. That remains an open property in [ENGINEERING_MATRIX.md](../project/ENGINEERING_MATRIX.md) §38. Nor does it cover a client that mis-parses correct framing — `web/src/api/sse.ts` has its own suite (TESTING.md §13) and its own bounds.
+
+---
+
 ## Standing
 
 | | Invariant | Status |
@@ -170,5 +188,6 @@ Ten statements that must be true of every build. Each names the test that proves
 | I-8 | Secrets never leak | 🟢 Proven · credentials rotated 2026-08-08 |
 | I-9 | Nothing renders as markup | 🟢 Proven · one untested build coupling |
 | I-10 | Database content is not an instruction | 🟢 Proven |
+| I-11 | A payload cannot forge a second SSE event | 🟢 Proven over generated input · framing only, not termination |
 
 **Adding an invariant.** State it as a property that is either true or a defect, name the mechanism that makes it true, and write the test that fails when the mechanism is removed. **An invariant added without that test makes this page weaker, not longer** — it converts a document where every line is backed into one where a reader has to guess which lines are.

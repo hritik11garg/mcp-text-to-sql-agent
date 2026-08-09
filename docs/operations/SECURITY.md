@@ -847,6 +847,43 @@ Reviewed alongside the resumption change ([ADR-037](../architecture/DECISIONS.md
 
 **Scope checked:** the per-question progress line logs `failure_category`, an enum value that cannot carry provider text; artifacts are written with `json.dumps`, which escapes newlines. This line was the only exposure.
 
+### 14.2.13 A truncated string literal crashing the validation tier — **Medium** (Integrity of the audit trail)
+
+Found 2026-08-09 by the property suite added for [ENGINEERING_MATRIX §38](../project/ENGINEERING_MATRIX.md), on its first run, by a strategy that generates arbitrary text and asserts only that `validate_static` **returns**.
+
+**Vulnerability.** `validate_static` caught `sqlglot.errors.ParseError`. `TokenError` is that class's **sibling, not its subclass** — both descend from `SqlglotError` — and it is what the tokenizer raises for an unterminated string, identifier, block comment or dollar-quote. Input such as `SELECT * FROM t WHERE name = 'Rob` escaped validation as an unhandled exception rather than being refused. *(OWASP A09, security logging and monitoring failures; CWE-396, declaration of catch for generic exception — here the inverse, a catch too narrow for the hierarchy it was aimed at.)*
+
+**Why it's dangerous.** Three consequences, in increasing order of how long each would take to notice.
+
+The caller received `internal_error` rather than an actionable `syntax_error` — both transports contain the exception ([§13.3](#133-an-unhandled-exception-narrating-itself-to-the-network--high) and `mcp_servers.common`), so nothing leaked, but nothing useful was said either. The agent's self-correction path then **aborted the request instead of correcting it**, because that loop is driven by a returned `ValidationResult` and an exception is not one.
+
+The third is the finding. `SQLExecutor.execute` calls the validator **before** its `outcome="rejected"` audit write, so the exception propagated past the only place the attempt would have been recorded. **The query was refused and no evidence exists that it was ever asked.** Every other rejection in this system leaves a row in `agent_meta.query_audit`; this class left none.
+
+**Why the trigger is ordinary rather than exotic.** This is not a payload someone has to think of. It is what a language model produces when its output is cut off mid-literal by a token cap — the routine failure of the free tiers this project defaults to, and the reason [§14](#14-multi-provider-llm-risks) exists at all. The first person to hit it would most likely have been the operator, not an attacker.
+
+**Attack scenario.** The API has no authentication ([§13.1](#131-no-authentication-on-a-network-reachable-service--critical)). A caller reachable to it sends `SELECT '` repeatedly, or an MCP host calls `validate_sql` with the same, and probes the service while **leaving nothing in the audit trail** — the one control that would show the service was being tested. `explain_only` exists specifically so that probing by repeated validation failure is visible ("the difference between a control and a control you can detect being tested"); this defeated that for one input class. Timing and status differences remain readable to the caller, so the probe still returns information while the operator's record of it is blank.
+
+**Severity — Medium.** No confidentiality loss and no write reached the database — [I-1](SECURITY_INVARIANTS.md#i-1--the-applications-database-role-cannot-modify-application-data) and [I-3](SECURITY_INVARIANTS.md#i-3--generated-sql-cannot-reach-the-database-without-passing-validation) both held throughout. Rated Medium rather than Low because the audit gap is silent, is remotely reachable on an unauthenticated service, and is the exact evidence an incident-response procedure ([§15](#15-incident-response)) depends on.
+
+**Secure implementation.** Catch the **base** class:
+
+```python
+try:
+    statements = sqlglot.parse(text, read=self._dialect)
+except SqlglotError as exc:
+    return _fail(sql, ValidationStage.PARSE, "syntax_error", _first_line(str(exc)))
+```
+
+`apply_row_limit` received the same guard. It is unreachable through `execute`, which re-validates first — but the function is exported, and `execution.executor`'s whole premise is that upstream has failed.
+
+**Why the fix is secure.** It catches the library's error hierarchy at its root rather than at one leaf, so a tokenizer or parser error class added in a future `sqlglot` release is refused on arrival instead of escaping until someone generates the input that reaches it. That is the same rule the validator already applies to sqlglot's `exp.Command`: **when the parser says it does not understand something, the answer is refusal, not an exception and not a guess.** The taxonomy is unchanged — a tokenizer failure *is* a syntax error to the agent — so the audit row, the error envelope and the self-correction feedback all take paths that already existed and are already tested.
+
+**CIA impact.** Integrity of the audit trail, primarily. Availability of a single request secondarily. No confidentiality impact.
+
+**Scope checked.** `sqlglot` is called in exactly two places in `src/` (`validation/validator.py`, `execution/executor.py`); both now catch `SqlglotError`. The regression guard is the property test, not a chosen example — `tests/security/test_property_write_containment.py::TestIllegalInputIsRefusedRatherThanCrashing`.
+
+**The general lesson, which is why this is written up rather than fixed quietly.** *An exception hierarchy is an interface, and catching a leaf of it is a bet that the library will never add a sibling.* The bet was already lost when it was written: `TokenError` predates this project. Twelve hundred example-based tests did not find it, because ending a string early is not something a person writing test cases thinks to do — it is only something a generator does.
+
 ## 15. Incident response
 
 > **TBD — Stage 6.**

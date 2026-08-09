@@ -13,10 +13,17 @@
 # database -- against a real PostgreSQL, because the security model is Postgres
 # role enforcement and testing it against anything else tests nothing.
 #
-# `CI: true` is set on that job on purpose. `tests/conftest.py` turns a missing
-# Docker daemon from a skip into a hard failure when it is set, so a runner
-# where the container never came up fails loudly instead of reporting green
-# over a gate it never executed.
+# `CI: true` is set on that job on purpose, and it now does **two** things --
+# worth stating here, because a variable with two meanings is a variable whose
+# second meaning gets removed by someone who only knew the first:
+#
+#   1. `tests/conftest.py` turns a missing Docker daemon from a skip into a
+#      hard failure, so a runner where the container never came up fails
+#      loudly instead of reporting green over a gate it never executed.
+#   2. It selects the `ci` Hypothesis profile -- 500 generated examples per
+#      property instead of the 100 a developer runs. The examples nobody would
+#      have chosen are the entire value of those tests, and finding them costs
+#      time this job has and a laptop should not have to spend.
 
 name: CI
 

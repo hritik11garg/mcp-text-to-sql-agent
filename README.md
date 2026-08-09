@@ -183,10 +183,13 @@ That creates the `agent_meta` schema, the pgvector extension and the HNSW index,
 Verify the install — the security suite is the one that matters, and it passes by being **refused**:
 
 ```powershell
-pytest                    # ~1,310 tests; integration, security and contract need Docker
-pytest -m security        # the containment suite, on its own — 255 tests
+pytest                    # ~1,460 tests; integration, security and contract need Docker
+pytest -m security        # the containment suite, on its own — 286 tests
+pytest -m property        # 30 property tests; 100 generated examples each, 500 in CI
 ruff check . ; mypy
 ```
+
+**Thirty of those assert properties over generated input rather than examples somebody chose** — no generated write is ever accepted (and no generated `SELECT` is ever refused, which is the half that stops the check being deleted), no payload can forge a second event on the SSE stream, and `truncated` is true only when the *server's* limit did the cutting. They found a defect on their first run: an unterminated string literal — what a generation cut off by a token cap produces — crashed the validator instead of being refused, and escaped before the executor's rejection audit, so the attempt left no trail. [TESTING.md §15](docs/development/TESTING.md).
 
 The Postgres-backed tests skip cleanly without a running Docker daemon. In CI that is not good enough: *skipped* and *passed* look alike, so the pipeline must fail if the security suite did not actually run.
 

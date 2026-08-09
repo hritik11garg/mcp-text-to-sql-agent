@@ -254,13 +254,38 @@ The message names the consequence and the correct fix on purpose — an error th
 
 **Not yet in the pipeline**, and named rather than implied: the 85% coverage floor configured in `pyproject.toml` and currently unused; dependency, secret and container scanning; branch protection and required status checks, which are repository settings rather than a file and are the half that makes a green run mean something.
 
+## 15. Property-based tests
+
+`hypothesis`, 30 tests, marker `property`. They live **inside the existing layers** rather than in a directory of their own — `tests/security/` for the two that are security claims, `tests/unit/` for the one that is not — so the security gate selects them without needing to know they are generated.
+
+**The premise, and why this project needed it.** An example-based test checks the inputs somebody thought of, and the failure this codebase keeps rediscovering is that *nobody chose easy inputs — everybody chose convenient ones*. Convenient SQL is lower case, single-spaced and uncommented. Three of these properties exist because the rules they assert were already written as invariants and had only ever been checked against a handful of instances.
+
+| Property | Where | What is generated |
+|---|---|---|
+| **No write is ever accepted** | `tests/security/test_property_write_containment.py` | Fifteen statement shapes × four table names × eight token separators × four casings, in five nesting positions — bare, stacked either way, inside a data-modifying CTE, inside a subquery |
+| **One payload is always one event** | `tests/security/test_property_sse_framing.py` | Arbitrary JSON, plus what a database actually returns (`Decimal`, `date`, `UUID`, `bytes`), plus a hand-written list of strings designed to forge a second SSE frame |
+| **`truncated` means the server's limit cut** | `tests/unit/test_property_row_limit.py` | Four interacting numbers — rows available, the caller's request, the query's own `LIMIT`, and the configured ceiling — checked against a reference model written independently of the executor |
+
+**Each suite carries its own dual, and that is not decoration.** "No write is accepted" is satisfied perfectly by a validator that refuses everything, so the same file asserts that generated `SELECT`s — including `UNION`, `INTERSECT` and CTEs — are accepted *outright*. A containment check with no false-rejection test is one that gets disabled the first time it blocks real work.
+
+**The generators are not fuzzers, and the distinction is the whole design.** A strategy emitting arbitrary text finds parse errors, which is a fact about `sqlglot` rather than about this project. What is generated instead is plausible SQL with the incidental details varied. The one strategy that *is* arbitrary text (`st.text()` against `validate_static`) makes a correspondingly narrow claim: not that random text is rejected — `SELECT 1` is random text that should be accepted — but that the function always **returns**, because its caller is a loop and an exception there aborts a request rather than correcting it.
+
+**That narrow claim is the one that found something.** On its first run, `validate_static("$")` raised an unhandled `sqlglot.errors.TokenError`: the validator caught `ParseError`, and `TokenError` is its **sibling**, not its subclass. It is raised for an unterminated string, identifier, comment or dollar-quote — which is the exact shape of a generation that ran out of output tokens mid-literal, on the free tiers this project defaults to. Consequences, in order of how long they would have taken to notice: the caller got `internal_error` instead of an actionable `syntax_error`; the self-correction loop aborted instead of correcting; and the executor raised **before** its `outcome="rejected"` audit write, so the attempt left no trail at all. Fixed by catching the base `SqlglotError`. Twelve hundred example-based tests had not thought to end a string early.
+
+**Two profiles**, registered in `tests/conftest.py`: 100 examples locally, **500 in CI**, selected on the `CI` environment variable — the same variable the Docker guard keys on. A property test that runs the same hundred examples everywhere is an example-based test with extra machinery. `deadline=None` on both, because the code under test parses SQL and a per-example wall clock turns a slow shared runner into a failed *timing* assertion while the property holds perfectly; latency budgets live in `pytest-benchmark` (§9), where a deadline means something.
+
+**Two of section 38's five properties are not here**, named rather than implied:
+
+- **The read-only connection never holds a write privilege.** Needs a real database, so generating hundreds of examples against it costs a container per example or a shared one with cross-example state. Covered by `tests/security/test_readonly_role.py` over the privileges that exist.
+- **The SQL tokenizer round-trips.** Lives in `web/`, which is TypeScript, and would need `fast-check` rather than `hypothesis`. Already asserted as a hand-written property (§13) — the gap is generated input, not the claim.
+
 ## 12. What is not tested
 
 Stated so the gap is deliberate rather than accidental:
 
 - **LLM output quality.** Measured by the eval harness, not asserted in tests.
 - **Prompt effectiveness.** Same — a prompt change is validated by an eval run.
-- **Third-party library correctness.** sqlglot's parser is trusted; `EXPLAIN` is the second opinion.
+- **Third-party library correctness.** sqlglot's parser is trusted; `EXPLAIN` is the second opinion. **Its error *surface* is not trusted, and that distinction was bought the hard way** — see §15 on `TokenError`. Two known limitations are recorded rather than worked around: `ORDER /* c */ BY` is legal PostgreSQL that sqlglot cannot parse, and an unmodelled statement becomes an opaque `exp.Command` that the validator refuses on principle.
 - **Postgres itself.** The privilege system is the foundation, not a subject.
 - **The UI's appearance.** See §13 — verified by looking at it, and said so plainly rather than approximated with snapshots.
 - **The MCP servers' *accuracy*.** The contract suite proves they answer; no eval measures whether they answer as *well* as the direct path. The full-split baseline now exists, so this is a gap with a number-shaped hole in it rather than an unmeasurable one.

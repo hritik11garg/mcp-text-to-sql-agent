@@ -29,6 +29,7 @@ import sqlglot
 from psycopg import Connection
 from psycopg_pool import ConnectionPool
 from sqlglot import exp
+from sqlglot.errors import SqlglotError
 
 from core.exceptions import (
     ExecutionError,
@@ -286,7 +287,16 @@ def apply_row_limit(sql: str, max_rows: int, *, dialect: str = DIALECT) -> tuple
     One extra row is requested so the caller can distinguish a full page from a
     truncated one without a second query.
     """
-    statement = sqlglot.parse_one(sql, read=dialect)
+    try:
+        statement = sqlglot.parse_one(sql, read=dialect)
+    except SqlglotError as exc:
+        # Unreachable through `execute`, which re-validates first -- and
+        # guarded anyway, because this function is exported and the module
+        # docstring's whole premise is that upstream has failed. An unhandled
+        # `TokenError` here would be the same defect the validator carried:
+        # a caller gets an internal error instead of a refusal.
+        raise ExecutionError("the query could not be parsed to apply a row limit") from exc
+
     if not isinstance(statement, ALLOWED_ROOTS):  # pragma: no cover - see validator
         # The same tuple validation allows, so the two cannot disagree about
         # what a runnable statement is. Narrowing here is also what gives this

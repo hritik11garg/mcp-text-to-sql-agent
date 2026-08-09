@@ -26,13 +26,25 @@ Every category answers five questions, in order:
 | | Count | |
 |---|---|---|
 | 🟢 Done and proven | **16** | No action |
-| 🟡 Partial | **16** | Gaps named per row |
-| 🔴 Applicable and absent | **7** | §14, §15, §22, §28, §30, §37, §38 |
+| 🟡 Partial | **17** | Gaps named per row |
+| 🔴 Applicable and absent | **6** | §14, §15, §22, §28, §30, §37 |
 | ⚪ Not applicable | **6** | Declined on the record |
 
-**The 🟡 rows are where the useful work is, not the 🔴 rows.** Three of the highest-value actions in [§ Priorities](#priorities) sit inside categories marked partial — the MCP benchmark (§19 has 46 contract tests and no accuracy figure), indirect prompt injection (§11 has 6 tests and none covering the one component that sends row data), and the exposed credential (§33 is otherwise sound and carries one live defect). A category is 🟡 when a foundation exists; that says nothing about how sharp the remaining gap is.
+**The 🟡 rows are where the useful work is, not the 🔴 rows.** Three of the highest-value actions in [§ Priorities](#priorities) sit inside categories marked partial — the MCP benchmark (§19 has contract tests and no accuracy figure), the `locust` pin (§25 carries a dependency justified by a comment), and property-based testing (§38 landed three of its five properties and names the two it did not). A category is 🟡 when a foundation exists; that says nothing about how sharp the remaining gap is.
 
-**Evidence base, measured 2026-08-08:** 15 source modules · **920 test functions** across four suites — unit 583, security 168, integration 123, contract 46, **e2e 0** — expanding to 1,411 executed cases through parametrisation · 112 web tests · 25 documents · `docker-compose.yml` present, **CI landed 2026-08-08** (§24), **no Dockerfile** (§22).
+**Evidence base, measured 2026-08-09.** Counted by marker with `pytest --collect-only -m <marker>`, which is the same selection CI uses — an earlier revision counted `def test_` by hand and produced numbers nobody could reproduce.
+
+| Layer | Cases collected |
+|---|---|
+| **Total** | **1,461** |
+| unit | 980 |
+| security | 286 |
+| integration | 189 |
+| contract | 70 |
+| e2e | **0** |
+| *of which* `property` | *30* |
+
+Layers overlap by design — a security test needing a real database carries both markers — so the rows sum to more than the total. 14 source packages · 112 web tests · 26 documents · `docker-compose.yml` present, **CI landed 2026-08-08** (§24), **no Dockerfile** (§22).
 
 ---
 
@@ -584,17 +596,26 @@ Every category answers five questions, in order:
 
 ---
 
-## 38 · Property-based testing 🔴
+## 38 · Property-based testing 🟡
 
 **Rule.** Assert invariants over generated inputs rather than examples over chosen ones.
 
 **Applicable?** Yes — this project's rules are already phrased as invariants.
 
-**Implemented?** No. `hypothesis` is not a dependency.
+**Implemented?** Three of the five properties named below, landed 2026-08-09. `hypothesis` 6.165.2, **30 tests** carrying the `property` marker, inside the existing layers rather than a directory of their own so the security gate selects them without knowing they are generated. 100 examples locally, 500 in CI.
+
+**Proof.** `tests/security/test_property_write_containment.py` (no generated write is accepted, in five nesting positions — *and* no generated `SELECT` is refused, which is the half that stops the check being deleted) · `tests/security/test_property_sse_framing.py` (no payload whatsoever produces two events) · `tests/unit/test_property_row_limit.py` (the truncation algebra against an independently written reference model) · shared generators in `tests/strategies.py` · [TESTING.md](../development/TESTING.md) §15.
 
 **Failure mode.** Example-based tests check the inputs someone thought of. The defect this project keeps rediscovering is that **nobody chose easy inputs — everybody chose convenient ones**, and convenient identifiers are lower case.
 
-**Properties worth asserting first.** No generated SQL containing a write operation reaches the executor · `truncated=true` implies the requested limit was exceeded · the read-only connection never holds a write privilege · every SSE stream terminates or is explicitly cancelled · the SQL tokenizer's output concatenates back to its input exactly (already a hand-written test — a natural first property).
+**What it found on the first run.** `validate_static("$")` raised an unhandled `TokenError` — a **sibling** of the `ParseError` the validator caught, not a subclass, and what sqlglot raises for an unterminated string, identifier, comment or dollar-quote. That is the exact shape of a generation truncated mid-literal by an output-token cap, which is the ordinary failure of the free tiers this project defaults to. The caller received `internal_error` rather than an actionable `syntax_error`, self-correction aborted instead of correcting, and the executor raised *before* its `outcome="rejected"` audit write — so the attempt left no trail. Fixed by catching the base `SqlglotError`.
+
+**The two properties not implemented**, named rather than left implied:
+
+- **The read-only connection never holds a write privilege.** Needs a real database, so hundreds of generated examples cost either a container each or one shared container with cross-example state. `tests/security/test_readonly_role.py` covers the privileges that exist; generating them is the gap.
+- **The SQL tokenizer round-trips.** Lives in `web/` and would need `fast-check`, not `hypothesis`. Already asserted as a hand-written property (§05, and [TESTING.md](../development/TESTING.md) §13) — the missing half is generated input, not the claim.
+
+**Gap worth naming.** *The generators encode a grammar somebody wrote.* They vary keyword case, whitespace, comments, quoting and nesting around fifteen write shapes and twelve read shapes — which is far past what the example suites reach and still a set of shapes a person chose. A statement type nobody listed is not generated, and the mitigation is the validator's rule that an unmodelled `exp.Command` is refused on principle rather than inspected.
 
 ---
 
@@ -706,7 +727,7 @@ Every category answers five questions, in order:
 
 Ranked by leverage — value delivered per unit of work — not by category number.
 
-> **Struck-through rows are done and are kept rather than deleted**, so the list reads as a record of what was worked and in what order. **Rows 3, 4 and 7–10 are what remains.** The next one that needs no LLM quota is row 7.
+> **Struck-through rows are done and are kept rather than deleted**, so the list reads as a record of what was worked and in what order. **Rows 3, 4 and 8–10 are what remains.** The next one that needs no LLM quota is row 8.
 
 | # | Action | Category | Why first |
 |---|---|---|---|
@@ -716,7 +737,7 @@ Ranked by leverage — value delivered per unit of work — not by category numb
 | 4 | **Resolve the `locust` pin** — write the first concurrency test or remove the dependency | §25, §28 | A dependency justified by a comment; the project's own precedent says it goes |
 | 5 | ~~`SECURITY_INVARIANTS.md`~~ — **done 2026-08-08** | §12 | Ten claims, each naming the test that proves it. Writing it exposed the one invariant with no test |
 | 6 | ~~Indirect prompt injection through `profile_table`~~ — **done 2026-08-08** | §11 | 7 cases. Found that `profile_max_value_chars` doubles as an injection-payload cap |
-| 7 | **Property-based tests** for the five invariants in §38 | §38 | Stronger than examples, and the project's rules are already phrased as properties |
+| 7 | ~~**Property-based tests** for the five invariants in §38~~ — **three of five done 2026-08-09** | §38 | 30 tests. Found an unhandled `TokenError` on the first run — a truncated string literal crashed validation instead of being refused. The two left need a database and `fast-check` respectively |
 | 8 | **Failure-injection tests** — kill Postgres, kill the provider, exhaust the pool | §30 | Documented behaviours nobody has demonstrated |
 | 9 | **Fuzz the SQL validator** | §37 | A parser whose job is hostile input, tested only with inputs someone chose |
 | 10 | **Authentication** | §14, §15 | Highest value, highest cost; unblocks per-client limits and multi-tenancy |

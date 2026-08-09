@@ -113,6 +113,7 @@ markers = [
     "contract: MCP tool schema and behaviour contracts",
     "e2e: full stack with a fake LLM",
     "slow: excluded from the default run",
+    "property: asserts an invariant over generated inputs, not chosen ones",
 ]
 filterwarnings = ["error"]
 
