@@ -154,13 +154,31 @@ Scenarios: happy path; validation failure → correction → success; retry budg
 
 The HTTP tests that exist today are deliberately **not** here. `tests/unit/test_api_health.py` and `tests/security/test_api_boundary.py` drive the app through `TestClient` with every dependency faked, which makes them unit and security tests that happen to speak HTTP. An e2e test is one where the fakes stop at the LLM.
 
-## 8. Load tests
+## 8. Concurrency and load
 
-> **TBD — Stage 6.** `locust`. Feeds [../operations/PERFORMANCE.md](../operations/PERFORMANCE.md) §4.
+**These are two different things, and separating them is what let the second one wait.**
 
-Answering: sustained throughput within p95 target; concurrency at pool saturation; behaviour past saturation (queueing vs collapse); memory per replica; effect of one expensive query on concurrent latency.
+**Concurrency is a correctness property**, so it runs on every commit. `tests/unit/test_concurrency.py`, 7 tests, no server and no load generator: callers at the cap all run *simultaneously* (a service that serialised everything satisfies every other admission test in this suite — only the in-flight peak tells them apart), callers over the cap are **refused rather than queued**, every slot returns after a burst of twenty and after a burst of failures, and the executor never holds more connections at once than the cap allows.
 
-**Graceful degradation past saturation is the finding that matters**, more than peak throughput.
+The last of those matters because `API_POOL_MAX_SIZE > API_MAX_CONCURRENT_REQUESTS` is enforced at startup as *configuration*. That only means something if one request never holds two connections — which is true today and is exactly what a later change (a follow-up query, a profiling call inside answering) would break silently.
+
+**`locust` was pinned for this from Stage 0 and never imported.** Removed 2026-08-09 along with fifteen transitive dependencies including Flask and gevent — see [ENGINEERING_MATRIX](../project/ENGINEERING_MATRIX.md) §25. The property it was pinned for turned out not to need a load generator at all.
+
+### These tests were verified by mutation, and the exercise found two defects in them
+
+Three deliberate breaks to `_Admission` — remove the refusal, make `release()` a no-op, force the limit to one — each turned a subset red. Doing it found two ways the tests were weaker than they read:
+
+**One built a fresh `QueryService` for its second batch.** That proves a new counter starts at zero and says nothing about the old one coming back down; it passed against a no-op `release()`. It now reuses the same service.
+
+**Two blocked forever instead of failing.** The property under test is *"the caller is refused rather than made to wait"*, so a broken implementation's failure mode is an await that never returns — and an unbounded `await` turns that into a hung suite reporting nothing. **Every await that can block is now bounded by `asyncio.wait_for`.** Against the removed cap the suite now fails in five seconds naming three tests, where before it hung.
+
+> **A concurrency test that hangs when the property breaks is worse than no test**: it fails the build with a timeout that names nothing, and locally it just stops.
+
+### Load and soak — TBD, Stage 6
+
+Still absent, and needing a running server and a pipeline: sustained throughput within the p95 target; behaviour past pool saturation against a real database; memory per replica over hours; the effect of one expensive query on concurrent latency. Feeds [../operations/PERFORMANCE.md](../operations/PERFORMANCE.md) §4.
+
+**Graceful degradation past saturation is the finding that matters**, more than peak throughput. The pin can come back with the file that imports it.
 
 ## 9. Benchmark tests
 

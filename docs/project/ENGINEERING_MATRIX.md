@@ -26,18 +26,18 @@ Every category answers five questions, in order:
 | | Count | |
 |---|---|---|
 | 🟢 Done and proven | **16** | No action |
-| 🟡 Partial | **19** | Gaps named per row |
-| 🔴 Applicable and absent | **4** | §14, §15, §22, §28 |
+| 🟡 Partial | **20** | Gaps named per row |
+| 🔴 Applicable and absent | **3** | §14, §15, §22 |
 | ⚪ Not applicable | **6** | Declined on the record |
 
-**The 🟡 rows are where the useful work is, not the 🔴 rows.** Three of the highest-value actions in [§ Priorities](#priorities) sit inside categories marked partial — the MCP benchmark (§19 has contract tests and no accuracy figure), the `locust` pin (§25 carries a dependency justified by a comment), and property-based testing (§38 landed three of its five properties and names the two it did not). A category is 🟡 when a foundation exists; that says nothing about how sharp the remaining gap is.
+**The 🟡 rows are where the useful work is, not the 🔴 rows.** Three of the highest-value actions in [§ Priorities](#priorities) sit inside categories marked partial — the MCP benchmark (§19 has contract tests and no accuracy figure), load testing (§28 has the concurrency half and none of the soak half), and property-based testing (§38 landed three of its five properties and names the two it did not). A category is 🟡 when a foundation exists; that says nothing about how sharp the remaining gap is.
 
 **Evidence base, measured 2026-08-09 (revised same day).** Counted by marker with `pytest --collect-only -m <marker>`, which is the same selection CI uses — an earlier revision counted `def test_` by hand and produced numbers nobody could reproduce.
 
 | Layer | Cases collected |
 |---|---|
-| **Total** | **1,499** |
-| unit | 998 |
+| **Total** | **1,506** |
+| unit | 1,005 |
 | security | 286 |
 | integration | 189 |
 | contract | 90 |
@@ -410,9 +410,11 @@ Layers overlap by design — a security test needing a real database carries bot
 
 **Failure mode.** A compromised transitive dependency in the frontend build executes on a page served same-origin with an unauthenticated API.
 
-**Gaps.** No `pip-audit`, no `npm audit` in any pipeline (there is no pipeline — §24), no SBOM, no license check.
+**Gaps.** No `pip-audit`, no `npm audit` in CI, no SBOM, no license check.
 
-**Live defect.** **`locust==2.46.2` is pinned in `requirements-dev.txt` with the comment "concurrency + timeout behaviour under load", and nothing imports it.** `tests/e2e/` is empty. This is the same shape as the removed `anthropic` pin: a dependency justified by a comment. Either §28 lands or the pin goes.
+**Live defect closed 2026-08-09.** `locust==2.46.2` was pinned with the comment *"concurrency + timeout behaviour under load"* and nothing imported it. **The pin is gone**, and with it fifteen direct dependencies — Flask, `flask-cors`, `flask-login`, `gevent`, `geventhttpclient`, `werkzeug`, `pyzmq`, `python-socketio` and more. An entire second web framework in the dev environment of a project that has no `pip-audit` to notice it, installed for a file that did not exist.
+
+The behaviour it was pinned for is now asserted deterministically and in-process (§28). Same precedent as ADR-014's removal of the unused `anthropic` pin: **a dependency justified by a comment is not justified.** The pin can return with the file that imports it.
 
 ---
 
@@ -448,17 +450,21 @@ Layers overlap by design — a security test needing a real database carries bot
 
 ---
 
-## 28 · Load / stress / soak 🔴
+## 28 · Load / stress / soak 🟡
 
 **Rule.** Find the breaking point deliberately, then run long enough to expose leaks.
 
-**Applicable?** Yes — the concurrency controls exist specifically for behaviour under load, and behaviour under load has never been observed.
+**Applicable?** Yes — the concurrency controls exist specifically for behaviour under load, and behaviour under load had never been observed.
 
-**Implemented?** **No.** `tests/e2e/` is empty and `locust` is installed but unused (§25).
+**Implemented?** **Concurrency, yes. Load and soak, no.** `tests/unit/test_concurrency.py`, added 2026-08-09, is the "first test worth writing" this row used to name: callers at the cap all run *simultaneously*, callers over it are refused rather than queued, every slot returns after a burst of twenty and after a burst of failures, and the executor never holds more connections than the cap allows.
 
-**Failure mode.** Connection-pool exhaustion, slot leaks and memory growth are invisible in a suite where every test runs alone. The in-flight cap, the pool sizing and the keepalive were all designed for concurrency that has never been applied.
+**Proof.** `tests/unit/test_concurrency.py` — and, unusually for this document, **the tests were verified by mutation**: removing the cap, making `release()` a no-op, and forcing serialisation each turn a subset red. See the gap below for what that exercise found.
 
-**First test worth writing.** Concurrent questions at the cap, then above it: assert `429` rather than queueing, assert the pool is never exhausted, assert every slot returns.
+**Failure mode.** Connection-pool exhaustion, slot leaks and memory growth are invisible in a suite where every test runs alone. The in-flight cap, the pool sizing and the keepalive were all designed for concurrency that had never been applied.
+
+**Gap worth naming — and it was found by the mutation run.** *A concurrency test that hangs on failure reports nothing.* The first version of two of these blocked forever against a broken cap instead of failing, and one of them built a **fresh service** for its second batch — so it proved a new counter starts at zero and said nothing about the old one coming back down. It passed against a no-op `release()`. **Every await that can block is now bounded by `asyncio.wait_for`**, which is what turns "the caller is made to wait" from a hang into a named failure.
+
+**Still absent.** Throughput, latency under sustained load, memory growth over hours, and behaviour past pool saturation against a real database. Those need a running server, a load generator, and somewhere to run it — Stage 6. The distinction this row now draws: **concurrency is a correctness property and belongs on every commit; load is a measurement and belongs in a pipeline.**
 
 ---
 
@@ -737,14 +743,14 @@ This row was 🔴 until 2026-08-09 and the status changed because **that strateg
 
 Ranked by leverage — value delivered per unit of work — not by category number.
 
-> **Struck-through rows are done and are kept rather than deleted**, so the list reads as a record of what was worked and in what order. **Rows 3, 4, 9 and 10 are what remains.** Row 9 is now *partly* done — see §37 — so the next full piece of work that needs no LLM quota is row 4 or row 10.
+> **Struck-through rows are done and are kept rather than deleted**, so the list reads as a record of what was worked and in what order. **Rows 3, 9 and 10 are what remains.** Row 9 is *partly* done (see §37), so the next full piece of work that needs no LLM quota is **row 10 — authentication**.
 
 | # | Action | Category | Why first |
 |---|---|---|---|
 | 1 | ~~Rotate the exposed database password~~ — **done 2026-08-08** | §33 | Both credentials rotated, old one confirmed dead, backup and worktree copy removed |
 | 2 | ~~Add a CI workflow~~ — **done 2026-08-08** | §24 | Landed. Next in that category: wire the unused 85% coverage floor, add dependency scanning, turn on branch protection |
 | 3 | **Benchmark the MCP path** | §19 | The headline claim is unmeasured, and the baseline it must reproduce now exists |
-| 4 | **Resolve the `locust` pin** — write the first concurrency test or remove the dependency | §25, §28 | A dependency justified by a comment; the project's own precedent says it goes |
+| 4 | ~~**Resolve the `locust` pin** — write the first concurrency test or remove the dependency~~ — **both, done 2026-08-09** | §25, §28 | The test was written *and* the pin removed: the property is deterministic and in-process, so it needed no load generator. Dropped 15 transitive dependencies including Flask and gevent |
 | 5 | ~~`SECURITY_INVARIANTS.md`~~ — **done 2026-08-08** | §12 | Ten claims, each naming the test that proves it. Writing it exposed the one invariant with no test |
 | 6 | ~~Indirect prompt injection through `profile_table`~~ — **done 2026-08-08** | §11 | 7 cases. Found that `profile_max_value_chars` doubles as an injection-payload cap |
 | 7 | ~~**Property-based tests** for the five invariants in §38~~ — **three of five done 2026-08-09** | §38 | 30 tests. Found an unhandled `TokenError` on the first run — a truncated string literal crashed validation instead of being refused. The two left need a database and `fast-check` respectively |

@@ -25,4 +25,24 @@ datasets==5.0.0               # Spider / BIRD loading + train/val splits
 accelerate==1.14.0            # device placement for the contrastive fine-tune
 
 # --- Load testing ----------------------------------------------------------
-locust==2.46.2                # concurrency + timeout behaviour under load
+#
+# `locust==2.46.2` was pinned here from Stage 0 with the comment "concurrency +
+# timeout behaviour under load". Nothing ever imported it. Removed 2026-08-09.
+#
+# It was carrying fifteen direct dependencies -- Flask, flask-cors,
+# flask-login, gevent, geventhttpclient, werkzeug, pyzmq, python-socketio and
+# more -- into the dev environment of a project whose own supply-chain row
+# (ENGINEERING_MATRIX section 25) records that it has no `pip-audit` and no
+# SBOM. An entire second web framework, installed for a file that does not
+# exist.
+#
+# The behaviour it was pinned for is now asserted in
+# `tests/unit/test_concurrency.py`, deterministically and in-process: callers
+# at the cap all run, callers over it are refused rather than queued, and
+# every slot comes back. That is a correctness property and it runs on every
+# commit. Load *generation* -- throughput, soak, memory growth over hours --
+# is a different question, needs a running server and a pipeline to run it in,
+# and is Stage 6. The pin can come back with the file that uses it.
+#
+# Same precedent as ADR-014's removal of the unused `anthropic` pin: a
+# dependency justified by a comment is not justified.
