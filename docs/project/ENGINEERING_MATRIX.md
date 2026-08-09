@@ -26,8 +26,8 @@ Every category answers five questions, in order:
 | | Count | |
 |---|---|---|
 | 🟢 Done and proven | **16** | No action |
-| 🟡 Partial | **18** | Gaps named per row |
-| 🔴 Applicable and absent | **5** | §14, §15, §22, §28, §37 |
+| 🟡 Partial | **19** | Gaps named per row |
+| 🔴 Applicable and absent | **4** | §14, §15, §22, §28 |
 | ⚪ Not applicable | **6** | Declined on the record |
 
 **The 🟡 rows are where the useful work is, not the 🔴 rows.** Three of the highest-value actions in [§ Priorities](#priorities) sit inside categories marked partial — the MCP benchmark (§19 has contract tests and no accuracy figure), the `locust` pin (§25 carries a dependency justified by a comment), and property-based testing (§38 landed three of its five properties and names the two it did not). A category is 🟡 when a foundation exists; that says nothing about how sharp the remaining gap is.
@@ -226,9 +226,9 @@ Layers overlap by design — a security test needing a real database carries bot
 
 **Applicable?** Yes — highest priority, because the system executes model-generated SQL.
 
-**Implemented?** Yes. **13 security test files, 168 test functions.** `docs/operations/SECURITY.md` §13 carries 15 findings in a fixed format: vulnerability, why dangerous, attack scenario, severity, OWASP category, secure implementation, why the fix works, CIA impact.
+**Implemented?** Yes. **16 security test files, 286 collected cases.** `docs/operations/SECURITY.md` §13 carries 15 findings in a fixed format: vulnerability, why dangerous, attack scenario, severity, OWASP category, secure implementation, why the fix works, CIA impact.
 
-**Proof.** `tests/security/`, SECURITY.md §§1–15, and [SECURITY_INVARIANTS.md](../operations/SECURITY_INVARIANTS.md) — ten claims that must be true of every build, each naming the test that fails if its mechanism is removed.
+**Proof.** `tests/security/`, SECURITY.md §§1–15, and [SECURITY_INVARIANTS.md](../operations/SECURITY_INVARIANTS.md) — eleven claims that must be true of every build, each naming the test that fails if its mechanism is removed.
 
 **Failure mode.** A control that exists but is untested is a control nobody has seen fail — which is exactly how the read-only role was "verified" for nineteen versions while nothing checked the application connected as it.
 
@@ -576,9 +576,9 @@ Layers overlap by design — a security test needing a real database carries bot
 
 **Applicable?** Yes.
 
-**Implemented?** Strong in the middle, **missing at the top**. Unit 583 · integration 123 · security 168 · contract 46 · **e2e 0**.
+**Implemented?** Strong in the middle, **missing at the top**. Counts are in [§ Standing](#standing) rather than repeated here, because two copies of a number in one document is how this document has gone stale three times.
 
-**Proof.** `docs/development/TESTING.md`, `pytest -q` → 1,411 passed, 6 skipped.
+**Proof.** `docs/development/TESTING.md`; `pytest --collect-only` → **1,499 cases**. Without a Docker daemon: 1,228 passed, 271 skipped — which is the number worth quoting, because it is what the Postgres-backed layers cost when they are absent.
 
 **Failure mode.** The seam that makes a test fast is the seam the test cannot see past. Two defects reached production behind exactly that seam: a retriever whose checkpoint never opened, and a pool whose own read-only proof prevented it opening.
 
@@ -586,17 +586,23 @@ Layers overlap by design — a security test needing a real database carries bot
 
 ---
 
-## 37 · Fuzzing 🔴
+## 37 · Fuzzing 🟡
 
 **Rule.** Feed a parser malformed and hostile input generated mechanically, not by hand.
 
 **Applicable?** Yes — the SQL validator parses adversarial input as its purpose, and the SSE parser frames untrusted network bytes.
 
-**Implemented?** No.
+**Implemented?** **One of the three targets, narrowly**, as a side effect of §38 rather than as a campaign. `TestIllegalInputIsRefusedRatherThanCrashing` feeds `validate_static` generated text and asserts only that it **returns** — deliberately not that the text is rejected, since `SELECT 1` is generated text that should be accepted.
+
+This row was 🔴 until 2026-08-09 and the status changed because **that strategy found the exact defect this category names**: `validate_static("$")` raised an unhandled `TokenError`, so a caller could crash the validation tier on an unauthenticated endpoint with four characters ([SECURITY.md §14.2.13](../operations/SECURITY.md)).
+
+**Proof.** `tests/security/test_property_write_containment.py`; 500 generated inputs per CI run.
 
 **Failure mode.** A crash in the validator is a denial of service on an unauthenticated endpoint; a parser that accepts what it should reject is a bypass of the whole safety tier.
 
-**Targets, in order of value.** The SQL validator (random SQL, Unicode identifiers, nested CTEs, comment tricks); the request body; the SSE parser — where the hand-written bounds and the held-`\r` case are already the most delicate code in `web/`.
+**Why this is 🟡 and not 🟢.** It is 100–500 short strings per run from a general-purpose text strategy — **no corpus, no coverage guidance, no mutation, no dedicated fuzzing tool, and no persistence of interesting inputs between runs.** That is a smoke test wearing a generator, and it is worth exactly as much as the one crash it found.
+
+**Targets still untouched.** The request body; the **SSE parser** in `web/`, where the hand-written bounds and the held-`\r` case are the most delicate code in the tree and would need `fast-check` rather than `hypothesis`. Neither has had a single generated input.
 
 ---
 
@@ -731,7 +737,7 @@ Layers overlap by design — a security test needing a real database carries bot
 
 Ranked by leverage — value delivered per unit of work — not by category number.
 
-> **Struck-through rows are done and are kept rather than deleted**, so the list reads as a record of what was worked and in what order. **Rows 3, 4, 9 and 10 are what remains.** The next one that needs no LLM quota is row 9.
+> **Struck-through rows are done and are kept rather than deleted**, so the list reads as a record of what was worked and in what order. **Rows 3, 4, 9 and 10 are what remains.** Row 9 is now *partly* done — see §37 — so the next full piece of work that needs no LLM quota is row 4 or row 10.
 
 | # | Action | Category | Why first |
 |---|---|---|---|
@@ -743,7 +749,7 @@ Ranked by leverage — value delivered per unit of work — not by category numb
 | 6 | ~~Indirect prompt injection through `profile_table`~~ — **done 2026-08-08** | §11 | 7 cases. Found that `profile_max_value_chars` doubles as an injection-payload cap |
 | 7 | ~~**Property-based tests** for the five invariants in §38~~ — **three of five done 2026-08-09** | §38 | 30 tests. Found an unhandled `TokenError` on the first run — a truncated string literal crashed validation instead of being refused. The two left need a database and `fast-check` respectively |
 | 8 | ~~**Failure-injection tests** — kill Postgres, kill the provider, exhaust the pool~~ — **done 2026-08-09** | §30 | 38 tests. Found that `schema_search` started cleanly against an unreachable database and exited 0, while its own docstring promised the opposite |
-| 9 | **Fuzz the SQL validator** | §37 | A parser whose job is hostile input, tested only with inputs someone chose |
+| 9 | **Fuzz the SQL validator** — *partly done 2026-08-09* | §37 | The generated-text strategy added with §38 found the `TokenError` crash. Still no corpus, no mutation, and nothing at all for the request body or the SSE parser |
 | 10 | **Authentication** | §14, §15 | Highest value, highest cost; unblocks per-client limits and multi-tenancy |
 
 ## Maintaining this document

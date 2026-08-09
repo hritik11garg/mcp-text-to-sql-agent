@@ -13,7 +13,7 @@
 | Table profiling | **< 1 s** p95 | `mcp.call profile_table` | One bounded scan per column, so cost is `PROFILE_MAX_COLUMNS` × `PROFILE_SCAN_LIMIT`. Its own `PROFILE_TIMEOUT_MS` (10 s) is deliberately shorter than the executor's — profiling is a side quest during answering and should give up long before the real query would |
 | Query execution | **< 2 s** p95 | `db_query_duration_seconds` | Analytical aggregates on benchmark-sized data. **First measurements: 3–4 ms** on Spider-sized schemas, from `agent_meta.query_audit` — three orders under budget, and that is a statement about the data rather than the code |
 | MCP call overhead | **< 20 ms** p95 | `mcp.call` minus tool duration | Framing plus a local pipe. Anything larger means the cost is in serialization, not the protocol |
-| MCP server startup | **< 3 s** | Process launch → `tools/list` returned | Four subprocesses, each opening two connections and loading the catalog. Paid once per session, and it is why the catalog is a snapshot rather than re-read per call |
+| MCP server startup | **< 3 s**, except `schema_search` — see below | Process launch → `tools/list` returned | Four subprocesses, each opening two connections and loading the catalog. Paid once per session, and it is why the catalog is a snapshot rather than re-read per call |
 | API startup | **< 5 s** | Process launch → `/ready` returns 200 | Two connections, the read-only assertion (three round trips), the catalog, and the embedder. All eager, deliberately: a lazy startup moves these costs onto the first request and moves configuration errors past the deploy |
 | `/health` | **< 5 ms** p95 | — | Serializes a fixed dict. It touches nothing, so anything larger is framework overhead worth looking at |
 | `/ready` | **< 20 ms** p95 uncached | — | Two `SELECT 1`s on held connections, then cached 5 s. The cache is the control that stops an unauthenticated endpoint being a load generator, not an optimization |
@@ -22,6 +22,18 @@
 | End-to-end (multi-step) | **< 25 s** p95 | — | N sub-queries plus synthesis |
 
 **These are budgets, not predictions.** The interesting outcome is where they are missed — a missed budget points at the component to fix.
+
+### `schema_search` startup, and a budget deliberately broken
+
+**`schema_search` now loads the embedding model at startup, so with a real `sentence-transformers` checkpoint it will miss the < 3 s budget above.** A knowing regression, made 2026-08-09, recorded here rather than left for someone to measure and report as a defect.
+
+**The expected cost is inferred, not measured** — *The measurements, after the fix* below records **~19 s** for the same checkpoint load inside the API's lifespan, and there is no reason for it to differ here, but nobody has timed this server against a real model. Stated that way on purpose: an inferred figure presented as a measurement is the failure this document exists to avoid.
+
+**What it bought.** That server previously reached for `resources.retriever` *inside its tool handler*, and `Resources` connects on first use — so nothing opened at startup, and the process started cleanly against an **unreachable database**. The other three servers die at launch as all four `__main__` docstrings promise; this one did not, and instead advertised a tool that could not work. An agent calling it would treat the connection error as a bad query and self-correct — rewriting valid SQL, spending a generation per attempt. Found by `tests/contract/test_mcp_process_death.py`; see [TESTING.md §16](../development/TESTING.md).
+
+**Why the trade is the right way round.** Startup cost is paid once per session, by a host that is already waiting, with a human watching a launch. The alternative was paying an infrastructure failure per *question*, in generations, in front of a user, disguised as a model failure. **A cost that is visible at launch beats a cost that is invisible per request** — which is the same argument [ADR-040](../architecture/DECISIONS.md#adr-040--startup-opens-the-model-because-naming-it-is-not-loading-it) made for the API lifespan, reached again from the other direction.
+
+**How to get the 3 s back**, if a host's launch timeout makes it necessary: `EMBEDDER_PROVIDER=hashing` loads no checkpoint at all. That is what CI and the contract suite use. The database connection still opens eagerly, so the containment behaviour is unaffected — the model load is the expensive half, not the load-bearing half.
 
 ### Correction: the 29 s measurement was a cold start, and it was attributed to the wrong thing
 
@@ -153,3 +165,4 @@ Provider quota therefore belongs in the capacity model alongside `DB_POOL_MAX_SI
 | MCP adds IPC latency vs direct calls | The price of a real tool boundary ([ADR-003](../architecture/DECISIONS.md#adr-003--mcp-for-the-tool-boundary)) |
 | Embedding model in every replica's memory | Simpler than a shared embedding service at this scale |
 | Adaptive thinking raises per-request latency | The task is reasoning-heavy; disabling it is an accuracy tradeoff, not a free win |
+| **`schema_search` loads its model at startup** | The alternative was a server that starts happily against a dead database and fails per call — see [§1](#1-targets). `EMBEDDER_PROVIDER=hashing` avoids the load without giving up the eager connection |
