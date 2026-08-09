@@ -26,21 +26,21 @@ Every category answers five questions, in order:
 | | Count | |
 |---|---|---|
 | 🟢 Done and proven | **16** | No action |
-| 🟡 Partial | **17** | Gaps named per row |
-| 🔴 Applicable and absent | **6** | §14, §15, §22, §28, §30, §37 |
+| 🟡 Partial | **18** | Gaps named per row |
+| 🔴 Applicable and absent | **5** | §14, §15, §22, §28, §37 |
 | ⚪ Not applicable | **6** | Declined on the record |
 
 **The 🟡 rows are where the useful work is, not the 🔴 rows.** Three of the highest-value actions in [§ Priorities](#priorities) sit inside categories marked partial — the MCP benchmark (§19 has contract tests and no accuracy figure), the `locust` pin (§25 carries a dependency justified by a comment), and property-based testing (§38 landed three of its five properties and names the two it did not). A category is 🟡 when a foundation exists; that says nothing about how sharp the remaining gap is.
 
-**Evidence base, measured 2026-08-09.** Counted by marker with `pytest --collect-only -m <marker>`, which is the same selection CI uses — an earlier revision counted `def test_` by hand and produced numbers nobody could reproduce.
+**Evidence base, measured 2026-08-09 (revised same day).** Counted by marker with `pytest --collect-only -m <marker>`, which is the same selection CI uses — an earlier revision counted `def test_` by hand and produced numbers nobody could reproduce.
 
 | Layer | Cases collected |
 |---|---|
-| **Total** | **1,461** |
-| unit | 980 |
+| **Total** | **1,499** |
+| unit | 998 |
 | security | 286 |
 | integration | 189 |
-| contract | 70 |
+| contract | 90 |
 | e2e | **0** |
 | *of which* `property` | *30* |
 
@@ -478,19 +478,23 @@ Layers overlap by design — a security test needing a real database carries bot
 
 ---
 
-## 30 · Reliability / SRE 🔴
+## 30 · Reliability / SRE 🟡
 
 **Rule.** Deliberately break each dependency and verify the system degrades as documented.
 
 **Applicable?** Yes.
 
-**Implemented?** No failure-injection tests exist. Health and readiness probes are built and separated by what an orchestrator *does* with each answer — a failing `/ready` stops traffic, a failing `/health` restarts the process — so `/health` deliberately checks nothing.
+**Implemented?** Failure injection, landed 2026-08-09 — **38 tests** across the three documented behaviours. Health and readiness probes were already built and separated by what an orchestrator *does* with each answer — a failing `/ready` stops traffic, a failing `/health` restarts the process — so `/health` deliberately checks nothing.
 
-**Proof.** `tests/unit/test_api_health.py`, `src/api/health.py`.
+**Proof.** `tests/unit/test_failure_injection.py` (a connection that raises, a provider that raises, a pool with nothing left to give) · `tests/contract/test_mcp_process_death.py` (all four servers launched as real subprocesses against a closed port) · `tests/unit/test_api_health.py` · [TESTING.md](../development/TESTING.md) §16.
 
-**Failure mode.** The documented behaviours — Postgres dies and the API stays alive with an unhealthy readiness; the LLM provider dies and the request fails cleanly without partial state; the MCP server dies without leaking a process — are **claims nobody has demonstrated**.
+**Failure mode.** The documented behaviours were **claims nobody had demonstrated**. One of them was false.
 
-**No SLI/SLO/error budget/runbook/on-call.** Appropriate for a project with no users; the *failure-injection* half is not, and it is cheap.
+**What it found.** `mcp_servers.schema_search` **started cleanly against an unreachable database and exited 0**, while the other three died at startup exactly as their (identical) docstrings promise. The difference was incidental: the other three build a component that takes a connection as a constructor argument, so `build()` opens one; `schema_search` closed over `resources` and reached for `resources.retriever` *inside the handler*, and `Resources` connects on first use. The result is the precise failure the docstring says it prevents — a host that advertises a tool which cannot work, and an agent that self-corrects a perfectly good query in response to an infrastructure error, spending a generation per attempt. **Third instance of the lazy-resource shape in this project**, after the retriever checkpoint that loaded on the first request (§24) and the same property being read for its name rather than its side effect.
+
+**Gap worth naming.** *Nothing here kills a real process or a real container.* Failures are injected as the application observes them — a raising connection, a raising provider — because the `testcontainers` Postgres is session-scoped and stopping it would poison every test that ran afterwards. The MCP suite is the exception and is the stronger half: real subprocesses, real exit codes, real stdout. A container killed mid-query needs its own container and its own slice.
+
+**Still absent, and still declined:** SLI/SLO, error budget, runbook, on-call. Appropriate for a project with no users. The failure-injection half was not, which is why it is done.
 
 ---
 
@@ -727,7 +731,7 @@ Layers overlap by design — a security test needing a real database carries bot
 
 Ranked by leverage — value delivered per unit of work — not by category number.
 
-> **Struck-through rows are done and are kept rather than deleted**, so the list reads as a record of what was worked and in what order. **Rows 3, 4 and 8–10 are what remains.** The next one that needs no LLM quota is row 8.
+> **Struck-through rows are done and are kept rather than deleted**, so the list reads as a record of what was worked and in what order. **Rows 3, 4, 9 and 10 are what remains.** The next one that needs no LLM quota is row 9.
 
 | # | Action | Category | Why first |
 |---|---|---|---|
@@ -738,7 +742,7 @@ Ranked by leverage — value delivered per unit of work — not by category numb
 | 5 | ~~`SECURITY_INVARIANTS.md`~~ — **done 2026-08-08** | §12 | Ten claims, each naming the test that proves it. Writing it exposed the one invariant with no test |
 | 6 | ~~Indirect prompt injection through `profile_table`~~ — **done 2026-08-08** | §11 | 7 cases. Found that `profile_max_value_chars` doubles as an injection-payload cap |
 | 7 | ~~**Property-based tests** for the five invariants in §38~~ — **three of five done 2026-08-09** | §38 | 30 tests. Found an unhandled `TokenError` on the first run — a truncated string literal crashed validation instead of being refused. The two left need a database and `fast-check` respectively |
-| 8 | **Failure-injection tests** — kill Postgres, kill the provider, exhaust the pool | §30 | Documented behaviours nobody has demonstrated |
+| 8 | ~~**Failure-injection tests** — kill Postgres, kill the provider, exhaust the pool~~ — **done 2026-08-09** | §30 | 38 tests. Found that `schema_search` started cleanly against an unreachable database and exited 0, while its own docstring promised the opposite |
 | 9 | **Fuzz the SQL validator** | §37 | A parser whose job is hostile input, tested only with inputs someone chose |
 | 10 | **Authentication** | §14, §15 | Highest value, highest cost; unblocks per-client limits and multi-tenancy |
 

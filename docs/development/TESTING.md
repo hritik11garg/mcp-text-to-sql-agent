@@ -279,6 +279,45 @@ The message names the consequence and the correct fix on purpose — an error th
 - **The read-only connection never holds a write privilege.** Needs a real database, so generating hundreds of examples against it costs a container per example or a shared one with cross-example state. Covered by `tests/security/test_readonly_role.py` over the privileges that exist.
 - **The SQL tokenizer round-trips.** Lives in `web/`, which is TypeScript, and would need `fast-check` rather than `hypothesis`. Already asserted as a hand-written property (§13) — the gap is generated input, not the claim.
 
+## 16. Failure injection
+
+**38 tests.** Three documented behaviours that had never been demonstrated, and one of them was false.
+
+| Dependency broken | Where | The assertion that matters |
+|---|---|---|
+| **Postgres** | `tests/unit/test_failure_injection.py` | `/health` answers 200 *while* `/ready` answers 503 — and readiness returns to 200 on its own once the database is back |
+| **The model provider** | same | The stream ends in exactly one `error`, emits **no `rows`**, and the *next* request is served |
+| **The connection pool** | same | Saturation becomes a domain error, and is audited even though nothing ran |
+| **The MCP servers** | `tests/contract/test_mcp_process_death.py` | All four launched as real subprocesses against a closed port: each exits non-zero, and **stdout stays empty** |
+
+**The interesting assertion is almost never about the failing request.** That a single call returns an error is easy, and §3's suites already cover it. What was missing is the state the process is left in: whether the next caller is served, whether a slot came back, whether an outage makes an unauthenticated probe *more* expensive, and whether a failure that never reached the database still left an audit row. Every one of those is invisible when you look at one request.
+
+**Progress may be partial; data may not.** A caller that saw `retrieve` complete and then an `error` knows exactly what happened. A caller that saw a `rows` event and then an `error` has to decide whether to believe the rows, and there is no right answer to that question — so the suite asserts the stage events survive a failure and the data events do not.
+
+**Recovery is tested in both directions.** Down, up, and down again. A `self._healthy = True` that is never cleared passes a recovery test and fails the second transition, and everything about a probe is easy to get right on the way down.
+
+**Failures are cached like successes**, and there is a test saying so. Caching only successes looks like an improvement — retry the broken thing more often, notice recovery sooner — and converts an unauthenticated endpoint into an amplifier at the moment the database is least able to absorb one.
+
+### What it found
+
+`mcp_servers.schema_search` **started cleanly against an unreachable database and exited 0.** The other three died at startup, exactly as all four `__main__` docstrings promise in identical words:
+
+> Resources are built here so a bad `DATABASE_URL` kills the process while the host is starting it, rather than surfacing as a tool error on the first call that the agent will try, and fail, to correct its way out of.
+
+The difference was incidental rather than designed. `validate_sql`, `execute_sql` and `profile_table` construct a component that takes a connection as a constructor argument, so `build()` opens one as a side effect. `schema_search` closed over `resources` and reached for `resources.retriever` **inside the handler** — and `Resources` connects on first use. Nothing opened, nothing failed, and the process went on to serve a tool that could not work.
+
+The consequence is exactly what the docstring says it prevents: the host advertises `search_schema`, the agent calls it, gets an infrastructure error, and **self-corrects** — rewriting a perfectly good query, spending a generation per attempt, and eventually reporting that it could not answer.
+
+**This is the third instance of the same shape in this project.** A lazily-resolved resource that nothing forces at startup: first the retriever whose checkpoint loaded on the first request and charged that caller twenty seconds (§11), then the property read for its *name* rather than for the side effect of reading it, now a server that never touched a resource at all. The fix is the same each time — resolve it in `build()`, and read the property whose side effect is the point.
+
+**Not written up as a security finding**, and the reason is worth stating rather than leaving to inference: it exposes nothing, requires an already-misconfigured deployment, and its worst outcome is wasted provider quota. Availability of a tool in a broken deployment is a reliability defect. Filing it under §14 would dilute a document whose findings are all reachable by an actual adversary.
+
+### The limit, stated
+
+**Nothing here kills a real process or a real container — except the MCP suite, which is why that half is the stronger one.** Failures are injected as the application *observes* them: a connection that raises, a provider that raises, a pool with nothing left. The `testcontainers` Postgres is session-scoped, so stopping it would poison every test that ran after it; a real database killed mid-query needs its own container and its own slice.
+
+Also not injected, and named in the module docstring rather than left to be inferred from absence: a **slow** dependency as opposed to a failing one, a peer that accepts a connection and never answers, and disk or memory pressure.
+
 ## 12. What is not tested
 
 Stated so the gap is deliberate rather than accidental:

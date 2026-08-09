@@ -98,9 +98,34 @@ def render(result: RetrievalResult) -> dict[str, Any]:
 
 
 def build(resources: Resources) -> Server[Any, Any]:
+    # Resolved **here**, not inside the handler. `Resources` connects on first
+    # use, so a handler that reached for `resources.retriever` would be the
+    # first thing to open the database -- and this module's `__main__` promises
+    # the opposite in as many words: a bad DATABASE_URL kills the process while
+    # the host is starting it, rather than surfacing as a tool error on the
+    # first call the agent will try, and fail, to correct its way out of.
+    #
+    # It did not. This server started cleanly against an unreachable database,
+    # exited 0, and advertised a tool that could not work, while the other
+    # three died at startup as documented -- because their `build` happens to
+    # touch a connection and this one did not. Found by
+    # tests/contract/test_mcp_process_death.py.
+    #
+    # Reading `dimensions` rather than merely holding the retriever, for the
+    # same reason the API lifespan does: it is the property whose side effect
+    # is the model load. `model_version` is a name and loads nothing, which is
+    # how a ready-looking retriever once shipped over an unopened checkpoint
+    # and charged the first caller twenty seconds for it.
+    retriever = resources.retriever
+    logger.info(
+        "retriever ready: model=%s dimensions=%d",
+        retriever.model_version,
+        retriever.dimensions,
+    )
+
     async def search_schema(arguments: dict[str, Any]) -> dict[str, Any]:
         table_filter = arguments.get("table_filter")
-        result = resources.retriever.search(
+        result = retriever.search(
             arguments["query"],
             k=arguments.get("k"),
             table_filter=table_filter,
