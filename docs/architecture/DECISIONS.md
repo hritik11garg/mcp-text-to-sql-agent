@@ -1123,3 +1123,28 @@ And the load costs roughly twenty seconds of CPU, paid by whoever asked first. T
 **Tradeoff.** A reader has to notice there are two. The alternative is a single unattributed figure, and this project has already been wrong in exactly that way once — a 29-second latency confidently attributed to a rate-limited provider when it was a model checkpoint loading inside the first request. **An unattributed aggregate is not a measurement, it is a number.**
 
 **Generalises to:** when two observers disagree about a duration, the disagreement is usually the finding. Publishing one and discarding the other throws away the only evidence that the gap exists.
+
+---
+
+## ADR-045 — The MCP baseline scopes servers by process, because the tool contract has no dataset
+
+**Status:** Accepted · 2026-08-10 · Stage 3
+
+**Context.** Every accuracy number this project publishes was measured on the direct answering path — components called in process, the same path the HTTP API uses. "MCP-native" has been the headline claim and an unmeasured one: `tests/contract/` proves the servers start, advertise and answer; nothing proved they answer *as well*. Closing that needs a fourth baseline that routes retrieval through `search_schema`.
+
+It runs straight into the contract. `search_schema` takes a query, a `k` and a table filter, and **no dataset** — the server's retriever is bound to `DATASET` at construction. That is correct for the deployment the contract describes, one agent against one database, and exactly wrong for a benchmark of twenty.
+
+**Decision.** Scope by **process**. One `schema_search` server per database, launched with `DATASET` in its environment, bounded by an LRU pool (`evals.mcp_client.McpClientPool`) that keeps one alive at a time.
+
+**Why not add a `dataset` argument to the tool.** Two reasons, and the second is the one that decides it.
+
+- It would measure a contract that did not exist when the claim was made. The question is whether *the published servers* answer as well as the direct path, and changing them to make the measurement easier answers a different question.
+- **It hands a caller the ability to read a catalog it was not scoped to.** Today the scope is a property of the process an operator launched; as an argument it becomes a value the model chooses, and a prompt-injected question could name another tenant's dataset. A per-call scope needs an authorisation story, and this project does not have one yet (§14 Authentication is 🔴). Adding the parameter first and the check later is the wrong order.
+
+**What it costs, stated rather than discovered.** A model load per database — twenty over a full Spider dev run. The pool bound of one is only cheap because the split is *ordered*: Spider's dev file is twenty contiguous runs for twenty databases, and a measured run reported exactly **20 starts for 20 databases**. `starts` is published on the pool so an unordered split shows the thrashing rather than hiding it, and `--mcp-max-live` raises the bound when it does.
+
+**Why one server and not four.** The baseline moves the **retrieval** hop and says so in its name, `mcp-retrieval`. Launching `validate_sql`, `execute_sql` and `profile_table` alongside would spend three subprocesses and three connections per database on capabilities nothing in this baseline calls — and a baseline that moved validation too would measure two hops at once and could not say which cost what.
+
+**The measurement this enabled.** Over all 1,034 dev questions, both paths returned **byte-identical ordered element lists** — see [BENCHMARKS.md](../ml/BENCHMARKS.md) §8. That is a stronger result than the accuracy comparison it replaces: everything downstream of retrieval is literally the same code, so identical context means the two paths differ by nothing that reaches the model.
+
+**Generalises to:** when a benchmark cannot express itself in an existing contract, changing the contract to fit the benchmark measures the change. Pay the cost in the harness instead, and write down what it cost.

@@ -37,12 +37,13 @@ from typing import Any, Protocol, Self
 
 from psycopg import Connection
 
-from answering import QuestionAnswerer, retrieved_columns
+from answering import ContextSource, QuestionAnswerer, retrieved_columns
 from benchmark.convert import schema_name_for
 from core.exceptions import LLMError, RetrievalError
 from core.ports.embedder import Embedder
 from core.settings import ExecutionSettings, RetrievalSettings
 from evals.dataset import Question
+from evals.mcp_client import McpClientPool
 from evals.runner import Attempt, Rows
 from generation.generator import SQLGenerator, UnanswerableQuestionError
 from schema.catalog import SchemaCatalog, load_catalog
@@ -105,6 +106,21 @@ class Baseline(StrEnum):
     execution failure into a refusal that names its reason. If accuracy moves
     between this and `retrieval-only`, something other than validation did it."""
 
+    MCP_RETRIEVAL = "mcp-retrieval"
+    """`retrieval-only`, with the retrieval hop taken over MCP.
+
+    Named for what it changes rather than for the protocol, because **one
+    variable moves**: the same questions, the same `k`, the same generator, the
+    same prompt, the same executor -- and `search_schema` called on a
+    subprocess over stdio instead of `SchemaRetriever.search` called in this
+    one. Compared against `retrieval-only`, the difference is the wire and
+    nothing else.
+
+    "MCP-native" has been this project's headline claim and an unmeasured one:
+    the servers are proven to work by `tests/contract/` and proven to answer
+    *as well* by nothing. A baseline that also moved validation over the wire
+    would measure two hops at once and could not say which one cost what."""
+
 
 class Scopes(Protocol):
     """What the answerer needs from a scope resolver, and nothing more.
@@ -122,12 +138,57 @@ class Scopes(Protocol):
 
 
 @dataclass(frozen=True, slots=True)
+class FullSchemaSource:
+    """Hand over the whole catalog, ignoring the question. The `full-schema` arm."""
+
+    result: RetrievalResult
+
+    def context(self, question: str) -> RetrievalResult:
+        return self.result
+
+
+@dataclass(frozen=True, slots=True)
+class RetrieverSource:
+    """Vector search in this process. What every published number was measured on."""
+
+    retriever: SchemaRetriever
+    top_k: int
+
+    def context(self, question: str) -> RetrievalResult:
+        return self.retriever.search(question, k=self.top_k)
+
+
+@dataclass(frozen=True, slots=True)
+class McpRetrievalSource:
+    """The same search, over stdio, against a server scoped to this dataset.
+
+    Holds the pool rather than a client because the pool decides which servers
+    are running -- see :class:`~evals.mcp_client.McpClientPool`. A source that
+    captured one client would keep it alive for the length of the run, which is
+    the unbounded case the pool exists to prevent.
+    """
+
+    pool: McpClientPool
+    dataset: str
+    top_k: int
+
+    def context(self, question: str) -> RetrievalResult:
+        return self.pool.search(self.dataset, question, k=self.top_k)
+
+
+@dataclass(frozen=True, slots=True)
 class DatabaseScope:
     """Every component that must agree on *which* database a question is about.
 
     Bundled rather than passed around separately because the failure mode is a
     mismatch between two of them: a catalog for one database and a search_path
     for another produces SQL that validates and then reads the wrong tables.
+
+    ``source`` is the baseline, resolved. The choice used to be a conditional
+    read once per question; it is now an object chosen once per database. That
+    is not tidiness -- ``Baseline.MCP_RETRIEVAL`` is not expressible as a
+    combination of the two booleans this registry used to take, and the test
+    asserting each baseline maps to a distinct combination is what said so.
     """
 
     db_id: str
@@ -137,6 +198,7 @@ class DatabaseScope:
     retriever: SchemaRetriever | None
     validator: SQLValidator | None
     full_schema: RetrievalResult
+    source: ContextSource
 
 
 class ScopeRegistry:
@@ -151,6 +213,15 @@ class ScopeRegistry:
             the read-only role has no privileges there at all.
         readonly: Used for ``EXPLAIN``. The containment boundary is not
             relaxed for a benchmark run.
+        baseline: What to build. Passed whole rather than decomposed into
+            flags by the caller, so "what does this baseline need" is answered
+            in one place instead of at every construction site.
+        top_k: Elements per question, resolved to a number here rather than
+            left as ``None`` for a component default. Two components with the
+            same default is not the same as one number, and only one of those
+            can be recorded in a manifest.
+        mcp_pool: Supplies the servers for ``mcp-retrieval``. Injected so the
+            registry's wiring can be asserted without launching subprocesses.
         prefix: Schema-name prefix used at conversion time. ``db_id`` alone is
             unique within a benchmark, not across two.
     """
@@ -163,8 +234,9 @@ class ScopeRegistry:
         settings: RetrievalSettings,
         execution: ExecutionSettings,
         embedder: Embedder | None,
-        needs_retrieval: bool,
-        needs_validation: bool,
+        baseline: Baseline,
+        top_k: int | None = None,
+        mcp_pool: McpClientPool | None = None,
         prefix: str = "",
     ) -> None:
         self._owner = owner
@@ -172,10 +244,31 @@ class ScopeRegistry:
         self._settings = settings
         self._execution = execution
         self._embedder = embedder
-        self._needs_retrieval = needs_retrieval
-        self._needs_validation = needs_validation
+        self._baseline = baseline
+        self._top_k = settings.retrieval_top_k if top_k is None else top_k
+        self._mcp_pool = mcp_pool
         self._prefix = prefix
         self._scopes: dict[str, DatabaseScope] = {}
+
+        if baseline is Baseline.MCP_RETRIEVAL and mcp_pool is None:
+            # Fail here, not on the first question. A registry that quietly
+            # fell back to in-process retrieval would publish a number labelled
+            # `mcp-retrieval` that never touched a server.
+            raise ValueError("the mcp-retrieval baseline needs a client pool")
+
+    @property
+    def needs_retrieval(self) -> bool:
+        """Whether an *in-process* retriever and embedder must be built.
+
+        False for ``mcp-retrieval``: the server owns its retriever and loads
+        its own model. Building one here as well would spend a second copy of
+        a sentence-transformer to produce vectors nothing reads.
+        """
+        return self._baseline in (Baseline.RETRIEVAL_ONLY, Baseline.WITH_VALIDATION)
+
+    @property
+    def needs_validation(self) -> bool:
+        return self._baseline is Baseline.WITH_VALIDATION
 
     def scope(self, db_id: str) -> DatabaseScope:
         """The components for one database, built on first use.
@@ -203,23 +296,49 @@ class ScopeRegistry:
                 f"to nothing and every question fails for the same uninformative reason."
             )
 
+        retriever = self._build_retriever(dataset) if self.needs_retrieval else None
+        # Read only for the baseline that uses it. The others would pay a
+        # full-catalog read per database for a value nothing looks at.
+        full_schema = (
+            read_full_schema(self._owner, dataset)
+            if self._baseline is Baseline.FULL_SCHEMA
+            else RetrievalResult()
+        )
+
         scope = DatabaseScope(
             db_id=db_id,
             schema=dataset,
             dataset=dataset,
             catalog=catalog,
-            retriever=self._build_retriever(dataset) if self._needs_retrieval else None,
-            validator=self._build_validator(catalog) if self._needs_validation else None,
-            # Read only for the baseline that uses it. The other baselines would
-            # pay a full-catalog read per database for a value nothing looks at.
-            full_schema=(
-                RetrievalResult()
-                if self._needs_retrieval
-                else read_full_schema(self._owner, dataset)
-            ),
+            retriever=retriever,
+            validator=self._build_validator(catalog) if self.needs_validation else None,
+            full_schema=full_schema,
+            source=self._build_source(dataset, retriever, full_schema),
         )
         self._scopes[db_id] = scope
         return scope
+
+    def _build_source(
+        self,
+        dataset: str,
+        retriever: SchemaRetriever | None,
+        full_schema: RetrievalResult,
+    ) -> ContextSource:
+        """Resolve the baseline into the object a question will consult.
+
+        The one place a baseline is branched on, and it is a *construction*
+        branch: it runs once per database rather than once per question, and
+        adding a baseline extends this function instead of editing a condition
+        that every question passes through.
+        """
+        if self._baseline is Baseline.FULL_SCHEMA:
+            return FullSchemaSource(full_schema)
+        if self._baseline is Baseline.MCP_RETRIEVAL:
+            assert self._mcp_pool is not None  # guaranteed at construction
+            return McpRetrievalSource(self._mcp_pool, dataset, self._top_k)
+        if retriever is None:  # pragma: no cover - guarded at construction
+            raise RetrievalError("a retrieval baseline was selected without an embedder")
+        return RetrieverSource(retriever, self._top_k)
 
     def activate(self, scope: DatabaseScope) -> None:
         """Point the read-only session at this database's schema.
@@ -387,28 +506,6 @@ class SchemaScopedQueryRunner:
         return [list(row) for row in fetched]
 
 
-@dataclass(frozen=True, slots=True)
-class _ScopeContext:
-    """Adapts a :class:`DatabaseScope` to the shared answerer's ``ContextSource``.
-
-    The baseline decision -- retrieve, or hand over the whole schema -- lives
-    here because it is an *eval* concept. The answering path only needs a
-    question in and a context out, and keeping the baseline out of it is what
-    stops the API growing a `full-schema` mode it has no use for.
-    """
-
-    scope: DatabaseScope
-    baseline: Baseline
-    top_k: int | None
-
-    def context(self, question: str) -> RetrievalResult:
-        if self.baseline is Baseline.FULL_SCHEMA:
-            return self.scope.full_schema
-        if self.scope.retriever is None:  # pragma: no cover - guarded at construction
-            raise RetrievalError("retrieval baseline selected without a retriever")
-        return self.scope.retriever.search(question, k=self.top_k)
-
-
 class PipelineAnswerer:
     """Retrieval, generation and optionally validation, per question.
 
@@ -423,25 +520,21 @@ class PipelineAnswerer:
     is everything a benchmark needs and a request does not -- the baseline, the
     per-database scope, and flattening every failure into a category.
 
+    **The baseline is not a parameter here.** It was, and the conditional it
+    fed ran once per question to answer a question fixed before the run
+    started. The scope now arrives carrying the source it resolved to, so this
+    class composes the same three steps for every configuration -- which is
+    what makes "the MCP baseline differs only in the retrieval hop" a fact
+    about the code rather than a claim about it.
+
     Args:
         scopes: Resolves the per-database components.
         generator: Question plus schema context in, SQL out.
-        baseline: Which of the EVALUATION.md section 4 configurations this is.
-        top_k: Elements retrieved per question. Ignored by ``full-schema``.
     """
 
-    def __init__(
-        self,
-        scopes: Scopes,
-        generator: SQLGenerator,
-        *,
-        baseline: Baseline,
-        top_k: int | None = None,
-    ) -> None:
+    def __init__(self, scopes: Scopes, generator: SQLGenerator) -> None:
         self._scopes = scopes
         self._generator = generator
-        self._baseline = baseline
-        self._top_k = top_k
         # One loop for the whole run. See the module docstring: the async LLM
         # client caches a connection pool bound to the loop it first ran in, so
         # asyncio.run per question would work exactly once.
@@ -453,10 +546,7 @@ class PipelineAnswerer:
         except (RetrievalError, ValueError) as exc:
             return Attempt(error_type="scope_unavailable", error_message=str(exc))
 
-        answerer = QuestionAnswerer(
-            _ScopeContext(scope, self._baseline, self._top_k),
-            self._generator,
-        )
+        answerer = QuestionAnswerer(scope.source, self._generator)
 
         # The phases are called separately rather than via `candidate()`,
         # because every failure below still has to report what was retrieved:
@@ -532,13 +622,6 @@ class PipelineAnswerer:
 
         return answered(candidate.sql, validation_attempts=1)
 
-    def _context(self, scope: DatabaseScope, question: str) -> RetrievalResult:
-        if self._baseline is Baseline.FULL_SCHEMA:
-            return scope.full_schema
-        if scope.retriever is None:  # pragma: no cover - guarded at construction
-            raise RetrievalError("retrieval baseline selected without a retriever")
-        return scope.retriever.search(question, k=self._top_k)
-
     def close(self) -> None:
         """Release the event loop. Idempotent."""
         if not self._loop.is_closed():
@@ -560,7 +643,10 @@ __all__ = [
     "MAX_RESULT_ROWS",
     "Baseline",
     "DatabaseScope",
+    "FullSchemaSource",
+    "McpRetrievalSource",
     "PipelineAnswerer",
+    "RetrieverSource",
     "SchemaScopedQueryRunner",
     "ScopeRegistry",
     "Scopes",

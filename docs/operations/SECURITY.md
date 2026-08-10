@@ -214,6 +214,26 @@ Found 2026-08-10 by a documentation sweep that asked, for every pin, which modul
 
 **Why that fix is secure.** It removes the surface entirely rather than monitoring it. The rule it restores is the one already written down: **a dependency justified by a comment is not justified**, and each of these can return with the file that imports it.
 
+### 10.3 The retrieval server inherited the model provider's API key — **Low**, fixed the same day
+
+Found 2026-08-10 while building the `mcp-retrieval` eval baseline, by asking what the subprocess it launches actually needs.
+
+**Vulnerability.** `evals.mcp_client.McpSchemaSearch` launches `python -m mcp_servers.schema_search` as a subprocess. A subprocess inherits its parent's environment unless told otherwise, so the retrieval server received the **whole** environment of the eval harness — including `LLM_API_KEY`. That server embeds a question and queries pgvector. It never calls a model and has no use for the key.
+
+**Why it is dangerous.** It is a least-privilege failure, and its cost is entirely conditional: nothing happens until something inside that process is compromised, at which point the key is one `os.environ` read away. The process is not a small one to be confident about — it imports `sentence-transformers`, `transformers`, `torch` and `psycopg`, any of which executes code at import time from a dependency graph this project pins but did not write. Credential exposure should be scoped to the processes that need the credential, and this one was scoped to the process that happened to launch it. *(OWASP A05:2021 — Security Misconfiguration.)*
+
+**Attack scenario.** A compromised release anywhere in the `sentence-transformers` closure runs at import in the retrieval server, reads `LLM_API_KEY` from its environment and exfiltrates it. The key is a free-tier development credential, so the direct loss is quota rather than money — but the same code path is what a deployment would use with a paid key, and the pattern generalises to every secret a launcher happens to be holding.
+
+**Severity — Low.** No known compromise, a development-tier credential, and the same inheritance is what an MCP *host* does when it launches these servers — Claude Desktop passes its own environment and this code is not in that path. Rated a finding rather than a note because it is a standing exposure that costs nothing to remove, and because the eval harness is the one launcher this repository controls.
+
+**CIA.** Confidentiality only. Nothing here affects integrity or availability.
+
+**The fix.** `evals.mcp_client.scrubbed_environment` drops variables whose name matches `API_KEY|SECRET|TOKEN|PASSWORD|CREDENTIAL`, keeping `DATABASE_URL` and `DATABASE_RO_URL` by name because the servers genuinely need both and both carry a password.
+
+**Why it is secure, and where it stops.** The server's remaining environment holds no credential it does not use, so a compromise inside it reaches the database with the privileges the DSN already grants and nothing further — the read-only role's containment (§3) is unchanged and is still the boundary that matters.
+
+**A denylist is the weaker control and was chosen deliberately.** An allowlist would be stronger and was rejected on robustness: these subprocesses need `PATH`, `SystemRoot`, a Hugging Face cache location, a TLS bundle and any proxy configuration, and an allowlist that omitted one of those would fail a benchmark run with an error naming none of them. The residual risk is a secret in a variable whose name matches none of the five patterns. The mitigation is that the two exceptions are listed by name rather than matched by accident, and that `tests/unit/test_mcp_retrieval_source.py` asserts both halves — the key is dropped, and ordinary configuration is not.
+
 ## 11. Audit logging
 
 Append-only `agent_meta.query_audit`. Every statement reaching `execute_sql` records:

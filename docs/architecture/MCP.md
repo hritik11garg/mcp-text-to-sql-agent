@@ -260,6 +260,14 @@ The mapping is ordered most-specific-first rather than keyed by type, because th
 | `execute_sql` | `explain_only` mode still works: generate and validate, return the SQL without results |
 | `profile_table` | Degraded disambiguation; the agent asks a clarifying question instead |
 
+### 7.1 The contract is single-dataset, and a benchmark had to pay for it
+
+`search_schema` takes a query, a `k` and a table filter, and **no dataset**. The server's retriever is bound to `DATASET` at construction, so scope is a property of the process an operator launched rather than a value a caller chooses.
+
+That is the right shape for the deployment this document describes — one agent, one database — and it is what a multi-database caller has to work around. The eval harness's `mcp-retrieval` baseline runs Spider dev's twenty converted schemas, and it does so by launching **one server per database** with `DATASET` in its environment, bounded by an LRU pool that keeps one alive at a time. Measured over the whole split: 20 server starts for 20 databases, and a **+7.8 ms** median cost per call against the in-process path ([BENCHMARKS](../ml/BENCHMARKS.md) §8).
+
+**Adding a `dataset` argument would be the obvious fix and is deliberately not made** ([ADR-045](DECISIONS.md#adr-045--the-mcp-baseline-scopes-servers-by-process-because-the-tool-contract-has-no-dataset)). It converts an operator-controlled scope into a model-chosen one: a prompt-injected question could then name another tenant's catalog, and there is no authorisation tier to stop it. That parameter needs an authentication story to arrive first, not second.
+
 ## 8. Versioning
 
 - Tool **names** are stable. A breaking change ships as a new name (`search_schema_v2`), never as a silent shape change.

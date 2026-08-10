@@ -151,12 +151,19 @@ Every improvement is measured against something. Baselines to establish in Stage
 | No retrieval (full schema in prompt) | `full-schema` | Is retrieval helping at all, or just saving tokens? |
 | Baseline retriever + generation, no validation | `retrieval-only` | What does the validation tier contribute? |
 | Baseline retriever + validation, no self-correction | `with-validation` | What does error feedback contribute? |
+| `retrieval-only`, with the retrieval hop over MCP | `mcp-retrieval` | Does the protocol change the answer? The project's headline claim, made falsifiable |
 | Full pipeline, `ENABLE_PROFILE_TABLE=false` | *Stage 4* | What does profiling contribute? Expected to move **filter errors** specifically, not accuracy uniformly — a profile tells the model a column stores `'FI'` rather than `'Finland'`, which nothing else in the pipeline can |
 | Full pipeline, baseline retriever | *Stage 5* | The number the fine-tune must beat |
 
 Attributing a gain to the fine-tuned retriever requires knowing what the rest of the pipeline was already worth.
 
-**The first three are configurations of the answerer, not flags in the runner** — which is what the seam was designed for, and the reason adding them changed nothing in `EvalRunner`. `with-validation` deliberately does **not** retry: validation alone cannot raise accuracy, it can only convert an execution failure into a refusal that names its reason, and its contribution shows in the invalid-query columns rather than the accuracy one. Self-correction is the next baseline and is Stage 4. If accuracy moves between `retrieval-only` and `with-validation`, something other than validation did it.
+**The first four are configurations of the answerer, not flags in the runner** — which is what the seam was designed for, and the reason adding them changed nothing in `EvalRunner`. `with-validation` deliberately does **not** retry: validation alone cannot raise accuracy, it can only convert an execution failure into a refusal that names its reason, and its contribution shows in the invalid-query columns rather than the accuracy one. Self-correction is the next baseline and is Stage 4. If accuracy moves between `retrieval-only` and `with-validation`, something other than validation did it.
+
+**`mcp-retrieval` changes exactly one thing**, and its name says which. Same questions, same `k`, same generator, same prompt, same executor — and `search_schema` called on a subprocess over stdio instead of `SchemaRetriever.search` called in this one. A baseline that also moved validation over the wire would measure two hops at once and could not attribute a difference to either.
+
+Its scoping is a design constraint rather than a configuration choice: the published tool contract has **no dataset argument**, so a twenty-database benchmark scopes by process and pays a server launch per database ([ADR-045](../architecture/DECISIONS.md#adr-045--the-mcp-baseline-scopes-servers-by-process-because-the-tool-contract-has-no-dataset)). `--mcp-max-live` bounds how many run at once; the default of one is correct for a split ordered by database, and the run reports its launch count so an unordered split shows the thrashing.
+
+**What it was actually used for is not an accuracy row** — see [BENCHMARKS](BENCHMARKS.md) §8.2. Everything downstream of retrieval is the same code in both arms, so the question reduces to whether the same elements come back, and that is answerable exactly over all 1,034 questions instead of noisily over the hundred a daily budget affords.
 
 **The profiling ablation needs its failure category read, not just its total.** If it improves execution accuracy by a point while halving filter errors, the total is hiding the effect — and if it improves the total without moving filter errors, the gain came from somewhere else and the attribution is wrong.
 

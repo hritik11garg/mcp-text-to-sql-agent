@@ -13,7 +13,8 @@ from typing import Any, cast
 import pytest
 
 from benchmark.convert import schema_name_for
-from evals.pipeline import ScopeRegistry
+from core.settings import RetrievalSettings
+from evals.pipeline import Baseline, ScopeRegistry
 
 pytestmark = pytest.mark.unit
 
@@ -25,15 +26,19 @@ def registry(prefix: str) -> ScopeRegistry:
     so passing ``None`` for the connections keeps this a unit test and makes
     any future I/O in that method fail loudly rather than silently needing a
     fixture.
+
+    ``settings`` is real, unlike the connections, because the registry now
+    resolves ``top_k`` from it at construction: a benchmark records the number
+    of elements it retrieved, and "whatever the retriever defaults to" is not a
+    number anything can record.
     """
     return ScopeRegistry(
         cast(Any, None),
         cast(Any, None),
-        settings=cast(Any, None),
+        settings=RetrievalSettings(),
         execution=cast(Any, None),
         embedder=None,
-        needs_retrieval=False,
-        needs_validation=False,
+        baseline=Baseline.FULL_SCHEMA,
         prefix=prefix,
     )
 

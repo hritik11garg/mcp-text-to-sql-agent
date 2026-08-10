@@ -20,14 +20,16 @@ from typing import Any
 import pytest
 
 from adapters.llm.fake import FakeLLMClient, text_response
+from answering import ContextSource
 from core.exceptions import LLMUnavailableError, RetrievalError
 from core.ports.llm import LLMResponse, Usage
 from evals.dataset import Question, Split
 from evals.pipeline import (
     MAX_RESULT_ROWS,
-    Baseline,
     DatabaseScope,
+    FullSchemaSource,
     PipelineAnswerer,
+    RetrieverSource,
     SchemaScopedQueryRunner,
 )
 from generation.generator import SQLGenerator
@@ -124,8 +126,18 @@ def make_scope(
     retriever: StubRetriever | None = None,
     validator: StubValidator | None = None,
     full_schema: RetrievalResult | None = None,
+    source: ContextSource | None = None,
+    top_k: int = 10,
     schema: str = "spider_concert_singer",
 ) -> DatabaseScope:
+    """A scope carrying the source its baseline resolved to.
+
+    ``source`` defaults to the retriever, because that is what all three
+    retrieving baselines build. A caller that wants the full-schema arm passes
+    the source it expects -- which is the point of the change: the choice is
+    made once, where the scope is built, and is visible in the object rather
+    than recomputed from a flag on every question.
+    """
     return DatabaseScope(
         db_id="concert_singer",
         schema=schema,
@@ -134,6 +146,7 @@ def make_scope(
         retriever=retriever,  # type: ignore[arg-type]
         validator=validator,  # type: ignore[arg-type]
         full_schema=full_schema or RetrievalResult(),
+        source=source or RetrieverSource(retriever, top_k),  # type: ignore[arg-type]
     )
 
 
@@ -163,15 +176,13 @@ def make_answerer() -> Iterator[Callable[..., PipelineAnswerer]]:
     def build(
         scopes: StubScopes,
         *,
-        baseline: Baseline = Baseline.RETRIEVAL_ONLY,
         responses: list[LLMResponse] | None = None,
-        top_k: int | None = None,
         llm: FakeLLMClient | None = None,
     ) -> PipelineAnswerer:
         client = llm or FakeLLMClient(
             responses if responses is not None else [text_response("SELECT 1")]
         )
-        answerer = PipelineAnswerer(scopes, SQLGenerator(client), baseline=baseline, top_k=top_k)
+        answerer = PipelineAnswerer(scopes, SQLGenerator(client))
         built.append(answerer)
         return answerer
 
@@ -200,9 +211,9 @@ class TestBaselines:
         self, make_answerer: Callable[..., PipelineAnswerer]
     ) -> None:
         retriever = StubRetriever(RetrievalResult(elements=(element("singer", "name"),)))
-        scopes = StubScopes(make_scope(retriever=retriever))
+        scopes = StubScopes(make_scope(retriever=retriever, top_k=7))
 
-        attempt = make_answerer(scopes, top_k=7)(a_question())
+        attempt = make_answerer(scopes)(a_question())
 
         assert attempt.sql == "SELECT 1"
         assert retriever.searches == [("How many singers are there?", 7)]
@@ -221,9 +232,15 @@ class TestBaselines:
             elements=(element("singer", "name"), element("singer", "age")),
             foreign_keys=(ForeignKey("singer", "id", "concert", "singer_id", "fk"),),
         )
-        scopes = StubScopes(make_scope(retriever=retriever, full_schema=catalog))
+        scopes = StubScopes(
+            make_scope(
+                retriever=retriever,
+                full_schema=catalog,
+                source=FullSchemaSource(catalog),
+            )
+        )
 
-        attempt = make_answerer(scopes, baseline=Baseline.FULL_SCHEMA)(a_question())
+        attempt = make_answerer(scopes)(a_question())
 
         assert retriever.searches == []
         assert attempt.retrieved == (("singer", "name"), ("singer", "age"))
@@ -243,7 +260,7 @@ class TestBaselines:
             make_scope(retriever=StubRetriever(RetrievalResult()), validator=validator)
         )
 
-        attempt = make_answerer(scopes, baseline=Baseline.WITH_VALIDATION)(a_question())
+        attempt = make_answerer(scopes)(a_question())
 
         assert scopes.activated == ["spider_concert_singer"]
         assert validator.validated == ["SELECT 1"]
@@ -266,11 +283,7 @@ class TestBaselines:
             make_scope(retriever=StubRetriever(RetrievalResult()), validator=validator)
         )
 
-        attempt = make_answerer(
-            scopes,
-            baseline=Baseline.WITH_VALIDATION,
-            responses=[text_response("SELECT nope")],
-        )(a_question())
+        attempt = make_answerer(scopes, responses=[text_response("SELECT nope")])(a_question())
 
         assert attempt.sql is None
         assert attempt.error_type == "unknown_identifier"
@@ -320,9 +333,7 @@ class TestCost:
             make_scope(retriever=StubRetriever(RetrievalResult()), validator=validator)
         )
 
-        attempt = make_answerer(scopes, baseline=Baseline.WITH_VALIDATION, responses=[response])(
-            a_question()
-        )
+        attempt = make_answerer(scopes, responses=[response])(a_question())
 
         assert attempt.sql is None
         assert (attempt.input_tokens, attempt.output_tokens) == (90, 4)

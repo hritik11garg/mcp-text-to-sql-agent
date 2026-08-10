@@ -183,7 +183,7 @@ That creates the `agent_meta` schema, the pgvector extension and the HNSW index,
 Verify the install — the security suite is the one that matters, and it passes by being **refused**:
 
 ```powershell
-pytest                    # ~1,515 tests; integration, security and contract need Docker
+pytest                    # ~1,560 tests; integration, security and contract need Docker
 pytest -m security        # the containment suite, on its own — 295 tests
 pytest -m property        # 39 property tests; 100 generated examples each, 500 in CI
 ruff check . ; mypy

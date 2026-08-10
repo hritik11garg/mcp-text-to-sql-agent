@@ -20,7 +20,15 @@ from psycopg import sql
 from adapters.embedding.hashing import HashingEmbedder
 from core.exceptions import RetrievalError
 from core.settings import ExecutionSettings, RetrievalSettings
-from evals.pipeline import Baseline, SchemaScopedQueryRunner, ScopeRegistry, read_full_schema
+from evals.pipeline import (
+    Baseline,
+    FullSchemaSource,
+    McpRetrievalSource,
+    RetrieverSource,
+    SchemaScopedQueryRunner,
+    ScopeRegistry,
+    read_full_schema,
+)
 from schema.indexer import SchemaIndexer
 from schema.introspection import PostgresIntrospector
 
@@ -96,8 +104,7 @@ def registry(owner_connection: Conn, ro_connection: Conn, indexed: None) -> Scop
         settings=RetrievalSettings(),
         execution=ExecutionSettings(),
         embedder=HashingEmbedder(),
-        needs_retrieval=True,
-        needs_validation=True,
+        baseline=Baseline.WITH_VALIDATION,
         prefix="bench_",
     )
 
@@ -170,8 +177,7 @@ class TestFullSchema:
             settings=RetrievalSettings(),
             execution=ExecutionSettings(),
             embedder=None,
-            needs_retrieval=False,
-            needs_validation=False,
+            baseline=Baseline.FULL_SCHEMA,
             prefix="bench_",
         )
 
@@ -287,8 +293,7 @@ class TestBaselineWiring:
             settings=RetrievalSettings(),
             execution=ExecutionSettings(),
             embedder=HashingEmbedder(),
-            needs_retrieval=True,
-            needs_validation=True,
+            baseline=Baseline.WITH_VALIDATION,
             prefix="bench_",
         )
         scope = registry.scope("alpha")
@@ -300,14 +305,51 @@ class TestBaselineWiring:
         assert scope.validator.validate("SELECT id FROM concert").valid is True
 
 
-def test_every_baseline_is_reachable_from_the_registry_flags() -> None:
-    """Each baseline maps to a distinct combination of what gets built.
+def test_every_baseline_resolves_to_its_own_kind_of_source() -> None:
+    """Each baseline builds a distinct context source.
 
-    A pure check, kept here so it sits beside the wiring it describes.
+    This test used to assert that each baseline mapped to a distinct
+    ``(needs_retrieval, needs_validation)`` pair, and **it is the thing that
+    said the flags had run out.** ``mcp-retrieval`` retrieves without an
+    in-process retriever, which is not a point in that space: it collides with
+    ``full-schema`` on both booleans while doing the opposite thing.
+
+    The registry now takes the baseline itself and resolves it to a source, so
+    the property worth pinning is that the resolution is injective -- two
+    baselines answering through the same object would be one baseline measured
+    twice.
     """
-    wiring: dict[Baseline, tuple[bool, bool]] = {
-        Baseline.FULL_SCHEMA: (False, False),
-        Baseline.RETRIEVAL_ONLY: (True, False),
-        Baseline.WITH_VALIDATION: (True, True),
+    sources = {
+        Baseline.FULL_SCHEMA: FullSchemaSource,
+        Baseline.RETRIEVAL_ONLY: RetrieverSource,
+        Baseline.WITH_VALIDATION: RetrieverSource,
+        Baseline.MCP_RETRIEVAL: McpRetrievalSource,
     }
-    assert len(set(wiring.values())) == len(Baseline)
+    assert set(sources) == set(Baseline), "a baseline exists that nothing knows how to build"
+
+    # `retrieval-only` and `with-validation` share a source on purpose: the
+    # variable between them is the validator, not the context. Every other
+    # pairing must differ.
+    assert len(set(sources.values())) == 3
+
+
+def test_the_mcp_baseline_refuses_to_be_built_without_servers(
+    owner_connection: Conn, ro_connection: Conn
+) -> None:
+    """A silent fall back to in-process retrieval would publish a false label.
+
+    The failure has to happen here rather than on the first question, because
+    a run that answered all 921 questions through the direct path and wrote
+    ``baseline: mcp-retrieval`` into its manifest is not a wrong number -- it
+    is a wrong number that looks like the measurement everyone wanted.
+    """
+    with pytest.raises(ValueError, match="mcp-retrieval baseline needs a client pool"):
+        ScopeRegistry(
+            owner_connection,
+            ro_connection,
+            settings=RetrievalSettings(),
+            execution=ExecutionSettings(),
+            embedder=None,
+            baseline=Baseline.MCP_RETRIEVAL,
+            prefix="bench_",
+        )

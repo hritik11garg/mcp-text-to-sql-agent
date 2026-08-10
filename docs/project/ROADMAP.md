@@ -15,18 +15,20 @@ Percentages are checkbox counts from [TASKS.md](TASKS.md), not confidence — a 
 | 0 | Scaffolding — docs, deps, interpreter pin | ✅ Done | 100% |
 | 1 | **Core loop** — retrieval, generation, validation, execution, profiling, API, demo UI | 🚧 In progress | 71% |
 | 2 | **Eval harness** — comparison, Recall@k, artifacts, resumption, benchmark loading, pipeline seam | 🚧 In progress | 82% |
-| 3 | **MCP servers + client refactor** | 🚧 In progress | 84% |
+| 3 | **MCP servers + client refactor** | 🚧 In progress | 91% |
 | 4 | **Agent layer** — decomposition, session memory, self-correction | ⬜ Not started | 0% |
 | 5 | **Fine-tuned schema linker** | ⬜ Not started | 0% |
 | 6 | **Hardening** — limits, tracing, tests | ⬜ Not started | 0% |
 
 **Two things that had blocked this roadmap for weeks are done.** The full-split run finished on 2026-08-08 — all 921 scoreable questions, all 20 databases, 79.9% — and the demo UI is built, served and verified in a browser. Neither is a blocker any more.
 
-**What is genuinely blocking now, in order:** the **agent loop** (Stage 4), which is what makes the four MCP servers a system rather than four callable capabilities. Behind it, two measurement gaps that are cheap and were blocked until the run completed: a **`with-validation` run** over the same split — which measures the validation tier as a *gate*, not self-correction, because no baseline self-corrects — and an **eval that goes through the MCP servers**, because today's 79.9% measures the direct path only.
+**What is genuinely blocking now, in order:** the **agent loop** (Stage 4), which is what makes the four MCP servers a system rather than four callable capabilities. Behind it, one measurement gap that remains cheap: a **`with-validation` run** over the same split, which measures the validation tier as a *gate*, not self-correction, because no baseline self-corrects. The MCP gap closed on 2026-08-10 — the retrieval hop is measured identical over 1,034 questions ([BENCHMARKS](../ml/BENCHMARKS.md) §8).
 
 **Stage 1 went 75% → 59% → 69% → 88% → 71%.** It dropped once when the demo UI entered its scope, climbed as the pool, the endpoint, streaming and the UI landed — and **dropped again on 2026-08-10, without a single item being un-done.**
 
 > **Recounted 2026-08-10, and the drop is the interesting part.** These percentages are checkbox counts, and 88% could not be reproduced from any count in the repository: Stage 1's rows in TASKS.md give **71%** (63 done, 4 partial, 24 open), and this page's own *Done when* list gives 67%. Stage 2 read 87% and counts 82%. Stage 3's 84% reproduced exactly, which is what showed the other two had drifted rather than the method being wrong.
+>
+> **Stage 3 is now 91%**, recounted the same day for the opposite reason: its last blocking gate closed. 13 done, 1 partial, 2 open became 14 done, 1 partial, 1 open when the MCP eval was measured. The recount is published with the change that caused it, which is the discipline the paragraph above exists to enforce — a percentage nobody recomputes drifts upward just as easily as it drifts down.
 >
 > **Nothing regressed. The denominator grew.** Every slice since 2026-08-08 closed items *and* wrote down gaps it had found — failure injection, property tests, the audit finding, the toolchain upgrade — and a checklist that gets more honest as work proceeds is a checklist whose percentage falls while the project improves. **A number that only moves up is a number nobody is recounting**, which is precisely how 88% survived four rounds of new open items.
 
@@ -113,7 +115,7 @@ The pattern is worth keeping. Every one of those was invisible to a test suite t
 
 **The cost it charged was real too.** The configuration fingerprint includes the commit, so every day's resume was refused until it was run from a detached `git worktree` at the recorded commit. Day 3 also found that a worktree alone is not sufficient — the editable install puts the *main* checkout's `src/` on `sys.path`, so the guard can pass while the wrong code runs. Both are recorded in [BENCHMARKS §1.3](../ml/BENCHMARKS.md), and fingerprinting the loaded modules rather than the commit is now unblocked.
 
-**What is still unmeasured here, stated plainly.** The completed run is `retrieval-only`, so no validator executed — `validation_attempts` is 0 on all 921 artifacts by construction, and the 13 invalid queries reached PostgreSQL and were refused there. And it runs the direct answering path, so **no accuracy figure measures the MCP servers**. Both are cheap now that the run is finished, and both were blocked by it.
+**What is still unmeasured here, stated plainly.** The completed run is `retrieval-only`, so no validator executed — `validation_attempts` is 0 on all 921 artifacts by construction, and the 13 invalid queries reached PostgreSQL and were refused there. It also runs the direct answering path, so **no accuracy figure measures the MCP servers** — but as of 2026-08-10 that gap is quantified rather than open: the retrieval hop returns identical elements over the wire on all 1,034 questions ([BENCHMARKS](../ml/BENCHMARKS.md) §8).
 
 **Self-correction is unmeasured and no eval baseline can measure it.** `with-validation` is a *gate* — one validation pass, and a failing query is dropped rather than fed back to the model. `validation_attempts` is therefore 0 or 1 and never more. An earlier version of this section said a validation run would give self-correction a number; that was wrong, and the retry loop is Stage 4 work that does not exist yet.
 
@@ -132,11 +134,15 @@ Scope: four MCP servers; agent becomes an MCP client with runtime discovery; std
 - [x] Agent discovers tools at runtime — no hardcoded tool list
 - [x] `execute_sql` validates independently of the caller
 - [x] Copy-pasteable Claude Desktop config ([../architecture/MCP.md](../architecture/MCP.md) §9) — *written from the working stdio configuration; not yet run inside Claude Desktop itself*
-- [ ] **Eval re-run — accuracy unchanged.** A refactor that silently changed behaviour is a regression.
+- [x] **Eval re-run — behaviour unchanged.** Measured 2026-08-10: over all 1,034 dev questions, retrieval through `search_schema` on a subprocess returned **byte-identical ordered element lists** to retrieval in process — 1,034 of 1,034, zero differences ([BENCHMARKS](../ml/BENCHMARKS.md) §8). Closed as an *identity* rather than an accuracy figure, and §8.2 says why that is the stronger result.
 
 **Built ahead of Stage 2, deliberately and with one cost.** The servers landed before the eval harness because all four capabilities existed to be wrapped and this is the project's headline claim. The cost is the last checkbox: there was no baseline to re-run against, so "accuracy unchanged" could not be *measured*. What stands in for it is that every server is a thin adapter over a component that was already tested directly, with contract tests asserting the same behaviour over the wire — which is an argument, not a measurement, and the checkbox stays open until it is one.
 
-**As of 2026-08-08 the baseline exists, so the excuse does not.** 921 questions at 79.9% over the direct path is exactly the figure an MCP-path run has to reproduce. The work left is a harness baseline that routes through `ToolRegistry` instead of calling the components; the number it produces is the last checkbox above. Until it is run, **"the servers behave identically" remains an argument, and this project's own standard is that an untested equivalence claim is the kind most likely to be wrong** — the servers are the only place a serialization or limit-clamping difference could hide, because they are the only place the components are reached over a wire.
+**As of 2026-08-10 it is a measurement.** The paragraph above stood for two days and its prediction was right about *where* to look and wrong about *what to measure*. The servers are indeed the only place a serialization or clamping difference could hide — so the check went straight at that, comparing the retrieved elements themselves rather than the accuracy downstream of them. Every one of 1,034 questions matched exactly, and the cost of the hop came out at a constant **+7.8 ms** per call.
+
+**Reproducing 79.9% was the wrong target, and that is worth saying rather than quietly not doing it.** An accuracy run affordable in a day is about 100 questions, which at this accuracy carries an interval near ±8 points — wide enough to contain any regression worth finding. Meanwhile everything downstream of retrieval is literally the same code, so identical context means the paths differ by nothing that reaches the model, and a measured accuracy gap would have been **provider sampling noise published as a finding about MCP**. The `mcp-retrieval` baseline is built, smoke-run end to end and available; what it would add now is confirmation of something already determined.
+
+The `search_schema` hop is what was measured. `validate_sql`, `execute_sql` and `profile_table` cross no benchmark yet — see [BENCHMARKS](../ml/BENCHMARKS.md) §8.3.
 
 The risk here is shipping a protocol wrapper. Contract quality — descriptions that say *when* to call, schema-enforced limits, structured errors — is the actual work. See [../architecture/MCP.md](../architecture/MCP.md) §3.
 

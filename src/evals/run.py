@@ -30,6 +30,7 @@ import argparse
 import json
 import logging
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -43,6 +44,7 @@ from core.settings import Settings
 from evals.artifacts import QuestionArtifact, RunManifest, RunStore, current_commit, new_run_id
 from evals.dataset import Question, Split, load_questions
 from evals.gold import Applied, apply_verified_gold, load_verified_gold
+from evals.mcp_client import McpClientPool
 from evals.pipeline import (
     Baseline,
     PipelineAnswerer,
@@ -115,6 +117,16 @@ def build_parser() -> argparse.ArgumentParser:
         help="Schema elements retrieved per question. Defaults to RETRIEVAL_TOP_K",
     )
     parser.add_argument(
+        "--mcp-max-live",
+        type=int,
+        default=1,
+        help=(
+            "Server trees kept running at once by the mcp-retrieval baseline. "
+            "One is right for a split ordered by database; raise it only if a "
+            "run reports more starts than it has databases"
+        ),
+    )
+    parser.add_argument(
         "--halt-after",
         type=int,
         default=DEFAULT_HALT_AFTER,
@@ -171,18 +183,26 @@ def main(argv: list[str] | None = None) -> int:
         return 3
 
     try:
-        answerer, run_query = build_pipeline(
+        pipeline = build_pipeline(
             args, settings, owner=owner, readonly=readonly, schemas=applied.schemas
         )
-        with answerer:
-            runner = EvalRunner(
-                store,
-                answerer,
-                run_query,
-                on_progress=progress_line,
-                halt_after=args.halt_after if args.halt_after > 0 else None,
-            )
-            summary = runner.run(questions)
+        try:
+            with pipeline.answerer:
+                runner = EvalRunner(
+                    store,
+                    pipeline.answerer,
+                    pipeline.run_query,
+                    on_progress=progress_line,
+                    halt_after=args.halt_after if args.halt_after > 0 else None,
+                )
+                summary = runner.run(questions)
+        finally:
+            if pipeline.mcp_pool is not None:
+                # Before the summary, and in a `finally`: a halted run leaves
+                # server subprocesses behind otherwise, and the next run's
+                # first symptom is a port-free but memory-starved machine.
+                logger.info("mcp: %d server start(s) across the run", pipeline.mcp_pool.starts)
+                pipeline.mcp_pool.close()
     finally:
         owner.close()
         readonly.close()
@@ -229,6 +249,21 @@ def prepare_questions(args: argparse.Namespace) -> tuple[list[Question], Applied
     return kept, applied
 
 
+@dataclass(frozen=True, slots=True)
+class Pipeline:
+    """What a run needs to answer and to score, plus what it must shut down.
+
+    ``mcp_pool`` is here rather than hidden inside the answerer because it owns
+    **subprocesses**. An unclosed connection is reclaimed when the process
+    exits; an unclosed server tree is four more processes that outlive the run
+    that started them.
+    """
+
+    answerer: PipelineAnswerer
+    run_query: SchemaScopedQueryRunner
+    mcp_pool: McpClientPool | None = None
+
+
 def build_pipeline(
     args: argparse.Namespace,
     settings: Settings,
@@ -236,7 +271,7 @@ def build_pipeline(
     owner: psycopg.Connection[Any],
     readonly: psycopg.Connection[Any],
     schemas: dict[str, str],
-) -> tuple[PipelineAnswerer, SchemaScopedQueryRunner]:
+) -> Pipeline:
     """Construct the thing under test and the thing that runs SQL.
 
     The single wiring point. Everything above it -- loading, the manifest,
@@ -250,19 +285,25 @@ def build_pipeline(
     has read.
     """
     baseline: Baseline = args.baseline
-    needs_retrieval = baseline is not Baseline.FULL_SCHEMA
+
+    # Built only for the baselines that will embed with it. The full-schema arm
+    # retrieves nothing, and the MCP arm retrieves in a subprocess that loads
+    # its own -- so a second copy here would spend a minute and several hundred
+    # megabytes to produce vectors nothing reads.
+    needs_embedder = baseline in (Baseline.RETRIEVAL_ONLY, Baseline.WITH_VALIDATION)
+    mcp_pool = (
+        McpClientPool(max_live=args.mcp_max_live) if baseline is Baseline.MCP_RETRIEVAL else None
+    )
 
     scopes = ScopeRegistry(
         owner,
         readonly,
         settings=settings.retrieval,
         execution=settings.execution,
-        # Built only when something will embed with it. Loading a
-        # sentence-transformer for the full-schema baseline would spend a
-        # minute and several hundred megabytes to produce vectors nothing reads.
-        embedder=build_embedder(settings.retrieval) if needs_retrieval else None,
-        needs_retrieval=needs_retrieval,
-        needs_validation=baseline is Baseline.WITH_VALIDATION,
+        embedder=build_embedder(settings.retrieval) if needs_embedder else None,
+        baseline=baseline,
+        top_k=args.top_k,
+        mcp_pool=mcp_pool,
         prefix=args.prefix,
     )
 
@@ -270,7 +311,7 @@ def build_pipeline(
         build_llm_client(settings.llm),
         max_rows=settings.execution.max_rows_default,
     )
-    answerer = PipelineAnswerer(scopes, generator, baseline=baseline, top_k=args.top_k)
+    answerer = PipelineAnswerer(scopes, generator)
 
     run_query = SchemaScopedQueryRunner(
         readonly,
@@ -278,7 +319,7 @@ def build_pipeline(
         statement_timeout_ms=settings.execution.clamp_timeout_ms(None),
         prefix=args.prefix,
     )
-    return answerer, run_query
+    return Pipeline(answerer=answerer, run_query=run_query, mcp_pool=mcp_pool)
 
 
 def _connections(

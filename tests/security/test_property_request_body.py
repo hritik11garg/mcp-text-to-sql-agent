@@ -7,10 +7,20 @@ runs on bytes nobody chose.
 
 **The claim is narrow on purpose.** Not that any particular body is rejected:
 `{"question": "hi"}` is a generated body that should be accepted. What is
-asserted is that **no body produces a 5xx, and every refusal answers in the
-one envelope** -- because an unhandled exception on this path is both a denial
-of service and, per SECURITY.md 13.3, a potential disclosure through whatever
-the framework decides to render.
+asserted is that **no body produces an unhandled failure, and every refusal
+answers in the one envelope** -- because an unhandled exception on this path is
+both a denial of service and, per SECURITY.md 13.3, a potential disclosure
+through whatever the framework decides to render.
+
+**"Unhandled" is measured by the error code, and that is a correction made on
+2026-08-10.** The first version of this file measured it as `status < 500`, and
+that proxy held only for as long as the generator never produced an acceptable
+body. When it eventually produced `{"question": "0"}`, the proxy broke twice
+over -- see `TestNoBodyProducesAnUnhandledFailure` and `AnsweringRetriever` for
+both halves. The defect was present from the day the file was written and took
+a warmed Hypothesis corpus to reach, which is worth knowing about every
+property in this repository: **a property that has never failed may be one
+whose generator has never arrived.**
 
 **And that the refusal does not reflect what was sent.** That is the property
 this file exists for, and it is the one that was already broken -- see
@@ -28,12 +38,41 @@ from fastapi.testclient import TestClient
 from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 from tests.conftest import build_settings
-from tests.fakes_api import FakeResources
+from tests.fakes_api import FakeResources, FakeRetriever
 
 from api.app import create_app
-from api.errors import MAX_FIELD_PATH_CHARS, REQUEST_ID_HEADER
+from api.errors import MAX_FIELD_PATH_CHARS, REQUEST_ID_HEADER, UNPRINTABLE_FIELD
+from core.settings import Settings
+from schema.retrieval import RetrievalResult
 
 pytestmark = [pytest.mark.security, pytest.mark.property]
+
+
+class AnsweringRetriever(FakeRetriever):
+    """A retriever that answers, because here an accepted body is in scope.
+
+    The shared :class:`FakeRetriever` **raises** on ``search`` -- a deliberate
+    tripwire for API tests that should never reach the answering path. This
+    file is the one place that assumption is wrong: its own docstring says
+    ``{"question": "hi"}`` is a body the generator should produce and the app
+    should accept.
+
+    Left as the tripwire, an accepted body became an ``AssertionError`` inside
+    the fixture, rendered as ``500 internal_error`` -- **indistinguishable from
+    the unhandled exception this file exists to rule out**, and the reason
+    ``TestNoBodyProducesAnUnhandledFailure`` failed the first time generation
+    happened to produce ``{"question": "0"}``. It was latent from the day the
+    file was written; nothing about it was tied to any change in the app.
+    """
+
+    def search(self, *_: object, **__: object) -> RetrievalResult:
+        return RetrievalResult()
+
+
+class AnsweringResources(FakeResources):
+    def __init__(self, settings: Settings) -> None:
+        super().__init__(settings)
+        self.retriever = AnsweringRetriever()
 
 
 @pytest.fixture(scope="module")
@@ -41,7 +80,7 @@ def client() -> Iterator[TestClient]:
     """Module-scoped: the app is stateless between requests here, and building
     it per example would put a fake dependency graph behind every one of five
     hundred generated bodies."""
-    app = create_app(build_settings(), resource_factory=FakeResources)
+    app = create_app(build_settings(), resource_factory=AnsweringResources)
     with TestClient(app, raise_server_exceptions=False) as started:
         yield started
 
@@ -83,19 +122,56 @@ def post(client: TestClient, body: Any) -> Any:
     return client.post("/v1/query", json=body)
 
 
+UNHANDLED = "internal_error"
+"""The code ``errors.install`` renders for an exception nobody anticipated.
+
+Every other failure code in this application names a condition someone decided
+to report. This one means the decision was never made -- which is exactly the
+thing SECURITY.md 13.3 is about, and it is what "unhandled" has to be measured
+by here."""
+
+
 class TestNoBodyProducesAnUnhandledFailure:
     @PROFILE
     @given(BODIES)
-    def test_the_status_is_never_a_server_error(
+    def test_no_body_produces_an_unhandled_failure(
         self, client: TestClient, body: dict[str, Any]
     ) -> None:
-        """A 5xx here is an unhandled exception on an unauthenticated path.
+        """An unhandled exception on an unauthenticated path is a DoS and a disclosure.
+
+        **The assertion is about the code, not the status class, and that is a
+        correction.** This test used to read ``status_code < 500``, which is a
+        proxy for "nothing crashed" and was true only while the generator had
+        never produced an *acceptable* body. It eventually produced
+        ``{"question": "0"}`` -- and a valid body is meant to be accepted, so
+        the proxy was wrong twice over: it failed on the fixture's own
+        ``AssertionError``, and it would equally have failed on a deliberate,
+        enveloped ``502 llm_unavailable`` from a provider that is not there.
+
+        A 5xx this application *chose* is handled. ``internal_error`` is the
+        one it did not choose, so that is what is asserted. Strictly stronger
+        than the old check on every rejected body, and correct on accepted ones.
 
         `raise_server_exceptions=False` is what makes this meaningful: without
         it the TestClient re-raises and the test fails with the traceback
         instead of the status a real caller would receive.
         """
-        assert post(client, body).status_code < 500
+        response = post(client, body)
+        if response.status_code < 500:
+            return
+        assert response.json()["error"]["code"] != UNHANDLED, response.text
+
+    def test_the_simplest_acceptable_body_does_not_crash(self, client: TestClient) -> None:
+        """The property above, pinned as an example so it cannot depend on luck.
+
+        ``{"question": "0"}`` is the body that exposed the defect, and it took
+        an accumulated Hypothesis corpus to produce it. A property that finds a
+        bug once and then only re-finds it when the random stream cooperates is
+        a regression test nobody has -- so the found example is written down.
+        """
+        response = post(client, {"question": "0"})
+
+        assert response.status_code < 500 or response.json()["error"]["code"] != UNHANDLED
 
     @PROFILE
     @given(BODIES)
@@ -192,6 +268,19 @@ class TestTheRefusalDoesNotEchoTheRequest:
         which is "contained in" every JSON response ever written -- the
         response was correct (`body.<unnamed>`) and the assertion was not. Same
         reason the value check above only inspects strings of eight or more.
+
+        **A length floor was the wrong fix, and on 2026-08-10 generation said
+        so**: it failed again on the name `<unn`, four characters, for exactly
+        the same reason one character had failed -- it is a prefix of
+        `<unnamed>`, the placeholder this application substitutes *because* the
+        name was hostile. The response was correct both times. Raising the
+        floor again would only postpone it, since `<unnamed>` is itself a name
+        a caller can send.
+
+        So the comparison now subtracts this application's own vocabulary
+        before asking whether the caller's text survived, and the placeholder
+        is imported rather than spelled out -- a test that hardcoded it would
+        keep passing after the string changed while checking nothing.
         """
         app = create_app(build_settings(), resource_factory=FakeResources)
         with TestClient(app, raise_server_exceptions=False) as client:
@@ -199,7 +288,7 @@ class TestTheRefusalDoesNotEchoTheRequest:
 
         assert response.status_code < 500
         if len(name) > 64 or not name.replace("_", "").replace("-", "").isalnum():
-            assert name not in response.text
+            assert name not in response.text.replace(UNPRINTABLE_FIELD, "")
 
 
 class TestTheBoundsHoldOverGeneratedInput:

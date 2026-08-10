@@ -172,7 +172,7 @@ Convention: `[ ]` open · `[x]` done · `[~]` in progress · `[!]` blocked
 - [x] Contract tests + schema snapshot diffing
 - [x] Degradation behaviour per MCP.md §7 — a server that fails to start is recorded and skipped
 - [x] Claude Desktop config — MCP.md §9, with the four failure modes that produce confusing errors
-- [ ] **Re-run eval — accuracy unchanged** — *blocked on the Stage 2 harness; this is the one Stage 3 gate that cannot be closed out of order*
+- [x] **Re-run eval — behaviour unchanged** — 2026-08-10: `mcp-retrieval` baseline built, and retrieval over the wire returns **byte-identical** element lists on all 1,034 dev questions at +7.8 ms per call ([BENCHMARKS](../ml/BENCHMARKS.md) §8, [ADR-045](../architecture/DECISIONS.md#adr-045--the-mcp-baseline-scopes-servers-by-process-because-the-tool-contract-has-no-dataset)). Closed as an identity, not an accuracy row — §8.2 says why
 - [x] MCP.md filled in
 - [ ] CHANGELOG v0.3
 

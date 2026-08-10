@@ -306,11 +306,16 @@ Public because the security suite asserts against it, and a bound a test
 restates by hand is a bound that drifts.
 """
 
-_UNPRINTABLE: Final = "<unnamed>"
+UNPRINTABLE_FIELD: Final = "<unnamed>"
 """What a field name becomes when it is not one.
 
 Not the empty string: a caller with a genuine typo needs to see *something*
 occupying that position, and a silent gap reads as a schema that lost a field.
+
+Public for the same reason as :data:`MAX_FIELD_PATH_CHARS`: the security suite
+has to subtract this application's *own* vocabulary before asking whether a
+caller's text was reflected back. A test that spelled it by hand would keep
+passing after this string changed, and would be checking nothing.
 """
 
 
@@ -330,10 +335,10 @@ def _safe_part(part: object) -> str:
     """
     text = str(part)
     if not text or len(text) > 64:
-        return _UNPRINTABLE
+        return UNPRINTABLE_FIELD
     if text.replace("_", "").replace("-", "").isalnum():
         return text
-    return _UNPRINTABLE
+    return UNPRINTABLE_FIELD
 
 
 def _http_message(exc: StarletteHTTPException) -> str:

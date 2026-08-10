@@ -171,7 +171,9 @@ python -m evals.run --questions data/splits/spider-official-dev.jsonl --split de
 
 **Reproducing it needs a checkout of `15dcdf7`**, for the reason in §1.3 — the configuration fingerprint includes the commit, and the working tree is well past it. Each of days 2 and 3 was run from a detached `git worktree` at that commit so that all 921 questions were answered by one version of the code.
 
-**What this run does not measure.** The `with-validation` baseline, which is the one that would show whether the self-correction loop recovers any of the 13 `execution_failed` cases — `retrieval-only` runs no validator, so `validation_attempts` is 0 on all 921 artifacts by construction rather than because nothing needed correcting. And **nothing here goes through the MCP servers**: this measures the direct answering path, the same one the HTTP API uses. The servers are proven to work by `tests/contract/`, and proven to answer *as well* by nothing. See [ROADMAP](../project/ROADMAP.md) §3.
+**What this run does not measure.** The `with-validation` baseline, which is the one that would show whether the self-correction loop recovers any of the 13 `execution_failed` cases — `retrieval-only` runs no validator, so `validation_attempts` is 0 on all 921 artifacts by construction rather than because nothing needed correcting. And **nothing here goes through the MCP servers**: this measures the direct answering path, the same one the HTTP API uses.
+
+> **Updated 2026-08-10.** The second half of that sentence used to read *"and proven to answer as well by nothing"*. That is no longer true — §8 measures it. Over all 1,034 dev questions, retrieval through `search_schema` on a subprocess returned **byte-identical** ordered element lists to retrieval in process, at a constant cost of about 7.8 ms per call. This run still does not itself go through the servers; what changed is that the gap it leaves is now quantified rather than open.
 
 ### 1.3 The fingerprint refused the resume, twice, and was right both times
 
@@ -408,6 +410,64 @@ A second row arrives with the first configuration that changes the token profile
 | A3 | In-batch vs mined hard negatives | TBD | — |
 | A4 | Serialization field contribution | TBD | — |
 | A5 | Recall@k → execution accuracy | TBD | — |
+
+---
+
+## 8. The MCP path
+
+> **Measured 2026-08-10, and the result is an identity rather than an accuracy.**
+
+The project's headline claim is that it is MCP-native, and until now that claim had a hole in exactly the place a claim should not: `tests/contract/` proved the four servers start, advertise and answer, and **nothing proved they answer as well**. Every published figure on this page was measured on the direct answering path — components called in process, the same path the HTTP API uses. §1.2 said so under *"What this run does not measure"*, and this section is what closes it.
+
+### 8.1 Retrieval over the wire returns the same elements. All of them.
+
+| Date | Commit | Corpus | k | Questions | Identical | Differing | Databases | Server starts |
+|---|---|---|---|---|---|---|---|---|
+| 2026-08-10 | `a26fe5a` | Spider `dev.json`, all 20 DBs | 30 | **1,034** | **1,034** | **0** | 20 | **20** |
+
+Each question was asked twice — once through `SchemaRetriever.search` in process, once through `search_schema` on a subprocess over stdio — and the ordered `(table, column)` lists were compared exactly. They matched on every question. No exclusions: this covers all 1,034 questions in the split, including the 113 the accuracy runs drop for `dialect_error` and `undetermined_limit`, because those are gold-SQL problems and retrieval still runs on them.
+
+```powershell
+python scripts/compare_mcp_retrieval.py `
+    --questions data/splits/spider-official-dev.jsonl --prefix spider_ --top-k 30
+```
+
+**20 server starts for 20 databases** is the pool bound working. The published contract has no dataset parameter, so scope travels in the process environment and a database change costs a server launch ([ADR-045](../architecture/DECISIONS.md#adr-045--the-mcp-baseline-scopes-servers-by-process-because-the-tool-contract-has-no-dataset)). One live client is only cheap because Spider's dev file is ordered — twenty contiguous runs — and `server_starts` is published precisely so an unordered split reports the thrashing instead of hiding it.
+
+### 8.2 Why there is no `mcp-retrieval` accuracy row, and why that is the stronger answer
+
+The obvious thing to publish here is an execution-accuracy figure beside §1.1's 79.9%. It is not published, on purpose.
+
+**An identity over 1,034 questions is a tighter result than an accuracy over a subset.** A 100-question paired run — all a free-tier budget affords in a day — carries a confidence interval near ±8 points at this accuracy. That interval is wide enough to contain every regression worth finding, so the run would cost a token budget to produce a number that could not answer the question.
+
+**And the two paths differ by nothing else.** `PipelineAnswerer` composes retrieve → generate → execute from a single context source; the `mcp-retrieval` baseline swaps that source and changes nothing downstream. `tests/unit/test_mcp_retrieval_source.py` requires the prompt built from a wire round trip to be **byte-identical** to the prompt built from the original, and `tests/integration/test_mcp_eval_baseline.py` requires the same of results a real server produces from a real catalog. Identical context into identical code leaves only provider nondeterminism — so a measured accuracy gap would be **sampling noise reported as a finding about MCP**, which is the failure this page's recording rules exist to prevent.
+
+The `mcp-retrieval` baseline is implemented, exercised end to end, and available:
+
+```powershell
+python -m evals.run --questions data/splits/spider-official-dev.jsonl --split dev `
+    --gold data/splits/spider-dev-gold.jsonl --prefix spider_ `
+    --baseline mcp-retrieval --top-k 30 --out results/
+```
+
+It has been run over a 5-question smoke (5/5 matched) to prove the CLI path, and a full run remains available if a budget ever justifies confirming what §8.1 already determines.
+
+### 8.3 What the wire does cost
+
+Correctness is unchanged, so the honest thing to report is the price.
+
+| Path | p50 | p95 |
+|---|---|---|
+| In process | 20.8 ms | 28.1 ms |
+| Over MCP stdio | 28.5 ms | 36.0 ms |
+| **Overhead** | **+7.8 ms** | **+7.9 ms** |
+
+n=1,034, same machine, same run. **Constant, not proportional** — the gap is the same at the median and at the 95th percentile, which is what a fixed serialize / pipe / deserialize cost looks like and not what a slower search would look like.
+
+Against a question, it disappears: §1.2 measured 57m07s over 921 questions, about 3.7 s each, so 7.8 ms is **roughly 0.2% of answering one question**. The cost that actually matters is the one *outside* this table — the model load per server start, tens of seconds, paid once per database. That is the number a deployment should care about, and it is the reason the pool bound exists.
+
+**What this does not measure.** Only `search_schema` crosses the wire here. `validate_sql`, `execute_sql` and `profile_table` are proven by `tests/contract/` and unmeasured by any benchmark — a `with-validation`-over-MCP baseline would move two hops at once and could not attribute a difference to either, so it is a separate row that does not exist yet.
+
 
 ---
 
