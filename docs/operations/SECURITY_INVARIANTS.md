@@ -130,7 +130,7 @@ Eleven statements that must be true of every build. Each names the test that pro
 
 **Enforced by.** Nothing in `web/` renders markup. `dangerouslySetInnerHTML` appears **nowhere** in the tree; highlighting is a hand-written scanner returning `{kind, text}` tokens the component maps to elements ([ADR-042](../architecture/DECISIONS.md#adr-042--syntax-highlighting-returns-tokens-never-markup)). Behind that, a CSP with `script-src 'self'` and no `unsafe-inline`, plus `nosniff`.
 
-**Proven by.** `web/src/components/ResultTable.test.tsx` — markup in a cell **and in a column name** renders as characters, asserted by `document.querySelector('img')` being null rather than by comparing strings; `web/src/sql/tokenize.test.ts` — the round trip (concatenating tokens returns the input exactly) and linearity under 50,000 doubled quotes; `tests/unit/test_api_static.py::TestSecurityHeaders` — `script-src` never gains `unsafe-inline`.
+**Proven by.** `web/src/components/ResultTable.test.tsx` — markup in a cell **and in a column name** renders as characters, asserted by `document.querySelector('img')` being null rather than by comparing strings; `web/src/sql/tokenize.test.ts` — the round trip (concatenating tokens returns the input exactly) and linearity under 50,000 doubled quotes; `web/src/sql/tokenize.property.test.ts` — **the same round trip over generated input** (added 2026-08-10), including arbitrary UTF-16 and every prefix of a generated query, so a scanner that drops a character on a shape nobody listed is caught rather than trusted; `tests/unit/test_api_static.py::TestSecurityHeaders` — `script-src` never gains `unsafe-inline`.
 
 **Residual.** The CSP's strictness depends on a **build option**: `assetsInlineLimit: 0` in `vite.config.ts`. Removing it inlines small scripts and silently weakens `script-src 'self'`. Both places carry a comment; neither has a test that would catch the removal.
 
@@ -170,7 +170,9 @@ Eleven statements that must be true of every build. Each names the test that pro
 
 **Added 2026-08-09**, after the property tests were written. **The mechanism predates the invariant** — `src/api/sse.py` was built as a security control and says so in its docstring — but nothing in this document claimed it, which meant nothing here would have noticed it being removed. That is the same gap writing I-1…I-10 exposed once already.
 
-**Residual.** The invariant is about *framing*, not about *termination*. Nothing here proves every stream reaches a terminal `done` or `error` event; the route has a broad handler that emits one, and no test generates the ways a stream can end. That remains an open property in [ENGINEERING_MATRIX.md](../project/ENGINEERING_MATRIX.md) §38. Nor does it cover a client that mis-parses correct framing — `web/src/api/sse.ts` has its own suite (TESTING.md §13) and its own bounds.
+**Residual.** The invariant is about *framing*, not about *termination*. Nothing here proves every stream reaches a terminal `done` or `error` event; the route has a broad handler that emits one, and no test generates the ways a stream can end. That remains an open property in [ENGINEERING_MATRIX.md](../project/ENGINEERING_MATRIX.md) §38.
+
+**The other half of the residual closed on 2026-08-10.** A client that mis-parses correct framing would produce the same outcome from the other end, and until then `web/src/api/sse.ts` was covered only by examples somebody chose. `web/src/api/sse.property.test.ts` now asserts over generated wires that **where the chunks fall cannot change what comes out** — against a reference parser written by a different algorithm — and that no frame the client hands on can carry a carriage return, which is this invariant read backwards: nothing parsed out of the stream can re-split into frames if it is ever written back to one.
 
 ---
 

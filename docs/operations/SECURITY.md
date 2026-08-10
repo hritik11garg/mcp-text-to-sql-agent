@@ -161,12 +161,40 @@ Planned:
 
 ## 10. Dependency scanning
 
-> **TBD — Stage 6.**
+> **Automation is TBD — Stage 6.** One manual scan has been run, and its results are below rather than in a terminal somebody closed.
 
 - `pip-audit` in CI against the pinned requirements.
 - Dependabot or equivalent for advisories.
 - Versions are pinned exactly (`==`) so a scan result maps to a known set — a floating range makes the scan a snapshot of nothing.
 - `torch` and `transformers` are large surfaces; they carry more scrutiny on upgrade.
+
+### 10.1 `npm audit`, run 2026-08-10 — five advisories, all in the dev toolchain — **Medium**, and **High for a developer on Windows**
+
+Run while adding `fast-check`. **Nothing here reaches a deployed user**: production serves files built by `vite build` and handed to FastAPI, and every advisory below is in code that only runs on a developer's machine — the dev server, its bundler, or the Vitest UI.
+
+| Advisory | Package | Rated | Reachable here? |
+|---|---|---|---|
+| [GHSA-67mh-4wv8-2f99](https://github.com/advisories/GHSA-67mh-4wv8-2f99) | `esbuild` ≤0.24.2 | Moderate | **Yes** — any site can send requests to the dev server and read the response |
+| [GHSA-fx2h-pf6j-xcff](https://github.com/advisories/GHSA-fx2h-pf6j-xcff) | `vite` ≤6.4.2 | High | **Yes** — `server.fs.deny` bypassed via Windows alternate paths |
+| [GHSA-4w7w-66w2-5vf9](https://github.com/advisories/GHSA-4w7w-66w2-5vf9) | `vite` ≤6.4.1 | Moderate | Yes — path traversal in optimized-deps `.map` handling |
+| [GHSA-v6wh-96g9-6wx3](https://github.com/advisories/GHSA-v6wh-96g9-6wx3) | `vite` ≤6.4.2 | Moderate | Only with the editor-launch integration, which is unused |
+| [GHSA-5xrq-8626-4rwp](https://github.com/advisories/GHSA-5xrq-8626-4rwp) | `vitest` <3.2.6 | Critical | **No** — requires `vitest --ui`; `npm test` runs `vitest run` |
+
+**Vulnerability.** The dev server answers cross-origin requests from any website, and on Windows its `server.fs.deny` list — the thing that stops it serving `.env` — can be bypassed with an alternate path spelling.
+
+**Why it is dangerous *in this repository specifically*, which is worse than the generic case.** `vite.config.ts` **proxies `/v1`, `/health` and `/ready` to the API on `127.0.0.1:8000`**, and it does so deliberately: `API_CORS_ORIGINS` is empty because the API has no authentication, and every entry in that list is an origin allowed to drive it from someone's browser. The proxy exists so the closed default stays closed. **A dev server that answers any origin hands that closed door back to any website the developer happens to have open** — the page cannot read the *response* under normal CORS, but these advisories are precisely about the dev server not enforcing that.
+
+**Attack scenario.** A developer runs `npm run dev` and, in another tab, visits a page they did not write. That page fetches `http://localhost:5173/@fs/...` with a Windows alternate path for `D:\mcp-text-to-sql-agent\.env` and reads the response: **the database password and the model provider's API key**. Or it posts to `http://localhost:5173/v1/query` and reads the answer, driving an unauthenticated analytics API through the proxy that was built to protect it. Neither step needs a credential, and nothing on the developer's screen changes.
+
+**Severity.** **Medium for the project** — no deployed exposure, and the vulnerable window is exactly the minutes `npm run dev` is running. **High for the person running it on Windows**, because the realistic outcome is the same credential disclosure this project has already had to recover from once (§9, rotated 2026-08-08). *(OWASP A06:2021 — Vulnerable and Outdated Components; the proxy angle is A05, Security Misconfiguration.)*
+
+**CIA.** Confidentiality of local files and of anything the local API will answer. Integrity only insofar as the API can be driven; the database role is read-only, which is the control that holds here (§5). No availability impact.
+
+**Secure implementation.** `vite` ≥7 and `vitest` ≥3.2.6. `npm audit fix` without `--force` resolves **none** of them — every fix is a major version — so this is an upgrade with its own regression surface (`vite` 5 → 7, `vitest` 2 → 3) and it is tracked as its own piece of work rather than folded into an unrelated change.
+
+**Until then, the mitigation that costs nothing and is stated because it is the one actually in force:** the dev server is not required to run the project — `vite build` output is served by FastAPI, and the whole test suite runs without it. **Do not leave `npm run dev` running while browsing.**
+
+**Why this is written down rather than fixed immediately.** Recording a known-vulnerable state with its reachability analysis is worth more than a silent major-version bump landing in a commit about property tests. The same reasoning as every other finding here: **an undefended surface is safer than a defended-looking one.**
 
 ## 11. Audit logging
 

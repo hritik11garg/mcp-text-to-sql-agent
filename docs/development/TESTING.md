@@ -222,7 +222,7 @@ The general rule this is an instance of: **a selection mechanism needs a way to 
 
 ## 13. The browser client's tests
 
-`web/` runs its own suite — **Vitest with jsdom, 112 tests** — separate from pytest because it is a separate language and toolchain, not because it is held to a different standard. `npm test` in `web/`; `npm run typecheck` is the other half of the gate.
+`web/` runs its own suite — **Vitest with jsdom, 127 tests**, 15 of them generated — separate from pytest because it is a separate language and toolchain, not because it is held to a different standard. `npm test` in `web/`; `npm run typecheck` is the other half of the gate.
 
 **The type checker is doing real work here and is treated as part of the suite.** `strict`, plus `noUncheckedIndexedAccess` and `exactOptionalPropertyTypes`. The first is the one that matters for this codebase: `rows[i][j]` on a result set is genuinely `unknown | undefined`, and a compiler that pretends otherwise is a compiler agreeing that a ragged row cannot happen.
 
@@ -233,10 +233,11 @@ The general rule this is an instance of: **a selection mechanism needs a way to 
 | **Logic** (`state/reducer.test.ts`) | Ordering, settling exactly once, arrival times becoming durations |
 | **Rendering** (`components/*.test.tsx`) | The claims a person reads: truncation, NULL versus empty string, and that untrusted text renders as text |
 | **Integration** (`App.test.tsx`) | The whole tree driven by a fake `ReadableStream` — the joins nothing else covers |
+| **Generated** (`api/sse.property.test.ts`, `sql/tokenize.property.test.ts`) | `fast-check` over the two parsers: chunk boundaries, arbitrary UTF-16, and every prefix of a generated query — see §15 |
 
 **Three of these test properties rather than behaviour**, and those are the ones worth keeping.
 
-**The round trip.** Concatenating every token the SQL scanner emits returns the input exactly. That is not a highlighting test; it is what stops the page from showing SQL that is not the SQL that ran.
+**The round trip.** Concatenating every token the SQL scanner emits returns the input exactly. That is not a highlighting test; it is what stops the page from showing SQL that is not the SQL that ran. **Generated since 2026-08-10** — the claim was written down long before the input was anything but hand-picked.
 
 **No markup, ever.** A cell value and a *column name* containing `<img src=x onerror=...>` must render as characters — asserted by `document.querySelector('img')` being null, not by comparing strings. A string comparison passes on an escaped attribute that a browser would still execute in another context; asking the DOM whether an element exists does not.
 
@@ -274,7 +275,7 @@ The message names the consequence and the correct fix on purpose — an error th
 
 ## 15. Property-based tests
 
-`hypothesis`, 39 tests, marker `property`. They live **inside the existing layers** rather than in a directory of their own — `tests/security/` for the two that are security claims, `tests/unit/` for the one that is not — so the security gate selects them without needing to know they are generated.
+**54 tests over two languages** — `hypothesis` for the 39 in Python, carrying the marker `property`, and `fast-check` for the 15 in `web/`. The Python ones live **inside the existing layers** rather than in a directory of their own — `tests/security/` for the two that are security claims, `tests/unit/` for the one that is not — so the security gate selects them without needing to know they are generated.
 
 **The premise, and why this project needed it.** An example-based test checks the inputs somebody thought of, and the failure this codebase keeps rediscovering is that *nobody chose easy inputs — everybody chose convenient ones*. Convenient SQL is lower case, single-spaced and uncommented. Three of these properties exist because the rules they assert were already written as invariants and had only ever been checked against a handful of instances.
 
@@ -289,16 +290,33 @@ The message names the consequence and the correct fix on purpose — an error th
 
 **The generators are not fuzzers, and the distinction is the whole design.** A strategy emitting arbitrary text finds parse errors, which is a fact about `sqlglot` rather than about this project. What is generated instead is plausible SQL with the incidental details varied. The one strategy that *is* arbitrary text (`st.text()` against `validate_static`) makes a correspondingly narrow claim: not that random text is rejected — `SELECT 1` is random text that should be accepted — but that the function always **returns**, because its caller is a loop and an exception there aborts a request rather than correcting it.
 
-That same strategy is the only mechanical fuzzing this project has, which is why [ENGINEERING_MATRIX](../project/ENGINEERING_MATRIX.md) §37 moved off 🔴 on the back of it — narrowly, and with the request body and the SSE parser still untouched.
+That same strategy is what moved [ENGINEERING_MATRIX](../project/ENGINEERING_MATRIX.md) §37 off 🔴 — narrowly. The request body followed it the same day, and the SSE parser on 2026-08-10, so all three of that row's targets now take generated input; it stays 🟡 because three shallow generators are still not a campaign.
 
 **That narrow claim is the one that found something.** On its first run, `validate_static("$")` raised an unhandled `sqlglot.errors.TokenError`: the validator caught `ParseError`, and `TokenError` is its **sibling**, not its subclass. It is raised for an unterminated string, identifier, comment or dollar-quote — which is the exact shape of a generation that ran out of output tokens mid-literal, on the free tiers this project defaults to. Consequences, in order of how long they would have taken to notice: the caller got `internal_error` instead of an actionable `syntax_error`; the self-correction loop aborted instead of correcting; and the executor raised **before** its `outcome="rejected"` audit write, so the attempt left no trail at all. Fixed by catching the base `SqlglotError`. Twelve hundred example-based tests had not thought to end a string early.
 
 **Two profiles**, registered in `tests/conftest.py`: 100 examples locally, **500 in CI**, selected on the `CI` environment variable — the same variable the Docker guard keys on. A property test that runs the same hundred examples everywhere is an example-based test with extra machinery. `deadline=None` on both, because the code under test parses SQL and a per-example wall clock turns a slow shared runner into a failed *timing* assertion while the property holds perfectly; latency budgets live in `pytest-benchmark` (§9), where a deadline means something.
 
-**Two of section 38's five properties are not here**, named rather than implied:
+### The TypeScript half
 
-- **The read-only connection never holds a write privilege.** Needs a real database, so generating hundreds of examples against it costs a container per example or a shared one with cross-example state. Covered by `tests/security/test_readonly_role.py` over the privileges that exist.
-- **The SQL tokenizer round-trips.** Lives in `web/`, which is TypeScript, and would need `fast-check` rather than `hypothesis`. Already asserted as a hand-written property (§13) — the gap is generated input, not the claim.
+Added 2026-08-10. `fast-check` 4.9.0 — **two packages installed, not fifteen**, which is the standard the `locust` removal set (§8). `web/src/test-setup.ts` reads the same `CI` variable for the same 100/500 split, and gets it free on GitHub Actions.
+
+| Property | Where | What is generated |
+|---|---|---|
+| **Where the chunks fall cannot change what comes out** | `web/src/api/sse.property.test.ts` | Wires built from generated field lines, all three line terminators mixed, and arbitrary UTF-16 — then split at generated points, and again one character at a time |
+| **A frame cannot carry a line terminator** | same | The same wires, asserting no event name holds a `\r` or `\n` and no data holds a `\r` — I-11 read from the client end |
+| **`pending` tells a finished stream from a cut one** | same | Streams of complete events, then the same stream with its last character removed |
+| **The token round trip** | `web/src/sql/tokenize.property.test.ts` | SQL-shaped fragments mixed with arbitrary UTF-16, plus **every prefix** of each generated query |
+| **The token list is well formed** | same | No empty token, no two neighbours of one kind, and each kind's text matching the shape only its branch can produce |
+
+**The SSE properties are checked against a reference parser written by a different algorithm** — one regular expression over the whole wire instead of a character scan with held state, `split(':')` instead of `indexOf`. A model that mirrors the implementation agrees with its bugs. One rule is copied rather than derived and the docstring says so: a whole-wire parser has no next chunk, so it cannot discover that a trailing `\r` must be held.
+
+**Each of the seven mutations tried turned the new suites red — after the sixth was fixed.** Breaking the held carriage return, the space-stripping rule, the data reset on dispatch, the line bound's comparison, the quote scanner, the token merge, and the keyword classifier. The space-stripping mutation **survived the first draft with every property green**, because the generator emitted `data:value` and no server sends that: the separator was a fixed string where it should have been generated. The defect was in the test, and only mutating the code found it.
+
+**Not asserted here: linearity.** The scanner's wall-clock test stays in `tokenize.test.ts` as an example. A timing assertion over generated input fails when the runner is busy, which is a failure that says nothing about the property — and a test whose red means "maybe" is one that gets ignored, then deleted.
+
+### What is still missing
+
+**One of section 38's five properties is not here**, named rather than implied: **the read-only connection never holds a write privilege.** It needs a real database, so generating hundreds of examples against it costs a container per example or a shared one with cross-example state. Covered by `tests/security/test_readonly_role.py` over the privileges that exist.
 
 ## 16. Failure injection
 

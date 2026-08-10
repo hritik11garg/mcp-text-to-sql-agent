@@ -24,6 +24,11 @@
 #      property instead of the 100 a developer runs. The examples nobody would
 #      have chosen are the entire value of those tests, and finding them costs
 #      time this job has and a laptop should not have to spend.
+#
+# The `web` job below reads the same variable for the same reason, through
+# `web/src/test-setup.ts`, and gets it for free: GitHub Actions sets `CI=true`
+# on every job. The two languages are kept on the same numbers so the rule is
+# one sentence -- 100 locally, 500 in CI -- rather than two that drift apart.
 
 name: CI
 
