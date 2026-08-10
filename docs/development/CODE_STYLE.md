@@ -122,10 +122,12 @@ One thread for the whole refresh rather than one per probe: they are sequential 
 log.info("sql_validated", attempt=2, stage="explain", cost=1240.5, request_id=rid)
 ```
 
-- **`structlog`, structured, key-value.** Never f-strings — `f"Validated on attempt {n}"` is not queryable.
+> **What the code actually does, stated 2026-08-10 rather than left for a reader to discover.** The block above is the Stage 6 target. **Today the codebase uses the standard library's `logging`** — 34 modules, 72 logging calls — with `%s` placeholders and lazy arguments, and `structlog` is pinned in `requirements.txt` with no importer ([ENGINEERING_MATRIX](../project/ENGINEERING_MATRIX.md) §25). The rule below that is **in force now** is the f-string one, and it is followed: `logger.info("retriever ready: model=%s dimensions=%d", ...)` defers formatting and keeps the message template constant, which is the property that makes a line groupable. The rest — key-value pairs, stable event identifiers, contextvar-bound ids — arrives with the logging work in Stage 6.
+
+- **Structured, key-value, and `structlog` when it lands.** Never f-strings — `f"Validated on attempt {n}"` is not queryable, and it formats even when the level is off.
 - **Event name is a stable identifier** (`sql_validated`), not a sentence. Sentences change; identifiers are what dashboards count.
 - **`request_id` and `trace_id` on every line.** Bound once via contextvars, not threaded through every signature.
-- **Never log:** secrets, connection strings, result values.
+- **Never log:** secrets, connection strings, result values. **This one is enforced today** — `tests/security/test_dsn_handling.py` asserts a password is removed from both URL and keyword DSNs, and `tests/integration/test_execution.py::test_result_values_are_never_stored` asserts the audit path records counts and metadata, never cells.
 - Levels per [../operations/OBSERVABILITY.md](../operations/OBSERVABILITY.md) §2.
 
 ## 8. Exception handling

@@ -54,7 +54,7 @@ Layers overlap by design — a security test needing a real database carries bot
 
 **Applicable?** Yes — this is the gate every other category depends on.
 
-**Implemented?** Yes. Fifteen modules under `src/` with a composition root (`composition/`) that builds the dependency graph once per process. Ports (`core/ports/`) hold the interfaces; `adapters/` holds the implementations. The MCP servers are thin adapters over components that were built and tested with no knowledge of MCP, which is why the same components serve HTTP and stdio without duplication.
+**Implemented?** Yes. Fourteen packages under `src/` with a composition root (`composition/`) that builds the dependency graph once per process. Ports (`core/ports/`) hold the interfaces; `adapters/` holds the implementations. The MCP servers are thin adapters over components that were built and tested with no knowledge of MCP, which is why the same components serve HTTP and stdio without duplication.
 
 **Proof.** `docs/architecture/SYSTEM_ARCHITECTURE.md` §2 per component; `docs/architecture/DECISIONS.md` for why each boundary is where it is; `tests/unit/test_composition.py`.
 
@@ -416,6 +416,22 @@ Layers overlap by design — a security test needing a real database carries bot
 
 **Live defect, opened 2026-08-10 by the first `npm audit` this project has run.** Five advisories — one critical, one high, three moderate — in `vite`, `esbuild` and `vitest`. **None reach a deployed user**; all are dev-toolchain code. The one that matters is the dev server answering any origin *while proxying an unauthenticated API*, combined with a Windows `server.fs.deny` bypass that reaches `.env`. Written up with the reachability analysis and the mitigation in force at [SECURITY.md §10.1](../operations/SECURITY.md). **`npm audit fix` resolves none of them** — every fix is a major version (`vite` 5 → 7, `vitest` 2 → 3), so it is its own piece of work rather than a line in an unrelated commit. **This is the argument for the row's own gap**: the scan that found it was run by hand, once, because a human happened to install something.
 
+**Live defect, opened 2026-08-10 — and it is the same defect as the one closed below, eight times over, in `requirements.txt` rather than the dev file.** A documentation sweep asked which pins have an importer. **Eight production dependencies have none:**
+
+| Pin | Its comment says | Reality |
+|---|---|---|
+| `opentelemetry-api`, `-sdk`, `-instrumentation-fastapi`, `-instrumentation-psycopg` | — | **Nothing under `src/` imports `opentelemetry`.** The only `trace_id` in the codebase is an audit column a caller passes in. Closure: **14 distributions** |
+| `sse-starlette==3.4.6` | *"SSE streaming of agent progress"* | Framing is hand-rolled in `src/api/sse.py`, **deliberately**, because `ServerSentEvent.encode` asserting single-line output is the mechanism behind invariant I-11. Zero references |
+| `structlog==26.1.0` | *"structured JSON logs correlated with trace IDs"* | The standard library's `logging`, in 34 modules, with 72 logging calls. Zero references |
+| `tenacity==9.1.4` | *"retry policy for LLM + DB transients"* | The provider fallback chain is hand-written and advances on `429`. Zero references |
+| `rich==15.0.0` | *"readable CLI output for the demo path"* | Zero references |
+
+Two more in the dev file — `datasets` and `accelerate`, both for the Stage 5 fine-tune that has not been written.
+
+**Every one is justified by a comment, which is exactly the test ADR-014 says a dependency does not pass.** These are worse than the `locust` pin in one specific way: they are **runtime** requirements, so they ship, and each is attack surface and patch burden carried for a capability that does not exist. *(OWASP A06:2021 — Vulnerable and Outdated Components.)*
+
+**Not removed in the same change that found them.** A `requirements.txt` edit needs a clean-environment install and a full suite behind it to prove nothing imported them transitively at runtime, and that is a slice with its own verification rather than a line in a documentation sweep. Tracked in [TASKS.md](TASKS.md).
+
 **Live defect closed 2026-08-09.** `locust==2.46.2` was pinned with the comment *"concurrency + timeout behaviour under load"* and nothing imported it. **The pin is gone**, and with it fifteen direct dependencies — Flask, `flask-cors`, `flask-login`, `gevent`, `geventhttpclient`, `werkzeug`, `pyzmq`, `python-socketio` and more. An entire second web framework in the dev environment of a project that has no `pip-audit` to notice it, installed for a file that did not exist.
 
 The behaviour it was pinned for is now asserted deterministically and in-process (§28). Same precedent as ADR-014's removal of the unused `anthropic` pin: **a dependency justified by a comment is not justified.** The pin can return with the file that imports it.
@@ -480,11 +496,11 @@ The behaviour it was pinned for is now asserted deterministically and in-process
 
 **Implemented?** Partially, and the design work is done. A synchronous admission counter — deliberately not `asyncio.Semaphore`, because a slot must be taken while a `429` is still expressible; slot release in a `finally` so a disconnecting client cannot hold one permanently; pool sized above the request cap.
 
-**Proof.** ADR-039, `tests/unit/test_api_stream.py::TestTheSlotComesBack` and `::TestAdmissionHappensBeforeTheResponse`; mutation testing confirmed three tests fail on a leaked slot.
+**Proof.** ADR-039, `tests/unit/test_api_stream.py::TestTheSlotComesBack` and `::TestAdmissionHappensBeforeTheResponse`, and since 2026-08-09 `tests/unit/test_concurrency.py` — the first tests with two requests genuinely in flight at once, asserting that callers at the cap run *simultaneously* rather than serialised, that callers past it are refused rather than queued, and that every slot returns after a burst. Mutation testing confirmed three tests fail on a leaked slot.
 
 **Failure mode.** A slot released only on success lets four abandoned sockets take the endpoint out until restart, at negligible cost to an attacker.
 
-**Gap.** All of it is proven by *unit* tests with fakes. No test runs concurrent requests against a real process — that is §28.
+**Gap.** All of it runs **in one process against fakes**. Real concurrency, yes; a real server, a real network and a real database, no — that is §28.
 
 ---
 

@@ -40,8 +40,11 @@
                     │  pgvector: schema embeddings         │
                     └──────────────────────────────────────┘
 
-   OpenTelemetry spans wrap every arrow above.
+   OpenTelemetry spans are *designed* to wrap every arrow above. None exist:
+   nothing under src/ imports opentelemetry. See OBSERVABILITY.md.
 ```
+
+**Two things in that picture are design intent rather than code, and the diagram cannot show the difference.** The **agent** box is unbuilt — its MCP *client* half exists, the loop that drives it does not (§2.2), so the served path today runs API → answering → validation → execution and reaches the components **directly rather than over MCP**. And the tracing line is a plan; the pins for it are in `requirements.txt` with no importer.
 
 ## 2. Components
 

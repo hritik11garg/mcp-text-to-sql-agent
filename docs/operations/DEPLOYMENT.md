@@ -74,8 +74,8 @@ Production-specific requirements:
 | `DB_TARGET_SCHEMA` | The schema holding the target tables | **Must match `DATASET`'s schema.** Disagreeing returns a plausible answer from the wrong tables |
 | `LOG_FORMAT` | `json` | Machine-parseable |
 | `LOG_RESULT_VALUES` | `false` | Never log result data outside local debugging |
-| `OTEL_ENABLED` | `true` | |
-| `OTEL_TRACES_SAMPLER_ARG` | `<1.0` | Full sampling is a dev setting |
+| `OTEL_ENABLED` | `true` | **Reads nothing today.** No settings class defines it and nothing imports `opentelemetry`; the row is what production will need, not what production will get |
+| `OTEL_TRACES_SAMPLER_ARG` | `<1.0` | Full sampling is a dev setting — same caveat as the row above |
 | `DATABASE_RO_URL` | Read-only role | **Verified at startup, not assumed** — `assert_read_only` refuses to open a connection whose role can write ([ADR-033](../architecture/DECISIONS.md#adr-033--the-read-only-role-is-proved-at-startup-by-asking-rather-than-by-writing)) |
 
 **`API_HOST=0.0.0.0` is a startup error, including inside a container.** That looks inconvenient and is deliberate: this service has no authentication, so binding all interfaces makes an endpoint that runs model-generated SQL against the target database reachable by anything that can route to it. Publishing the port (`-p 8000:8000`, or a Kubernetes Service) forwards to loopback inside the network namespace and works unchanged — the difference is that exposing the service becomes something a deployment declares rather than something a default does.

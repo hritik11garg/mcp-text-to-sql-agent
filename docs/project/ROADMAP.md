@@ -13,8 +13,8 @@ Percentages are checkbox counts from [TASKS.md](TASKS.md), not confidence — a 
 | Stage | Output | Status | % |
 |---|---|---|---|
 | 0 | Scaffolding — docs, deps, interpreter pin | ✅ Done | 100% |
-| 1 | **Core loop** — retrieval, generation, validation, execution, profiling, API, demo UI | 🚧 In progress | 88% |
-| 2 | **Eval harness** — comparison, Recall@k, artifacts, resumption, benchmark loading, pipeline seam | 🚧 In progress | 87% |
+| 1 | **Core loop** — retrieval, generation, validation, execution, profiling, API, demo UI | 🚧 In progress | 71% |
+| 2 | **Eval harness** — comparison, Recall@k, artifacts, resumption, benchmark loading, pipeline seam | 🚧 In progress | 82% |
 | 3 | **MCP servers + client refactor** | 🚧 In progress | 84% |
 | 4 | **Agent layer** — decomposition, session memory, self-correction | ⬜ Not started | 0% |
 | 5 | **Fine-tuned schema linker** | ⬜ Not started | 0% |
@@ -24,7 +24,13 @@ Percentages are checkbox counts from [TASKS.md](TASKS.md), not confidence — a 
 
 **What is genuinely blocking now, in order:** the **agent loop** (Stage 4), which is what makes the four MCP servers a system rather than four callable capabilities. Behind it, two measurement gaps that are cheap and were blocked until the run completed: a **`with-validation` run** over the same split — which measures the validation tier as a *gate*, not self-correction, because no baseline self-corrects — and an **eval that goes through the MCP servers**, because today's 79.9% measures the direct path only.
 
-**Stage 1 went 75% → 59% → 69% → 88%.** It dropped when the demo UI was added to its scope, which made the plan more honest and the number worse; it has climbed as the pool, the endpoint, streaming and now the UI landed. What remains in Stage 1 is close-out work — screenshots, an architecture diagram, an end-to-end run from a clean checkout — not components.
+**Stage 1 went 75% → 59% → 69% → 88% → 71%.** It dropped once when the demo UI entered its scope, climbed as the pool, the endpoint, streaming and the UI landed — and **dropped again on 2026-08-10, without a single item being un-done.**
+
+> **Recounted 2026-08-10, and the drop is the interesting part.** These percentages are checkbox counts, and 88% could not be reproduced from any count in the repository: Stage 1's rows in TASKS.md give **71%** (63 done, 4 partial, 24 open), and this page's own *Done when* list gives 67%. Stage 2 read 87% and counts 82%. Stage 3's 84% reproduced exactly, which is what showed the other two had drifted rather than the method being wrong.
+>
+> **Nothing regressed. The denominator grew.** Every slice since 2026-08-08 closed items *and* wrote down gaps it had found — failure injection, property tests, the audit finding, the toolchain upgrade — and a checklist that gets more honest as work proceeds is a checklist whose percentage falls while the project improves. **A number that only moves up is a number nobody is recounting**, which is precisely how 88% survived four rounds of new open items.
+
+What remains in Stage 1 is close-out work — screenshots, an architecture diagram, an end-to-end run from a clean checkout — plus the named gaps each recent slice added. Not components.
 
 **Stage 1 is now "the core loop works end to end, and you can watch it".** Every component is built and tested, Spider's dev split is in the database converted and verified, the pipeline is connected to the harness, and it has produced a complete measured result. `POST /v1/query` answers from outside the harness in both response shapes. And the half a reader can **see** exists: a page that asks a question and draws retrieval, generation and execution against a real time axis as the events arrive. The distinction this project keeps insisting on — wired, then measured, then served, then *seen* — is closed for the single-query path.
 

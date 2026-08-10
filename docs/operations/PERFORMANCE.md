@@ -115,7 +115,7 @@ The second-order effect of better retrieval is worth naming: each avoided retry 
 
 ## 4. Load characteristics
 
-> **TBD — Stage 6**, via the `locust` suite in [../development/TESTING.md](../development/TESTING.md).
+> **TBD — Stage 6.** There is no load generator pinned any more: `locust` was removed on 2026-08-09 for having no importer, and the property it was pinned for turned out to need none — see [TESTING.md](../development/TESTING.md) §8. **The concurrency half is done and is not this** — `tests/unit/test_concurrency.py` proves callers at the cap run simultaneously, that callers past it are refused rather than queued, and that every slot comes back. Concurrency is a correctness property and belongs on every commit; the numbers below are a *measurement* and need a running server and a pipeline.
 
 Questions to answer with numbers rather than intuition:
 

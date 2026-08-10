@@ -1,6 +1,10 @@
 # Observability
 
-> **Status: TBD — Stage 6** for implementation and dashboards. Instrumentation design below is decided, and span boundaries are wired in Stage 1 rather than retrofitted — adding tracing to an agent loop afterwards means restructuring the loop.
+> **Status: TBD — Stage 6** for implementation and dashboards. The instrumentation design below is decided; **none of it is wired.**
+>
+> **Corrected 2026-08-10.** This line previously read *"span boundaries are wired in Stage 1 rather than retrofitted"*. They are not. Nothing under `src/` imports `opentelemetry` — the only `trace_id` in the codebase is an audit column that callers pass in. ROADMAP's own Stage 1 checkbox, *"span boundaries are in place (instrumentation added later, structure now)"*, is **unchecked** and always was, so two documents disagreed and the honest one was the checklist. The four `opentelemetry-*` pins in `requirements.txt` have no importer either — [ENGINEERING_MATRIX](../project/ENGINEERING_MATRIX.md) §25.
+>
+> The *argument* for doing it early still stands, and is why this page exists before the code: adding tracing to an agent loop afterwards means restructuring the loop.
 >
 > **One piece exists: `request_id`.** Everything below assumes a correlation key, and the API assigns one to every request — including ones that 404 — putting it in the response body, the `X-Request-Id` header, and every log line the request produces. See §2a for the part that is not obvious, which is that the header cannot be trusted verbatim.
 

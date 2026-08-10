@@ -196,6 +196,24 @@ Run while adding `fast-check`. **Nothing here reaches a deployed user**: product
 
 **Why this is written down rather than fixed immediately.** Recording a known-vulnerable state with its reachability analysis is worth more than a silent major-version bump landing in a commit about property tests. The same reasoning as every other finding here: **an undefended surface is safer than a defended-looking one.**
 
+### 10.2 Eight production dependencies with no importer — **Low**
+
+Found 2026-08-10 by a documentation sweep that asked, for every pin, which module imports it.
+
+**Vulnerability.** `requirements.txt` pins four `opentelemetry-*` packages (a 14-distribution closure), `sse-starlette`, `structlog`, `tenacity` and `rich`. **Nothing under `src/` imports any of them.** Each carries a comment describing the capability it was pinned for; none of those capabilities is built — SSE framing is hand-rolled as a security control, logging is the standard library, and the provider retry chain is hand-written.
+
+**Why it is dangerous.** Unused code that ships is attack surface with no compensating benefit: a supply-chain compromise or a critical advisory in any of the eight lands in the deployed environment and must be patched, and there is no test, no import and no reviewer with a reason to care about it. It also degrades the signal from every future scan — an advisory against a package the system does not use looks identical to one against a package it does. *(OWASP A06:2021 — Vulnerable and Outdated Components.)*
+
+**Attack scenario.** A malicious release of any of the eight, or of anything in the OpenTelemetry closure, is installed by the next `pip install -r requirements.txt` into an environment that holds `DATABASE_URL` and the model provider's key. Nothing has to *call* the package for a post-install hook or an import-time side effect elsewhere in the dependency graph to run. The realistic path is narrow — these are widely used packages with real maintainers — which is why this is Low rather than higher.
+
+**Severity — Low.** No present exposure and no known-vulnerable version among them today. Rated a finding rather than a note because it is a **standing** increase in surface, it contradicts §25's claim that dependencies are justified, and this project has already ruled on exactly this pattern twice ([ADR-014](../architecture/DECISIONS.md), and the `locust` removal on 2026-08-09).
+
+**CIA.** Confidentiality and integrity, in the compromise case only. No availability impact.
+
+**Secure implementation.** Remove all eight, and the two dev pins for the unwritten fine-tune (`datasets`, `accelerate`). **Not done in the change that found them**: a `requirements.txt` edit needs a clean-environment install and a full suite behind it to prove nothing depended on them transitively at runtime. Tracked in [TASKS.md](../project/TASKS.md).
+
+**Why that fix is secure.** It removes the surface entirely rather than monitoring it. The rule it restores is the one already written down: **a dependency justified by a comment is not justified**, and each of these can return with the file that imports it.
+
 ## 11. Audit logging
 
 Append-only `agent_meta.query_audit`. Every statement reaching `execute_sql` records:

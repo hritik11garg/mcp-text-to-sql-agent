@@ -309,12 +309,19 @@ Directories marked *(stub)* exist with a docstring stating which stage fills the
 │   ├── src/sql/                # a tokenizer, so highlighting needs no innerHTML
 │   └── src/components/         # TimeRail draws each phase against a real axis
 ├── .github/
+│   ├── workflows/ci.yml        # lint · python · web · docs, on every push and PR
+│   │                           # a missing Docker daemon FAILS here rather than skipping
 │   └── pull_request_template.md
+├── scripts/
+│   └── check_docs_links.py     # stdlib only, so the docs job cannot fail for
+│                               # a reason unrelated to the documents
 ├── tests/
 │   ├── unit/                   # no I/O, fakes throughout
 │   ├── integration/            # real Postgres via testcontainers
 │   ├── contract/               # servers as subprocesses over real stdio
-│   └── security/               # negative tests — the role MUST be denied
+│   ├── security/               # negative tests — the role MUST be denied
+│   ├── e2e/                    # the layer that exists as a directory and no tests
+│   └── strategies.py           # shared generators for the property suites
 ├── data/                       # benchmark data, gitignored — except artifacts.lock.json
 │                               # and splits/, which are the reproducibility record
 ├── results/                    # eval artifacts, gitignored — real rows, see SECURITY §14.2.8

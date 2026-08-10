@@ -116,6 +116,10 @@ Status values: `accepted` · `superseded by ADR-NNN` · `revisit at Stage N`
 
 **Alternatives.** Flask (sync-first; async is bolted on, and this workload is I/O-bound end to end). Litestar (fine, smaller ecosystem, no advantage that matters here).
 
+> **Amended 2026-08-10 — the last sentence of the rationale is no longer true, and was not corrected when it stopped being true.** SSE framing *is* hand-rolled, in `src/api/sse.py`, and deliberately: `ServerSentEvent.encode` asserts its output is single-line, which is the mechanism behind [invariant I-11](../operations/SECURITY_INVARIANTS.md) — a payload can never forge a second event. That is a security control, and a control this project owns is one it can assert on. `sse-starlette` is still pinned in `requirements.txt` and **nothing imports it** ([ENGINEERING_MATRIX](../project/ENGINEERING_MATRIX.md) §25).
+>
+> Recorded as an amendment rather than a new ADR because the *decision* — FastAPI — is unchanged; what changed is a supporting claim inside it. The framing choice itself is documented on the client side as [ADR-041](#adr-041--the-ui-frames-the-sse-stream-itself-because-eventsource-cannot-post) and has never had a server-side ADR of its own. **That absence is the finding**: the code was written as a security control and the decision register never learned about it.
+
 ---
 
 ## ADR-008 — SSE instead of WebSockets
