@@ -8,7 +8,55 @@
 
 ## 1. Architecture diagram
 
-> **TBD — Stage 1.** Committed to `docs/assets/architecture.png` and embedded here. ASCII placeholder:
+> **Committed 2026-08-11 as Mermaid rather than as `docs/assets/architecture.png`.** The promise of a PNG stood unfulfilled from Stage 0 through Stage 3, and it was the wrong promise: a binary image cannot be diffed, so a diagram that stops matching the code changes silently and is discovered by a reader. Mermaid renders on GitHub, lives in the file it documents, and shows up in a pull request as text. **Dashed edges are unbuilt.**
+
+**Two entrypoints, one set of components.** The layering is the point: the MCP servers and the HTTP API are *peers*, both thin adapters over the same components, and neither may depend on the other ([ADR-035](DECISIONS.md#adr-035--the-composition-root-is-its-own-package-because-entrypoints-are-peers)).
+
+```mermaid
+graph TD
+    Q(["NL question"])
+
+    subgraph ENTRY ["Entrypoints — peers, neither depends on the other"]
+        direction LR
+        API["FastAPI · HTTP<br/>POST /v1/query · /health · /ready<br/>error envelope · body cap · concurrency cap"]
+        MCPS["Four MCP servers · stdio<br/>schema_search · validate_sql<br/>execute_sql · profile_table"]
+    end
+
+    AGENT["AGENT LOOP<br/>planner · session memory<br/>self-correction · budgets"]
+    EVAL["eval harness<br/>mcp-retrieval baseline"]
+
+    Q --> API
+    API -. "SSE: stage · sql · rows · done" .-> Q
+    API -. "Stage 4 — not built" .-> AGENT
+    AGENT -. "JSON-RPC 2.0 over MCP" .-> MCPS
+    EVAL == "stdio · measured identical, 1,034 / 1,034" ==> MCPS
+
+    ENTRY --> ROOT["composition root<br/>the dependency graph, built once per process"]
+
+    subgraph COMP ["Components — no knowledge of MCP or HTTP"]
+        direction LR
+        ANS["answering<br/>retrieve → generate"]
+        RET["schema retrieval<br/>pgvector ANN"]
+        VAL["validation<br/>sqlglot AST + EXPLAIN"]
+        EXE["execution<br/>row limits · timeouts · audit"]
+        PRO["profiling<br/>column stats"]
+    end
+
+    ROOT --> COMP
+    ANS --> RET
+    COMP --> PG
+
+    PG[("PostgreSQL 16<br/>target schema — read-only role<br/>pgvector — schema embeddings<br/>agent_meta — catalog + audit")]
+
+    classDef unbuilt stroke-dasharray: 6 4
+    class AGENT unbuilt
+```
+
+**Read the dashes.** The agent loop is the only unbuilt box, and everything it would drive already exists — which is why the served path reaches the components **directly** rather than over MCP. That is a composition choice, not an unproven one: the eval harness's `mcp-retrieval` baseline does reach `schema_search` over stdio and returns byte-identical results doing it ([BENCHMARKS §8](../ml/BENCHMARKS.md)). OpenTelemetry spans are designed to wrap every arrow above and **none exist** — nothing under `src/` imports `opentelemetry` ([OBSERVABILITY.md](../operations/OBSERVABILITY.md)).
+
+<details>
+<summary>The ASCII version this replaced, kept because it reads without a renderer</summary>
+
 
 ```
                     ┌──────────────────────────────────────┐
@@ -44,7 +92,9 @@
    nothing under src/ imports opentelemetry. See OBSERVABILITY.md.
 ```
 
-**Two things in that picture are design intent rather than code, and the diagram cannot show the difference.** The **agent** box is unbuilt — its MCP *client* half exists, the loop that drives it does not (§2.2), so the served path today runs API → answering → validation → execution and reaches the components **directly rather than over MCP**. And the tracing line is a plan; the pins for it are in `requirements.txt` with no importer.
+**Two things in that picture are design intent rather than code, and the ASCII drawing cannot show the difference** — which is the specific reason it was replaced. The **agent** box is unbuilt: its MCP *client* half exists, the loop that drives it does not (§2.2), so the served path runs API → answering → validation → execution. And the tracing line is a plan; the pins for it are in `requirements.txt` with no importer. The Mermaid version above draws both as dashed edges, so a reader who does not get to this paragraph is not misled by the picture.
+
+</details>
 
 ## 2. Components
 
@@ -275,9 +325,75 @@ Steps 1–2 as above, then: planner decomposes the question into sub-questions �
 
 ## 4. Sequence diagrams
 
-> **TBD — Stage 1 / Stage 4.** Mermaid diagrams for: (a) the happy single-query path, (b) validation failure with self-correction, (c) statement timeout during execution, (d) multi-step decomposition with synthesis.
+**(a) The happy single-query path, streamed — this is what runs today.** Drawn from `api/routes.py` and `api/sse.py`; the event names are the ones on the wire.
 
-The distinction worth diagramming carefully: what the agent observes on a **timeout** versus a **syntax error**. A syntax error is deterministic and structural — retry with a fixed query. A timeout is a resource signal — retry with a narrower query, a tighter filter, or give up and report. Conflating them makes the self-correction loop retry the wrong thing.
+```mermaid
+sequenceDiagram
+    autonumber
+    participant C as Client
+    participant API as FastAPI
+    participant A as answering
+    participant R as retrieval
+    participant L as LLM
+    participant V as validation
+    participant X as execution
+    participant PG as PostgreSQL
+
+    C->>API: POST /v1/query {question, stream:true}
+    Note over API: body cap · concurrency slot taken<br/>BEFORE the 200, since 429 is<br/>inexpressible after one (ADR-039)
+    API-->>C: 200 text/event-stream
+
+    API->>A: answer(question)
+    A->>R: search(question, k)
+    R->>PG: ANN over pgvector (owner conn)
+    PG-->>R: elements + foreign keys
+    R-->>A: RetrievalResult
+    API-->>C: event: stage {retrieve, ok}
+
+    A->>L: sql_gen prompt + schema context
+    L-->>A: SQL
+    A-->>API: SQL
+    API-->>C: event: stage {generate, ok}
+    API-->>C: event: sql {sql, attempt:1}
+
+    API->>V: validate(sql)
+    Note over V: 5 stages, cheapest first.<br/>1-4 do no I/O
+    V->>PG: EXPLAIN (cost ceiling)
+    PG-->>V: plan
+    V-->>API: ok
+
+    API->>X: execute(sql, max_rows)
+    Note over X: re-validates rather than<br/>assuming validation ran
+    X->>PG: SELECT, read-only role, statement_timeout
+    PG-->>X: rows
+    X->>PG: audit row (separate owner conn)
+    X-->>API: rows, truncated
+    API-->>C: event: stage {execute, ok}
+    API-->>C: event: rows {columns, rows, truncated}
+    API-->>C: event: done {row_count, steps[], usage}
+```
+
+**The SQL arrives before any row does**, which is the ordering worth having in a text-to-SQL system: a viewer sees what the system decided to run while it is still running.
+
+**(b) Validation refuses, and nothing retries — today's behaviour, and the honest version.**
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant C as Client
+    participant API as FastAPI
+    participant V as validation
+    participant X as execution
+
+    API->>V: validate(sql)
+    V-->>API: ValidationError {stage, unknown identifier, nearest match}
+    API-->>C: event: error {code, message, request_id}
+    Note over API,X: The executor is never reached.<br/>No retry, no feedback to the model —<br/>self-correction is Stage 4 and does<br/>not exist in any code path.
+```
+
+> **TBD — Stage 4.** Two diagrams cannot be drawn honestly yet, because the loop they describe is unbuilt: **(c) validation failure with self-correction**, and **(d) multi-step decomposition with synthesis**. Drawing them now would put arrows on this page for code that does not exist, which is the failure [ADR-012](DECISIONS.md#adr-012--documentation-written-per-stage-not-up-front) exists to prevent. Diagram (b) above is what actually happens in the failure case today.
+
+The distinction worth diagramming carefully when (c) lands: what the agent observes on a **timeout** versus a **syntax error**. A syntax error is deterministic and structural — retry with a fixed query. A timeout is a resource signal — retry with a narrower query, a tighter filter, or give up and report. Conflating them makes the self-correction loop retry the wrong thing.
 
 ## 5. Design decisions
 

@@ -19,11 +19,70 @@ The agent's own metadata must never be reachable from generated SQL. The read-on
 
 ## 2. ER diagram
 
-> **TBD — Stage 1.** Committed to `docs/assets/er-diagram.png`.
+> **Committed 2026-08-11 as Mermaid rather than as `docs/assets/er-diagram.png`.** A binary image cannot be diffed, so a schema drawing that stops matching `migrations/` changes silently. This one is text in the file it documents and shows up in a pull request next to the migration that invalidates it.
 
-Two diagrams are needed:
-1. **`agent_meta`** — the project's own tables (below).
-2. **Target dataset** — whichever schema is loaded; for the demo this is a Spider/BIRD database. Generated per-dataset rather than hand-drawn.
+**`agent_meta` — the project's own tables.** `migrations/versions/001_extensions_and_agent_meta.py` and `003` are the authority; this matches them.
+
+```mermaid
+erDiagram
+    schema_elements {
+        bigserial id PK
+        text dataset "NOT NULL"
+        text element_type "NOT NULL, CHECK table|column"
+        text table_name "NOT NULL"
+        text column_name "NULL for table-level rows"
+        text data_type
+        text comment
+        text serialized "NOT NULL — the text embedded"
+        vector_384 embedding "HNSW, vector_cosine_ops"
+        text model_version "NOT NULL — vector spaces must not mix"
+        timestamptz updated_at
+    }
+
+    foreign_keys {
+        bigserial id PK
+        text dataset
+        text from_table
+        text from_column
+        text to_table
+        text to_column
+    }
+
+    sessions {
+        uuid id PK
+        timestamptz created_at
+    }
+
+    session_turns {
+        bigserial id PK
+        uuid session_id FK
+        text question
+        text generated_sql
+        jsonb result_metadata "not full result sets"
+        timestamptz created_at
+    }
+
+    query_audit {
+        bigserial id PK
+        text sql_text
+        text role
+        int duration_ms
+        int row_count
+        boolean truncated
+        text outcome "success|error|rejected|explained"
+        text request_id
+        text trace_id
+        timestamptz created_at
+    }
+
+    schema_elements ||--o{ schema_elements : "columns belong to a table"
+    schema_elements ||--o{ foreign_keys : "both endpoints"
+    sessions ||--o{ session_turns : "ON DELETE CASCADE"
+```
+
+**`query_audit` is deliberately absent from that graph, and its absence is the design.** It carries no foreign key to `sessions`, because **the audit trail must survive session deletion** — a table joined to the thing it audits is a table that can be erased by erasing the thing it audits.
+
+**The target dataset has no diagram here and will not get one.** It is whichever schema an operator loaded — for the benchmark, one of twenty Spider databases — so it is generated per-dataset by introspection rather than hand-drawn. `PostgresIntrospector` reads it from `pg_catalog` at index time.
 
 ## 3. Tables (`agent_meta`)
 

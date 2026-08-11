@@ -606,7 +606,7 @@ The behaviour it was pinned for is now asserted deterministically and in-process
 
 **Implemented?** Strong in the middle, **missing at the top**. Counts are in [§ Standing](#standing) rather than repeated here, because two copies of a number in one document is how this document has gone stale three times.
 
-**Proof.** `docs/development/TESTING.md`; `pytest --collect-only` → **1,499 cases**. Without a Docker daemon: 1,228 passed, 271 skipped — which is the number worth quoting, because it is what the Postgres-backed layers cost when they are absent.
+**Proof.** `docs/development/TESTING.md`; the collected total and the per-layer split are in [§ Standing](#standing) — **not repeated here**, because the previous revision of this line repeated it, drifted to 1,499 against an actual 1,562, and made the sentence above true for a fourth time. What is worth recording here is the *shape* rather than the count: without a Docker daemon the Postgres-backed layers skip, and that is what the security gate in CI exists to refuse.
 
 **Failure mode.** The seam that makes a test fast is the seam the test cannot see past. Two defects reached production behind exactly that seam: a retriever whose checkpoint never opened, and a pool whose own read-only proof prevented it opening.
 
@@ -684,13 +684,13 @@ The behaviour it was pinned for is now asserted deterministically and in-process
 
 **Applicable?** Yes.
 
-**Implemented?** Yes. 24 documents; ADRs recording rejected alternatives and superseded reasoning verbatim; benchmark rows traceable to a commit and a command.
+**Implemented?** Yes. Document and ADR counts are in [§ Standing](#standing); ADRs record rejected alternatives and superseded reasoning verbatim, and benchmark rows are traceable to a commit and a command.
 
-**Proof.** All internal links and anchors resolve (checked); `docs/architecture/DECISIONS.md` carries 44 ADRs.
+**Proof.** All internal links and anchors resolve (`scripts/check_docs_links.py`, in CI).
 
-**Failure mode.** R-17 — documentation drifting from implementation — has materialised **seven** times and is the project's most frequent recorded risk. Two of those were caught by a mechanical script, which is the argument for keeping one.
+**Failure mode.** R-17 — documentation drifting from implementation — is the project's most frequent recorded risk, at **five** occurrences ([RISKS](RISKS.md#materialized-risks); the count is rows in that register, because the previous tallies here and there disagreed and neither was reproducible). The latest is the largest: after the MCP baseline landed, **seven** places still asserted the servers were "proven to answer as well by nothing", including the interview script, while three others asserted the measured opposite. **None of it was reachable by the link checker** — every link resolved; the false statements were prose. That is the argument for keeping the script and the reason it is not sufficient.
 
-**Gaps.** No runbook, no incident-response document (§43), and `docs/assets/` holds a demo GIF and screenshots but still no architecture diagram.
+**Gaps.** No runbook and no incident-response document (§43). **The diagram gap closed on 2026-08-11**, and not the way it had been promised since Stage 0: the architecture, sequence and ER diagrams are committed as **Mermaid in the documents they belong to** rather than as PNGs under `docs/assets/`. A binary image cannot be diffed, so a drawing that stops matching the code changes silently — the text version turns up in a pull request beside the migration that invalidated it. Two sequence diagrams are still `TBD — Stage 4`, because the self-correction loop they would draw does not exist.
 
 ---
 
@@ -748,7 +748,7 @@ The behaviour it was pinned for is now asserted deterministically and in-process
 
 **Failure mode.** A partial run is a biased sample of its own corpus and the direction of the bias is unknowable until it finishes — this project's figure went **down** from 81.4% to 79.9% when the last 177 questions landed.
 
-**Named limits.** Not comparable to published Spider numbers (single-DB execution accuracy, 113 exclusions, a split that crosses Spider's own boundary); one model; the MCP path unmeasured (§19).
+**Named limits.** Not comparable to published Spider numbers (single-DB execution accuracy, 113 exclusions, a split that crosses Spider's own boundary); one model; **no accuracy row measures the MCP path** — retrieval over the wire is measured identical on all 1,034 dev questions (§19), which makes the direct-path figure transferable for that hop and says nothing about the other three servers.
 
 ---
 

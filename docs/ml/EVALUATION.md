@@ -187,7 +187,9 @@ Its scoping is a design constraint rather than a configuration choice: the publi
 
 ## 6. Comparison table
 
-> **One row measured, on a 9-of-20-database sample from a run still in progress. The rest are TBD as their stages land.** Filled from [BENCHMARKS.md](BENCHMARKS.md) — this table restates rows recorded there and never introduces a number of its own.
+> **One row measured, over the complete split — 921 of 921 scoreable questions, 20 of 20 databases. The rest are TBD as their stages land.** Filled from [BENCHMARKS.md](BENCHMARKS.md) — this table restates rows recorded there and never introduces a number of its own.
+>
+> **Corrected 2026-08-11.** This line read *"on a 9-of-20-database sample from a run still in progress"* — describing the state on 2026-08-06 — while the paragraph directly below it said the row covered the whole split, which it has since 2026-08-08. The run finishing updated the paragraph and not the header above it, which is R-17's exact signature: **the drift is in the sentence nobody was editing.**
 
 | Configuration | Exec. acc. | Recall@5 | Invalid (pre) | Invalid (post) | p95 latency | $/query |
 |---|---|---|---|---|---|---|

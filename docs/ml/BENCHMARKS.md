@@ -175,6 +175,21 @@ python -m evals.run --questions data/splits/spider-official-dev.jsonl --split de
 
 > **Updated 2026-08-10.** The second half of that sentence used to read *"and proven to answer as well by nothing"*. That is no longer true — §8 measures it. Over all 1,034 dev questions, retrieval through `search_schema` on a subprocess returned **byte-identical** ordered element lists to retrieval in process, at a constant cost of about 7.8 ms per call. This run still does not itself go through the servers; what changed is that the gap it leaves is now quantified rather than open.
 
+### 1.2 The attempt that produced no row
+
+**A full-split run was attempted on 2026-08-05 and produced no row.** It is recorded here because a failed measurement attempt is evidence about the measurement setup, and discarding it would leave the impression that nothing had been tried.
+
+| Attempted | Recorded | Answered | Infrastructure | Why no row |
+|---|---|---|---|---|
+| 1034 | 777 (stopped) | 395 | **382** — 308 `llm_failed`, 74 `scope_unavailable` | Two independent causes, one of them a defect |
+
+- **308 `llm_failed`** — the free tier's daily token cap, with the fallback chain deliberately disabled so the run could not silently become a blend. The run was stopped rather than allowed to finish, because `resume()` skipped any question already recorded *including a failed one*, so every further failure would have permanently consumed a question this run could never retry. **That was itself a defect**, and the more expensive of the two: it meant a run could only ever be completed in a single sitting on a tier that cannot provide one. Fixed — infrastructure failures are now re-attempted on resume, and a run halts after ten consecutive ones rather than grinding through the remainder ([ADR-037](../architecture/DECISIONS.md#adr-037--resumption-skips-answered-questions-not-recorded-ones)).
+- **74 `scope_unavailable`** — a real defect, found only because the run reached a database the 3-database sample never touches. See the CHANGELOG entry for `cre_Doc_Template_Mgt`. Fixed.
+
+The accuracy over what was answered was **79.0% (312/395), single model** — and it is not a row, because 395 of 921 with one database missing entirely is a narrower sample than the 150-question smoke rows above, not a wider one.
+
+**None of these are comparable to a published Spider number**, for three independent reasons: a 3-database sample, single-database execution accuracy rather than Test Suite Accuracy, and 113 excluded questions. The first is fixable by running more; the other two are stated on every row by design.
+
 ### 1.3 The fingerprint refused the resume, twice, and was right both times
 
 Neither day 2 nor day 3 could simply re-run the command. `RunManifest.config_fingerprint` includes the **commit**, the manifest records `15dcdf7`, and the working tree had reached `f74f9e3` by day 2 and `81ea97f` by day 3 — so `RunStore` refused to open the directory:
@@ -209,21 +224,6 @@ That matters beyond bookkeeping: `retriever_model_version` is **in the configura
 **It was deliberately not fixed during the run.** Deriving it from the catalog changes the fingerprint, which would have orphaned every question already answered — 732 of them by day 3, two full days of free-tier budget. That is the exact cost recorded in ADR-037's tradeoffs: *the commit is in the fingerprint, so a multi-day run cannot absorb a fix*. This was the first multi-day run and the constraint arrived immediately, then arrived again on each subsequent day.
 
 **The run is now complete, so the block is gone.** Both changes — deriving `retriever_model_version` from the catalog, and fingerprinting the loaded modules rather than the commit — are unblocked as of 2026-08-08 and tracked in [TASKS.md](../project/TASKS.md). Until they land, **the retriever field on this row comes from the database, not the manifest.** The row is correct; the manifest is not, and it says so.
-
-### 1.2 The attempt that produced no row
-
-**A full-split run was attempted on 2026-08-05 and produced no row.** It is recorded here because a failed measurement attempt is evidence about the measurement setup, and discarding it would leave the impression that nothing had been tried.
-
-| Attempted | Recorded | Answered | Infrastructure | Why no row |
-|---|---|---|---|---|
-| 1034 | 777 (stopped) | 395 | **382** — 308 `llm_failed`, 74 `scope_unavailable` | Two independent causes, one of them a defect |
-
-- **308 `llm_failed`** — the free tier's daily token cap, with the fallback chain deliberately disabled so the run could not silently become a blend. The run was stopped rather than allowed to finish, because `resume()` skipped any question already recorded *including a failed one*, so every further failure would have permanently consumed a question this run could never retry. **That was itself a defect**, and the more expensive of the two: it meant a run could only ever be completed in a single sitting on a tier that cannot provide one. Fixed — infrastructure failures are now re-attempted on resume, and a run halts after ten consecutive ones rather than grinding through the remainder ([ADR-037](../architecture/DECISIONS.md#adr-037--resumption-skips-answered-questions-not-recorded-ones)).
-- **74 `scope_unavailable`** — a real defect, found only because the run reached a database the 3-database sample never touches. See the CHANGELOG entry for `cre_Doc_Template_Mgt`. Fixed.
-
-The accuracy over what was answered was **79.0% (312/395), single model** — and it is not a row, because 395 of 921 with one database missing entirely is a narrower sample than the 150-question smoke rows above, not a wider one.
-
-**None of these are comparable to a published Spider number**, for three independent reasons: a 3-database sample, single-database execution accuracy rather than Test Suite Accuracy, and 113 excluded questions. The first is fixable by running more; the other two are stated on every row by design.
 
 ## 2. Schema-linking recall
 
@@ -417,13 +417,15 @@ A second row arrives with the first configuration that changes the token profile
 
 > **Measured 2026-08-10, and the result is an identity rather than an accuracy.**
 
-The project's headline claim is that it is MCP-native, and until now that claim had a hole in exactly the place a claim should not: `tests/contract/` proved the four servers start, advertise and answer, and **nothing proved they answer as well**. Every published figure on this page was measured on the direct answering path — components called in process, the same path the HTTP API uses. §1.2 said so under *"What this run does not measure"*, and this section is what closes it.
+The project's headline claim is that it is MCP-native, and until now that claim had a hole in exactly the place a claim should not: `tests/contract/` proved the four servers start, advertise and answer, and **nothing proved they answer as well**. Every published figure on this page was measured on the direct answering path — components called in process, the same path the HTTP API uses. §1.1 said so under *"What this run does not measure"*, and this section is what closes it.
 
 ### 8.1 Retrieval over the wire returns the same elements. All of them.
 
 | Date | Commit | Corpus | k | Questions | Identical | Differing | Databases | Server starts |
 |---|---|---|---|---|---|---|---|---|
-| 2026-08-10 | `a26fe5a` | Spider `dev.json`, all 20 DBs | 30 | **1,034** | **1,034** | **0** | 20 | **20** |
+| 2026-08-10 | `cd211fa` | Spider `dev.json`, all 20 DBs | 30 | **1,034** | **1,034** | **0** | 20 | **20** |
+
+> **The commit was corrected on 2026-08-11 and the correction is worth keeping.** This row first recorded `a26fe5a`, the commit checked out when the run started. But `scripts/compare_mcp_retrieval.py` **does not exist at `a26fe5a`** — the run used working-tree code that landed one commit later, so the row named a revision where its own command cannot be executed. Recording rule 1 asks that every number carry the run that produced it; a commit that predates the script satisfies the letter and defeats the purpose. The rule this repository now applies: **cite the commit the code landed in, not the one it was written against.**
 
 Each question was asked twice — once through `SchemaRetriever.search` in process, once through `search_schema` on a subprocess over stdio — and the ordered `(table, column)` lists were compared exactly. They matched on every question. No exclusions: this covers all 1,034 questions in the split, including the 113 the accuracy runs drop for `dialect_error` and `undetermined_limit`, because those are gold-SQL problems and retrieval still runs on them.
 
@@ -464,7 +466,7 @@ Correctness is unchanged, so the honest thing to report is the price.
 
 n=1,034, same machine, same run. **Constant, not proportional** — the gap is the same at the median and at the 95th percentile, which is what a fixed serialize / pipe / deserialize cost looks like and not what a slower search would look like.
 
-Against a question, it disappears: §1.2 measured 57m07s over 921 questions, about 3.7 s each, so 7.8 ms is **roughly 0.2% of answering one question**. The cost that actually matters is the one *outside* this table — the model load per server start, tens of seconds, paid once per database. That is the number a deployment should care about, and it is the reason the pool bound exists.
+Against a question, it disappears: §1.1 measured 57m07s over 921 questions, about 3.7 s each, so 7.8 ms is **roughly 0.2% of answering one question**. The cost that actually matters is the one *outside* this table — the model load per server start, tens of seconds, paid once per database. That is the number a deployment should care about, and it is the reason the pool bound exists.
 
 **What this does not measure.** Only `search_schema` crosses the wire here. `validate_sql`, `execute_sql` and `profile_table` are proven by `tests/contract/` and unmeasured by any benchmark — a `with-validation`-over-MCP baseline would move two hops at once and could not attribute a difference to either, so it is a separate row that does not exist yet.
 

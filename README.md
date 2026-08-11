@@ -6,7 +6,7 @@
 > |---|---|
 > | **The full split, finished — 921 of 921 questions, 20 of 20 databases, 79.9%, zero infrastructure errors** | **The agent loop that drives the discovered tools** — planning, session memory, budget enforcement |
 > | **Spider loaded — 20 dev databases converted to Postgres, 19 verified against every gold result** | Authentication, and a *per-client* in-flight cap that needs it |
-> | **Four MCP servers over stdio, with runtime `tools/list` discovery** | An eval that measures the **MCP path** — today's accuracy is the direct path only |
+> | **Four MCP servers over stdio, with runtime `tools/list` discovery — and the retrieval hop now *measured* over the wire, byte-identical on 1,034 of 1,034 questions** | The other three servers over the wire — `validate_sql`, `execute_sql` and `profile_table` cross contract tests and no benchmark |
 > | Postgres 16 + pgvector, Alembic migrations | A `with-validation` run, so the validation tier is measured rather than asserted |
 > | **`SELECT`-only role, proven by 30 negative tests — and now proven to be *the role the app connects as*** | Authentication; the API refuses to bind beyond loopback until it exists |
 > | Schema catalog — introspection, serialization, embedding | |
@@ -119,7 +119,48 @@ Run against Spider's `concert_singer` schema, converted and loaded by this repo'
 
 ## Architecture
 
-> **TBD — Stage 1.** Diagram to be committed at `docs/assets/architecture.png` and embedded here. Component breakdown, data flow, and sequence diagrams: [SYSTEM_ARCHITECTURE.md](docs/architecture/SYSTEM_ARCHITECTURE.md).
+**Dashed edges are unbuilt.** Component breakdown, the streamed sequence diagram and the `agent_meta` ER diagram: [SYSTEM_ARCHITECTURE.md](docs/architecture/SYSTEM_ARCHITECTURE.md) and [DATABASE.md](docs/architecture/DATABASE.md).
+
+```mermaid
+graph TD
+    Q(["NL question"])
+
+    subgraph SERVED ["Served path — built, and what the benchmark measures"]
+        direction LR
+        API["FastAPI<br/>POST /v1/query · /health · /ready"]
+        ANS["answering<br/>retrieve → generate"]
+        VAL["validation<br/>AST + EXPLAIN"]
+        EXE["execution<br/>limits · timeouts · audit"]
+        API --> ANS --> VAL --> EXE
+    end
+
+    Q --> API
+    API -. "SSE: stage · sql · rows · done" .-> Q
+
+    AGENT["AGENT LOOP<br/>decomposition · session memory · self-correction"]
+    API -. "Stage 4 — not built" .-> AGENT
+
+    subgraph MCPS ["Four MCP servers — built, one process each over stdio"]
+        direction LR
+        SS["schema_search"]
+        VS["validate_sql"]
+        ES["execute_sql"]
+        PT["profile_table"]
+    end
+
+    AGENT -. "JSON-RPC 2.0 over MCP" .-> MCPS
+    EVAL["eval harness<br/>mcp-retrieval baseline"] == "stdio · measured identical<br/>1,034 / 1,034" ==> SS
+
+    PG[("PostgreSQL 16<br/>read-only role · pgvector · agent_meta")]
+    SERVED --> PG
+    MCPS --> PG
+
+    classDef unbuilt stroke-dasharray: 6 4
+    class AGENT unbuilt
+```
+
+<details>
+<summary>The same thing in ASCII, for anywhere Mermaid does not render</summary>
 
 ```
   NL question
@@ -140,7 +181,11 @@ Run against Spider's `concert_singer` schema, converted and loaded by this repo'
    request correlation            startup proves this role cannot write
 ```
 
-Everything in that sketch exists except the thing it is drawn around: the **agent loop**. The MCP servers, the database layer, the FastAPI process and `POST /v1/query` are built — a request is answered end to end. What is missing is the path that reaches the tools *through MCP* rather than calling the components directly, plus the decomposition and self-correction that path is for.
+</details>
+
+Everything in that sketch exists except the thing it is drawn around: the **agent loop**. The MCP servers, the database layer, the FastAPI process and `POST /v1/query` are built — a request is answered end to end. What is missing is the **decomposition and self-correction** that loop is for.
+
+**The served path still reaches the components directly rather than over MCP**, and that is a composition choice rather than an unproven one: the eval harness's `mcp-retrieval` baseline does reach `schema_search` over stdio, and returns byte-identical results doing it ([BENCHMARKS §8](docs/ml/BENCHMARKS.md)).
 
 ## Features
 
@@ -183,13 +228,13 @@ That creates the `agent_meta` schema, the pgvector extension and the HNSW index,
 Verify the install — the security suite is the one that matters, and it passes by being **refused**:
 
 ```powershell
-pytest                    # ~1,560 tests; integration, security and contract need Docker
-pytest -m security        # the containment suite, on its own — 295 tests
-pytest -m property        # 39 property tests; 100 generated examples each, 500 in CI
+pytest                    # 1,562 tests; integration, security and contract need Docker
+pytest -m security        # the containment suite, on its own — 296 tests
+pytest -m property        # 40 property tests; 100 generated examples each, 500 in CI
 ruff check . ; mypy
 ```
 
-**Those thirty-nine assert properties over generated input rather than examples somebody chose** — no generated write is ever accepted (and no generated `SELECT` is ever refused, which is the half that stops the check being deleted), no payload can forge a second event on the SSE stream, no request body of any shape produces a 5xx or comes back echoed, and `truncated` is true only when the *server's* limit did the cutting. They found a defect on their first run: an unterminated string literal — what a generation cut off by a token cap produces — crashed the validator instead of being refused, and escaped before the executor's rejection audit, so the attempt left no trail.
+**Those forty assert properties over generated input rather than examples somebody chose** — no generated write is ever accepted (and no generated `SELECT` is ever refused, which is the half that stops the check being deleted), no payload can forge a second event on the SSE stream, no request body of any shape produces a 5xx or comes back echoed, and `truncated` is true only when the *server's* limit did the cutting. They found a defect on their first run: an unterminated string literal — what a generation cut off by a token cap produces — crashed the validator instead of being refused, and escaped before the executor's rejection audit, so the attempt left no trail.
 
 **The browser client has fifteen more**, run by `npm test` in `web/` and generated by `fast-check` on the same 100-locally, 500-in-CI split. The claim they exist for: *where the chunks fall cannot change what comes out* — a network read ends where the network ends it, and the SSE parser's entire reason to exist is that this has nothing to do with where an event ends. [TESTING.md §15](docs/development/TESTING.md).
 
@@ -313,8 +358,10 @@ Directories marked *(stub)* exist with a docstring stating which stage fills the
 │   │                           # a missing Docker daemon FAILS here rather than skipping
 │   └── pull_request_template.md
 ├── scripts/
-│   └── check_docs_links.py     # stdlib only, so the docs job cannot fail for
-│                               # a reason unrelated to the documents
+│   ├── check_docs_links.py     # stdlib only, so the docs job cannot fail for
+│   │                           # a reason unrelated to the documents
+│   └── compare_mcp_retrieval.py # asks every question twice — in process and
+│                               # over stdio — and diffs the elements. Zero tokens
 ├── tests/
 │   ├── unit/                   # no I/O, fakes throughout
 │   ├── integration/            # real Postgres via testcontainers
@@ -361,7 +408,9 @@ Directories marked *(stub)* exist with a docstring stating which stage fills the
 
 Two things worth knowing beyond the headline. **Total spend is ~2.3× a single reproduction**, because the corpus has been answered eight times across smoke runs, defect fixes and baseline changes, and a configuration change means starting from scratch. And **the free tier's real cost was three days and a resumption mechanism**, not money — several days of engineering exist to avoid a seventeen-cent bill, which is defensible only because it buys reproducibility by strangers rather than economy. [BENCHMARKS §6](docs/ml/BENCHMARKS.md) prices all of it, and `python -m evals.cost` regenerates the table rather than trusting a number somebody typed.
 
-**Two things this run does not measure.** It runs `retrieval-only`, so **no validator executes** — the 13 invalid queries reached PostgreSQL and were refused there. And it exercises the **direct** answering path, the same one the HTTP API uses; **nothing here goes through the MCP servers.** They are proven to work by the contract suite and proven to answer as well by nothing.
+**Two things this run does not measure.** It runs `retrieval-only`, so **no validator executes** — the 13 invalid queries reached PostgreSQL and were refused there. And it exercises the **direct** answering path, the same one the HTTP API uses; **this run itself does not go through the MCP servers.**
+
+> **Updated 2026-08-11.** That second point used to end *"and proven to answer as well by nothing"*. It no longer does. Every one of the 1,034 dev questions was asked both ways — `SchemaRetriever.search` in process, and `search_schema` on a subprocess over stdio — and the ordered element lists matched **1,034 times out of 1,034**, at a constant **+7.8 ms** per call ([BENCHMARKS §8](docs/ml/BENCHMARKS.md)). The accuracy row above is still a direct-path measurement; what changed is that the gap between the two paths is now measured at zero for retrieval rather than left open. `validate_sql`, `execute_sql` and `profile_table` remain unmeasured by any benchmark.
 
 **Nothing here measures self-correction either, and no baseline can.** The `with-validation` configuration is a *gate*: it validates once and drops a query that fails, with no retry and no feedback to the model. Error-feedback self-correction is Stage 4 and does not exist in any code path, so `validation_attempts` is 0 or 1 and never more.
 
