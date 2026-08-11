@@ -379,6 +379,22 @@ def owner_connection(postgres_url: str) -> Iterator[Conn]:
 
 
 @pytest.fixture(scope="session")
+def readonly_connection(postgres_url: str) -> Iterator[Conn]:
+    """Connection as the ``SELECT``-only login role.
+
+    The role the agent actually runs as, so it is the right one for anything
+    asserting what the agent can *reach* -- catalog introspection especially,
+    since a table indexed as the owner and unreadable by this role produces
+    retrieval hits whose SQL is always refused.
+
+    ``_ro_libpq`` predates this fixture; two suites had been rebuilding the
+    same DSN inline before it existed.
+    """
+    with psycopg.connect(_ro_libpq(postgres_url), autocommit=True) as conn:
+        yield conn
+
+
+@pytest.fixture(scope="session")
 def target_table(owner_connection: Conn) -> None:
     """A table in the target schema, so denial tests have something to aim at.
 

@@ -1,0 +1,39 @@
+# Kept small on purpose: the build context is sent to the daemon before any
+# layer is built, and `data/` alone is several gigabytes of benchmark archives.
+
+.git/
+.github/
+.venv/
+learn/
+
+# Build output and caches -- rebuilt inside the image, and copying a host-built
+# `web/dist` in would let the served page drift from `web/src`.
+web/node_modules/
+web/dist/
+**/__pycache__/
+**/*.pyc
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+.hypothesis/
+.benchmarks/
+.coverage
+*.egg-info/
+
+# Benchmark archives, converted databases and eval artifacts. Gigabytes, and
+# none of it belongs in a served image.
+data/
+results/
+checkpoints/
+
+# Secrets. `.env` is gitignored, which is not the same as being absent from a
+# build context -- and a file copied into a layer stays in the image history
+# even if a later layer deletes it.
+.env
+.env.*
+!.env.example
+
+# Documentation. Everything here is read on the repository, not in the image.
+docs/
+*.md
+!README.md

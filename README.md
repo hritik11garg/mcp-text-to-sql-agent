@@ -203,6 +203,35 @@ Everything in that sketch exists except the thing it is drawn around: the **agen
 
 ## Installation
 
+### Run it — one command
+
+```bash
+cp .env.example .env      # set POSTGRES_PASSWORD, SQL_AGENT_RO_PASSWORD, LLM_API_KEY
+docker compose up
+```
+
+Then open **http://127.0.0.1:8000** and ask *"How many events did each genre have? Only genres with more than 50 events."*
+
+That brings up Postgres with pgvector, applies the migrations as a one-shot job, loads a small **demo dataset** and indexes it, and serves the API with the UI. First start pulls a ~90 MB embedding model; later starts reuse it from a volume.
+
+```console
+$ curl -s -X POST http://127.0.0.1:8000/v1/query -H 'Content-Type: application/json' \
+      -d '{"question": "How many events did each genre have? Only genres with more than 50 events."}'
+{
+  "sql": "SELECT a.genre, COUNT(*) AS event_count\nFROM event e\nJOIN artist a ON e.artist_id = a.id\nGROUP BY a.genre\nHAVING COUNT(*) > 50;",
+  "columns": ["genre", "event_count"],
+  "rows": [["rock",80],["folk",88],["jazz",75],["electronic",84],["classical",73]],
+  "row_count": 5, "truncated": false, "executed": true,
+  "usage": {"input_tokens": 435, "output_tokens": 249}
+}
+```
+
+**The demo dataset is original** — three tables, two foreign keys, 432 rows, in `src/demo/`. It is deliberately **not** Spider: Spider is what the benchmark below measures, it is CC BY-SA, and this repository does not vendor benchmark data ([DATASETS.md](docs/ml/DATASETS.md) §7). Nothing about the demo is a benchmark result, and no number here comes from it.
+
+**You need an LLM key** for the query path — any OpenAI-compatible provider's free tier, or a local Ollama with `LLM_BASE_URL`. Everything else, including the whole test suite, runs without one.
+
+### Develop against it
+
 **Requires Python 3.12** (3.13 also works; 3.14 is not recommended — see [DECISIONS.md](docs/architecture/DECISIONS.md)).
 
 ```powershell

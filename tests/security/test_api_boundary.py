@@ -61,6 +61,68 @@ class TestTheServiceIsClosedByDefault:
         with pytest.raises(ConfigurationError):
             APISettings(api_host="not-an-address")
 
+
+class TestTheContainerEscapeHatch:
+    """`API_ALLOW_NON_LOOPBACK`, and why the control needed one at all.
+
+    The refusal above used to be absolute, on the stated reasoning that
+    containers were unaffected because publishing a port "forwards to loopback
+    inside the namespace". **That is false.** ``-p 8000:8000`` forwards to the
+    container's interface on the bridge network, so a process bound to
+    ``127.0.0.1`` inside the namespace is unreachable through a published port.
+
+    The claim survived because nothing had ever been containerised. Writing the
+    Dockerfile tested it, and the failure it would have produced is the quiet
+    kind: a container that starts, passes its own health check, logs nothing
+    unusual, and answers no request that arrives from outside.
+
+    ADR-049.
+    """
+
+    @pytest.mark.parametrize("host", ["0.0.0.0", "::"])  # noqa: S104 - the input under test
+    def test_the_hatch_permits_a_wide_bind(self, host: str) -> None:
+        assert APISettings(api_host=host, api_allow_non_loopback=True).api_host == host
+
+    def test_it_is_off_by_default(self) -> None:
+        """The default is what an unattended deployment gets."""
+        assert APISettings().api_allow_non_loopback is False
+
+    @pytest.mark.parametrize(
+        "host",
+        ["0.0.0.0", "::", "192.168.1.10", "db.internal"],  # noqa: S104 - the input under test
+    )
+    def test_without_it_the_refusal_is_unchanged(self, host: str) -> None:
+        """The hatch must not weaken the default path -- only open a named one."""
+        with pytest.raises(ConfigurationError, match=r"no authentication"):
+            APISettings(api_host=host, api_allow_non_loopback=False)
+
+    def test_the_refusal_names_the_way_out(self) -> None:
+        """An error that forbids without saying what to do instead is how a
+        control gets bypassed by whoever needed to get on with their day."""
+        with pytest.raises(ConfigurationError) as caught:
+            APISettings(api_host="0.0.0.0")  # noqa: S104 - the input under test
+
+        assert "API_ALLOW_NON_LOOPBACK" in str(caught.value)
+
+    def test_it_waives_exposure_and_nothing_else(self) -> None:
+        """What the hatch is, stated as a test, including what it does not do.
+
+        With it set, ``API_HOST`` is no longer checked for reachability -- a
+        bogus value passes here and fails loudly when uvicorn tries to bind it.
+        That is deliberate: a syntactically valid hostname is indistinguishable
+        from a typo without a DNS lookup, and resolving in a settings validator
+        would reject legitimate interface names on any machine where the lookup
+        fails. **A loud bind error is the better failure than a control that
+        refuses correct configurations**, which is how a security check earns a
+        bypass from whoever it wrongly blocked.
+        """
+        assert APISettings(api_host="not-an-address", api_allow_non_loopback=True)
+
+        # And the default path still refuses it, so nothing is loosened for
+        # anyone who has not opted in.
+        with pytest.raises(ConfigurationError):
+            APISettings(api_host="not-an-address")
+
     def test_openapi_is_not_served_by_default(self, client: TestClient) -> None:
         """The schema is a complete map of the attack surface."""
         for path in ("/openapi.json", "/docs", "/redoc"):

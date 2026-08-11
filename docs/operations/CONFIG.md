@@ -250,6 +250,7 @@ The HTTP layer exists as of v0.1: `create_app()`, `/health`, `/ready`, the error
 |---|---|---|---|
 | `API_HOST` | str | `127.0.0.1` | **Loopback, enforced at startup** — see below |
 | `API_PORT` | int | `8000` | |
+| `API_ALLOW_NON_LOOPBACK` | bool | **`false`** | Opt-in for a process whose network namespace is the boundary. **Required in a container** — see below ([ADR-049](../architecture/DECISIONS.md#adr-049--binding-beyond-loopback-is-an-operators-assertion-not-a-detection)) |
 | `API_DOCS_ENABLED` | bool | **`false`** | Serves `/docs`, `/redoc` **and** `/openapi.json` |
 | `API_CORS_ORIGINS` | csv | `[]` | Empty = no cross-origin access. `*` is refused at startup |
 | `API_MAX_BODY_BYTES` | int | `65536` | Request body cap, enforced **before** parsing. 1 KiB–10 MiB |
@@ -262,7 +263,11 @@ The HTTP layer exists as of v0.1: `create_app()`, `/health`, `/ready`, the error
 
 **Binding beyond loopback is a startup error, not a warning.** This page has said so since Stage 0, conditioned on `API_KEY`; the honest form today is stricter, because `API_KEY` does not exist yet. There is no authentication of any kind, so no non-loopback bind address is safe, and the process refuses to start on one. All four spellings of loopback are accepted (`127.0.0.1`, `127.0.0.2`, `::1`, `localhost`) so that nobody has to work around the control to get a legitimate configuration running.
 
-To deploy: publish the port from your container runtime (`-p 8000:8000`) or put a reverse proxy in front that authenticates. Both leave the decision to expose the service with whoever is deploying it, rather than with a default.
+**In a container you also need `API_ALLOW_NON_LOOPBACK=true`, and this page used to say otherwise.** It said publishing the port was enough because the runtime "forwards to loopback inside the namespace". It does not: `-p 8000:8000` forwards to the container's interface on the bridge network, so a process bound to `127.0.0.1` inside a container is unreachable through a published port — listening, passing its own health check, and answering nobody. The claim survived until the Dockerfile was written, which is what tested it ([ADR-049](../architecture/DECISIONS.md#adr-049--binding-beyond-loopback-is-an-operators-assertion-not-a-detection)).
+
+So a container needs **both halves**: bind wide inside the namespace, and publish narrow outside it. This project's `docker-compose.yml` sets `API_HOST=0.0.0.0` with `API_ALLOW_NON_LOOPBACK=true`, and maps `127.0.0.1:8000:8000` — the host's loopback, not every interface. Setting the flag without the narrow publish puts an unauthenticated SQL-executing endpoint on whatever network the host is attached to.
+
+The flag does not make the deployment safe and does not claim to; it records that the operator asserts a boundary exists, and the process logs one line at startup saying exactly that. The alternative to deploy without it is a reverse proxy in front that authenticates.
 
 `API_DOCS_ENABLED` governs all three documentation routes together, `openapi.json` included. Clearing only `docs_url` hides the rendered page while leaving the machine-readable route map reachable, which helps nobody except somebody enumerating the service.
 

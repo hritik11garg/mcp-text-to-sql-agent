@@ -379,9 +379,10 @@ class APISettings(BaseSettings):
     Three of them are closed rather than convenient, and each would be a
     finding if it were the other way round:
 
-    - ``api_host`` binds loopback, not ``0.0.0.0``. A container publishes the
-      port deliberately; a developer running this on a laptop on a cafe network
-      should not be serving their database to the room.
+    - ``api_host`` binds loopback, not ``0.0.0.0``. A developer running this on
+      a laptop on a cafe network should not be serving their database to the
+      room. Containers need ``api_allow_non_loopback`` -- see its docstring,
+      and ADR-049 for why that is an explicit setting rather than a detection.
     - ``api_docs_enabled`` is off. OpenAPI is a complete map of the attack
       surface, served unauthenticated, and it is worth exactly as much to
       someone enumerating the service as to the developer it was meant for.
@@ -394,6 +395,32 @@ class APISettings(BaseSettings):
 
     api_host: str = "127.0.0.1"
     api_port: int = Field(default=8000, ge=1, le=65_535)
+
+    api_allow_non_loopback: bool = False
+    """Permit a non-loopback bind, for a process whose network namespace is the boundary.
+
+    **This exists because the previous reasoning here was wrong**, and it was
+    wrong in the direction that makes a container impossible to run rather than
+    the direction that leaks. The docstring above used to say containers were
+    unaffected because publishing a port "forwards to loopback inside the
+    namespace". It does not: ``-p 8000:8000`` forwards to the container's
+    interface on the bridge network, so a process listening only on
+    ``127.0.0.1`` inside the namespace is unreachable from outside it. The
+    control did not merely inconvenience a container -- it made the service
+    answer nothing while reporting itself healthy.
+
+    So the honest control is not "never bind wide", it is **"only bind wide
+    when something else is the boundary"**, and only an operator knows whether
+    that is true. Hence a setting, not a detection: sniffing ``/.dockerenv`` or
+    cgroup paths would decide a security question from evidence a caller can
+    fabricate, and would silently answer *yes* inside any container -- including
+    one on a host network, where there is no boundary at all.
+
+    Setting this does not make the deployment safe; it records that the operator
+    claims a boundary exists. There is still no authentication, so publish to
+    loopback on the host (``-p 127.0.0.1:8000:8000``, which is what this
+    project's compose file does) or put an authenticating proxy in front.
+    """
 
     api_docs_enabled: bool = False
     """Serve ``/docs``, ``/redoc`` and ``/openapi.json``.
@@ -507,18 +534,24 @@ class APISettings(BaseSettings):
         model-written SQL against a production database for anyone who can
         route a packet to it.
 
-        Containers are unaffected: publish the port with ``-p 8000:8000`` and
-        the runtime forwards to loopback inside the namespace. That is the same
-        deployment, with the decision to expose it made by whoever deploys it.
+        **Containers are not unaffected, and this docstring used to say they
+        were.** ``-p 8000:8000`` forwards to the container's interface on the
+        bridge network, not to loopback inside its namespace, so a process bound
+        to ``127.0.0.1`` in a container is unreachable through a published port
+        -- healthy, listening, and answering nobody. The claim survived because
+        nothing had ever been containerised; writing the Dockerfile is what
+        tested it. ``api_allow_non_loopback`` is the opt-in, and ADR-049 records
+        why it is a setting rather than a detection.
         """
-        if not _is_loopback_host(self.api_host):
+        if not _is_loopback_host(self.api_host) and not self.api_allow_non_loopback:
             raise ConfigurationError(
                 f"API_HOST={self.api_host!r} would serve this API beyond this "
                 f"machine, and it has no authentication yet -- any caller that "
                 f"can reach the port can run generated SQL against the target "
-                f"database and spend the LLM budget doing it. Bind 127.0.0.1 "
-                f"and publish the port from your container runtime or a "
-                f"reverse proxy that does authenticate."
+                f"database and spend the LLM budget doing it. Bind 127.0.0.1, "
+                f"or set API_ALLOW_NON_LOOPBACK=true if this process runs in an "
+                f"isolated network namespace and something else decides what is "
+                f"published -- see docs/operations/DEPLOYMENT.md."
             )
         return self
 

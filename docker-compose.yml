@@ -26,12 +26,9 @@ services:
       start_period: 5s
     restart: unless-stopped
 
-  # NOT USABLE YET: the Dockerfile it builds from lands with the deployment
-  # work in Stage 6. It sits behind a profile, so `docker compose up postgres`
-  # is unaffected. Until then the supported route is running alembic locally:
-  #
-  #   docker compose up -d postgres
-  #   python -m alembic upgrade head
+  # One-shot. Runs to completion and exits; `api` waits for that exit rather
+  # than for a port, because a migration that is still running is a schema the
+  # application must not touch.
   migrate:
     build:
       context: .
@@ -46,7 +43,107 @@ services:
       SQL_AGENT_RO_PASSWORD: ${SQL_AGENT_RO_PASSWORD:?SQL_AGENT_RO_PASSWORD is required}
     command: ["alembic", "upgrade", "head"]
     restart: "no"
-    profiles: ["migrate"]
+
+  # One-shot, and idempotent: it drops and rebuilds the demo schema, and the
+  # indexer upserts. Without it the API refuses to start on a fresh volume --
+  # correctly, because an empty catalog means every identifier would be
+  # rejected, but that turns "one command to run this" into a false claim.
+  #
+  # The dataset is original (src/demo/). Spider is what the benchmark measures
+  # and it cannot ship here: CC BY-SA, and DATASETS.md section 7 does not vendor
+  # benchmark data into an MIT repository.
+  seed:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: api
+    container_name: t2sql-seed
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      # Overrides, not a copy of the configuration. Enumerating every setting
+      # here would mean this file drifts the moment one is added -- so `.env`
+      # above supplies the operator's configuration and only the values that
+      # must differ *inside the network namespace* are named.
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-t2sql_owner}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-analytics}
+      DATABASE_RO_URL: postgresql://sql_agent_login:${SQL_AGENT_RO_PASSWORD}@postgres:5432/${POSTGRES_DB:-analytics}
+    volumes:
+      - hfcache:/home/appuser/.cache/huggingface
+    command: ["python", "-m", "demo.seed"]
+    restart: "no"
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: api
+    container_name: t2sql-api
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+      seed:
+        condition: service_completed_successfully
+    env_file:
+      # The operator's configuration -- provider, model, token caps, timeouts.
+      # Inherited wholesale rather than enumerated, because a list of LLM_*
+      # variables here is a second copy of `core.settings` that goes stale
+      # silently: the symptom is a container running on defaults while the host
+      # runs on the configured values, which looks like a code difference.
+      - path: .env
+        required: false
+    environment:
+      # Below this line: only what must differ inside the network namespace.
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-t2sql_owner}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-analytics}
+      DATABASE_RO_URL: postgresql://sql_agent_login:${SQL_AGENT_RO_PASSWORD}@postgres:5432/${POSTGRES_DB:-analytics}
+
+      # Bound wide *inside the namespace*, which is the only way a published
+      # port can reach it -- `-p` forwards to the container's bridge interface,
+      # not to loopback inside it. The flag is the operator asserting that the
+      # namespace is the boundary; the ports mapping below is what makes that
+      # assertion true. ADR-049.
+      API_HOST: "0.0.0.0"
+      API_ALLOW_NON_LOOPBACK: "true"
+
+      # Both name the schema `seed` creates, and both are **literals rather than
+      # ${VAR:-demo}** on purpose. Compose interpolates `${VAR:-default}` from
+      # `.env` -- the same file passed as `env_file` above -- so a "default"
+      # here is silently overridden by any value an operator has set for their
+      # local runs. That is how this was found: `.env` carries
+      # DB_TARGET_SCHEMA=public, the container inherited `public`, and the
+      # default read as if it had applied.
+      #
+      # They are two settings because they answer two questions: DATASET is the
+      # catalog namespace the *retriever* filters on; DB_TARGET_SCHEMA is the
+      # `search_path` the *executor* runs under. Setting only the first gives a
+      # successful retrieval, a plausible query, and `relation "event" does not
+      # exist` from EXPLAIN.
+      #
+      # To point the stack at your own schema, change these and pass a matching
+      # `--schema` to the seed command -- or drop the seed service and index
+      # your data with `python -m benchmark.load index`.
+      DATASET: demo
+      DB_TARGET_SCHEMA: demo
+    ports:
+      # Published to the **host's** loopback, not to every interface. `8000:8000`
+      # would put an unauthenticated SQL-executing endpoint on whatever network
+      # the host is attached to, which is the exact outcome the loopback default
+      # in settings exists to prevent. Change this only behind a proxy that
+      # authenticates.
+      - "127.0.0.1:${API_PORT:-8000}:8000"
+    volumes:
+      # The embedding model is ~90 MB and downloads on first retrieval. Cached
+      # on a named volume so a restart is not another download.
+      - hfcache:/home/appuser/.cache/huggingface
+    restart: unless-stopped
 
 volumes:
   pgdata:
+  hfcache:

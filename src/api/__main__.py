@@ -20,6 +20,8 @@ import uvicorn
 from api.app import create_app
 from core.settings import Settings
 
+logger = logging.getLogger(__name__)
+
 
 def main() -> None:
     logging.basicConfig(
@@ -27,6 +29,19 @@ def main() -> None:
         format="%(asctime)s %(levelname)-8s %(name)s: %(message)s",
     )
     settings = Settings.load()
+
+    # Said once, at the moment it becomes true, and named as a claim rather
+    # than a setting. The startup error it replaces cannot fire here -- the
+    # operator has already asserted a boundary -- so this line is the only
+    # record that they did.
+    if settings.api.api_allow_non_loopback:
+        logger.warning(
+            "binding %s beyond loopback: API_ALLOW_NON_LOOPBACK asserts that this "
+            "process's network namespace is the boundary. There is still no "
+            "authentication, so whatever publishes this port decides who can run "
+            "generated SQL against the target database",
+            settings.api.api_host,
+        )
     uvicorn.run(
         create_app(settings),
         host=settings.api.api_host,

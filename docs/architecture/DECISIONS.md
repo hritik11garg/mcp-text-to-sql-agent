@@ -1216,3 +1216,66 @@ Spider ships one. The clause was never invoked, and an audit on 2026-08-11 found
 **Cost, stated.** The training corpus went from 104 databases to 98, and the reserved 20 leave the pool a fine-tune may draw from. That is the correct direction: 5,906 training questions over schemas genuinely disjoint from the evaluation set is worth more than 6,000 over schemas that are not.
 
 **Generalises to:** a split is a claim about what the model has not seen, and hashing is a way of *assigning* membership rather than a way of *checking* it. When someone else has already drawn the boundary your numbers are compared against, your own boundary is a second opinion nobody asked for — and the two disagreeing is invisible until it flatters you.
+
+---
+
+## ADR-048 — v1.0 is the single-query system; the agent loop is v2
+
+**Status:** accepted · **Date:** 2026-08-11 · **Stage:** 6 · **Rescopes** [PROJECT.md](../../PROJECT.md)
+
+**Context.** The PRD defines one product across six stages: a core loop, an eval harness, MCP servers, an **agent layer** (decomposition, session memory, self-correction), a **fine-tuned schema linker**, and hardening. Stages 1–3 are substantially built and measured. Stages 4–6 are not started.
+
+That produces a repository whose README describes a system that decomposes multi-step questions, keeps session memory and self-corrects — none of which exist. Every page says so plainly, in status blocks that are accurate and prominently placed. **The honesty is not the problem.** The problem is the shape: a reader meets a large system that is partly built, rather than a system that is built.
+
+**Decision.** Cut **v1.0 at the single-query system** and move the agent layer and the fine-tune to **v2.0**.
+
+v1.0 is: schema retrieval over pgvector, provider-agnostic SQL generation, five-stage validation, sandboxed execution under a read-only role, four MCP servers with runtime discovery, a streaming HTTP API, a browser client, and a measured benchmark over Spider's dev split.
+
+That is a complete, coherent product with a defensible boundary: **one question in, one verified query out, with the blast radius bounded and the accuracy measured.** Nothing in that sentence is aspirational.
+
+**The alternative considered and rejected.** Keep the six-stage plan and release v0.3. It requires no scope decision and is equally honest — but a `0.x` version signals *unfinished* to a reader who spends ninety seconds, and the whole cost being paid here is that the project reads as unfinished while being substantially complete at a smaller scope.
+
+**What this is not.** It is not a claim that the agent loop was never intended, and it is not a quiet edit. [PROJECT.md](../../PROJECT.md) keeps the original PRD **as written**, under the same rule it has carried since Stage 0: *where the build has deliberately diverged, the reason is recorded rather than the text edited*. This ADR is that record, one level up from the ones already there. A reader can see both the original ambition and the delivered scope, which is more informative than either alone.
+
+**The cost, stated.** Two of the four resume bullets the PRD names — invalid-query rate `X%→Y%` via self-correction, and multi-step task success — cannot be filled by v1.0, because no code path self-corrects and no code path decomposes. They stay empty and named as v2.0 work rather than being softened into something the numbers do not support.
+
+**Acceptance criteria for v1.0**, so that "complete" is a checklist rather than an opinion:
+
+1. Runs from a clean checkout in one command, with no manual step not in the README.
+2. The documented API behaves as documented, and the demo script is verified end to end.
+3. The benchmark is reproducible from the recorded command.
+4. The security posture is stated, including what is deliberately absent (authentication) and what compensates for it.
+5. Container image builds, the compose stack starts, and migrations run as a one-shot service.
+6. CI is green and load-bearing: lint, types, tests, docs links, and a security suite that fails rather than skips.
+
+**Generalises to:** scope is a claim about what is finished, and it is the one claim a reader evaluates before any other. A project is not made more impressive by describing a larger system than it contains — the comparison a reader makes is against the description, and the description is the only part the author controls.
+
+---
+
+## ADR-049 — Binding beyond loopback is an operator's assertion, not a detection
+
+**Status:** accepted · **Date:** 2026-08-11 · **Stage:** 6 · **Amends** [ADR-034](#adr-034--the-api-refuses-to-bind-beyond-loopback-while-it-has-no-authentication)
+
+**Context.** [ADR-034](#adr-034--the-api-refuses-to-bind-beyond-loopback-while-it-has-no-authentication) makes a non-loopback `API_HOST` a startup error, because the API has no authentication and anyone who can route a packet to it can run generated SQL against the target database. That reasoning is unchanged and correct.
+
+The implementation carried a claim that was not: *"Containers are unaffected: publish the port with `-p 8000:8000` and the runtime forwards to loopback inside the namespace."*
+
+**That is false.** `-p` forwards to the container's interface on the bridge network, not to loopback inside its network namespace. A process bound to `127.0.0.1` inside a container is unreachable through a published port. The control did not inconvenience a container — it made one **impossible**, in the quietest way available: the service starts, listens, passes its own health check, logs nothing unusual, and answers no request that arrives from outside.
+
+**The claim survived for three months because nothing had ever been containerised.** Writing the Dockerfile is what tested it. This is the second time in this project that a containment claim held only because the case it described had never been run — the first was the read-only role, which nothing had checked was the role the app connects as ([ADR-033](#adr-033--the-read-only-role-is-proved-at-startup-by-asking-rather-than-by-writing)).
+
+**Decision.** Keep the refusal as the default and add `API_ALLOW_NON_LOOPBACK`, an explicit opt-in for a process whose network namespace is the boundary.
+
+| Option | Verdict |
+|---|---|
+| Detect the container (`/.dockerenv`, cgroup paths) | **Rejected.** Decides a security question from evidence the environment can fabricate, and answers *yes* inside any container — including one on a host network, where there is no boundary at all |
+| Drop the check in containers by binding `0.0.0.0` unconditionally | **Rejected.** Removes the control for the laptop case it was written for |
+| **An explicit setting the operator sets, defaulting off** | **Chosen** |
+
+**Why a setting is the honest form.** Only an operator knows whether something else decides what is published. The setting does not make a deployment safe and does not claim to — **it records that the operator asserts a boundary exists.** That assertion is greppable, appears in the environment that deployed the service, and is logged once at startup alongside a line naming what is still missing. A detection would make the same decision silently, from weaker evidence, and leave no record that it had been made.
+
+**What compensates, because the flag alone does not.** This project's `docker-compose.yml` publishes to the **host's** loopback — `127.0.0.1:8000:8000`, not `8000:8000`. The container binds wide inside its namespace, which is the only way a published port can reach it, and the host publishes narrow. Both halves are needed; either alone is either broken or exposed.
+
+**Scope of the waiver, deliberately narrow.** It waives the *exposure* question and nothing else. An `API_HOST` that cannot be bound still fails — loudly, at bind time — and every other closed default (`API_DOCS_ENABLED`, `API_CORS_ORIGINS`) is untouched. An escape hatch that turns off more than it was opened for is how one ends up set in every environment.
+
+**Generalises to:** a security control that makes a legitimate deployment impossible will be removed by whoever needs to deploy, and they will remove all of it. Give the legitimate case a named door — then the control survives contact with the people it inconveniences, and the exception is a thing you can search for.
