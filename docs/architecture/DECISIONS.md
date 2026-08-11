@@ -1148,3 +1148,71 @@ It runs straight into the contract. `search_schema` takes a query, a `k` and a t
 **The measurement this enabled.** Over all 1,034 dev questions, both paths returned **byte-identical ordered element lists** — see [BENCHMARKS.md](../ml/BENCHMARKS.md) §8. That is a stronger result than the accuracy comparison it replaces: everything downstream of retrieval is literally the same code, so identical context means the two paths differ by nothing that reaches the model.
 
 **Generalises to:** when a benchmark cannot express itself in an existing contract, changing the contract to fit the benchmark measures the change. Pay the cost in the harness instead, and write down what it cost.
+
+---
+
+## ADR-046 — The resume guard fingerprints the code that was loaded, not the commit
+
+**Status:** accepted · **Date:** 2026-08-11 · **Stage:** 2
+
+**Context.** `RunManifest.config_fingerprint` decides whether a partially-complete run may be resumed. It hashed the **commit**, on the reasoning that a code change mid-run produces a result nobody can interpret — fix a bug, re-run, and half the questions were answered by the old code.
+
+The reasoning is right. The commit is a poor proxy for it, and three days of a real run proved it in both directions at once.
+
+**Too strict.** The commit changes when a *document* changes. The full-split run spanned three days and three daily token budgets, and the working tree moved between them — so days 2 and 3 could not simply re-run the command. Each had to be resumed from a detached `git worktree` at the recorded commit. **An operational procedure was invented to work around a guard firing on prose.**
+
+**Too weak, and this is the half that matters.** The commit is read from the repository the *process stands in*. The editable install puts a `src/` on `sys.path` that can belong to a **different** checkout — which is exactly what day 3 found. So the guard could report a matching configuration while the wrong code answered the questions. It was describing a directory and being read as describing behaviour.
+
+**Decision.** Hash the source of the modules that can change an answer, read through each module's own `__file__`. The commit stays in the manifest as human-readable provenance, with its `-dirty` suffix, and leaves the fingerprint.
+
+| Option | Verdict |
+|---|---|
+| Keep hashing the commit | **Rejected.** Refuses documentation, permits a wrong-checkout import |
+| Hash every first-party module in `sys.modules` | **Rejected.** Self-maintaining and **not deterministic** — which modules are loaded depends on the configured provider and on import order, so two runs of one configuration could refuse each other |
+| **Hash an explicit list of answering-path modules, with a test that fails when the list goes stale** | **Chosen** |
+
+**Why the explicit list is safe despite being hand-maintained.** The obvious objection is that it will drift — someone adds a validator stage and the digest keeps passing runs the new code changed. So the list is checked *from the filesystem*: `tests/unit/test_code_digest.py` walks the answering packages and fails when a module is present in one and absent from the tuple. Exclusions are named individually with a reason, and a second test fails when an exclusion names a file that no longer exists. **A list that cannot go stale silently is a different object from a list.**
+
+**Tradeoff, stated.** The digest is coarser than the commit in one direction: a change to a module outside the list — the runner, the artifact store, the CLI — no longer refuses a resume, and those *can* affect a run. That is deliberate. The alternative is the status quo, where the guard fires so often on irrelevant changes that the documented workaround is to bypass it, and **a guard people have a standard procedure for evading is not a control.**
+
+**Consequence.** Every fingerprint changes, so no run recorded before this commit can be resumed. That cost was paid deliberately and at this moment: [TASKS.md](../project/TASKS.md) held this change open with the note *"unblocked 2026-08-08; the run it would have orphaned is finished"*. Landing it while a multi-day run was in flight would have destroyed the run.
+
+**Generalises to:** a guard is only as good as the *thing* it hashes. Version control identifies a tree; an interpreter loads files. When those two can differ, hashing the one that is easy to read means guarding the one nobody is running.
+
+---
+
+## ADR-047 — Spider's own split is the evaluation boundary, and the training set is carved around it
+
+**Status:** accepted · **Date:** 2026-08-11 · **Stage:** 2
+
+**Context.** [ADR-021](#adr-021--splits-are-a-hash-of-the-database-name-not-a-seeded-shuffle) assigns databases to `train` / `dev` / `smoke` / `held-out` by hashing the database name, so that adding a database never moves one already assigned. It closes with a Revisit clause: *"if a benchmark ships an official split, which should be used instead — comparability with published numbers beats internal consistency."*
+
+Spider ships one. The clause was never invoked, and an audit on 2026-08-11 found what that cost.
+
+**The defect, measured.** Every accuracy and Recall figure this project publishes is measured on **Spider's official dev set** — 1,034 questions across 20 databases. Hashing those 20 database names by ADR-021's rule places:
+
+| Band | Databases | Meaning |
+|---|---|---|
+| **`train`** | **11** — carrying **605 questions** | The set a fine-tune fits to |
+| `dev` / `smoke` | 5 | Iterated and tuned against |
+| `held-out` | 4 | Legitimately reportable |
+
+**16 of the 20 databases every published number is measured on were in a band this project would have trained on or tuned against, and 11 were in the fitting set.**
+
+**Why this needed a guard rather than a note.** A Stage 5 fine-tune over that `train` band would have fitted the retriever to 11 of the 20 schemas it is then scored against. The failure produces **no error and no implausible number** — it produces a *better* Recall@k, arriving precisely when a fine-tune is being evaluated for whether it improved Recall@k. The before, the after and the ablation would all look correct, and the gain would be memorisation. ADR-021's own tradeoff paragraph warned about the mirror image of this — *"a held-out set that quietly absorbed three training databases is not a split at all"* — and it arrived from the other direction: the **training** set absorbed the **evaluation** databases.
+
+**Decision.**
+
+1. **Spider's official `dev.json` is the reported evaluation set.** This is already what every published row used; the decision records it rather than introduces it.
+2. **`assign()` takes a `reserved` set** whose members are forced to `held-out` regardless of their hash, and `benchmark.load splits --reserve` supplies it from the benchmark's own question file.
+3. **`leaked_databases()` is an executable check**, and a test runs it against the committed split. This is Stage 5's *"verify database-level split disjointness"* task, landed before Stage 5 so it is a function rather than a checklist line somebody ticks.
+
+**ADR-021's property survives.** Membership of the reserved set is still a property of the database's name alone — it is the benchmark's published evaluation set, not a list this project ranks or trims — so adding databases still never moves the ones already assigned. A test asserts exactly that: reserving one database may not change another's band.
+
+**Why `held-out` and not a new split.** `held-out` already means *reported numbers only, never iterated on*. That is precisely the status of a benchmark's own evaluation set. A fifth band would have been a synonym.
+
+**What it does not buy.** Comparability in *sample* is not comparability in *result*. The published figures remain incomparable to Spider leaderboard numbers for two reasons this decision does not touch and every row still states: single-database execution accuracy rather than Test Suite Accuracy, and 113 questions excluded with reasons. What changes is that a fine-tuned retriever can now be evaluated on schemas it has never seen.
+
+**Cost, stated.** The training corpus went from 104 databases to 98, and the reserved 20 leave the pool a fine-tune may draw from. That is the correct direction: 5,906 training questions over schemas genuinely disjoint from the evaluation set is worth more than 6,000 over schemas that are not.
+
+**Generalises to:** a split is a claim about what the model has not seen, and hashing is a way of *assigning* membership rather than a way of *checking* it. When someone else has already drawn the boundary your numbers are compared against, your own boundary is a second opinion nobody asked for — and the two disagreeing is invisible until it flatters you.

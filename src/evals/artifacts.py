@@ -29,6 +29,7 @@ still a lost run; it just looked like a complete one.
 from __future__ import annotations
 
 import hashlib
+import importlib
 import json
 import logging
 import re
@@ -87,6 +88,17 @@ class RunManifest:
     written before baselines existed still fingerprints as it did.
     """
 
+    code_digest: str = ""
+    """Digest of the modules that answer a question -- see
+    :func:`answering_path_digest`.
+
+    This is what the fingerprint uses in place of :attr:`commit`. Defaulted to
+    empty so a manifest written before it existed still loads; such a manifest
+    fingerprints differently from a new one, which is correct, because it was
+    guarded by a rule that has since been shown to be both too strict and too
+    weak.
+    """
+
     @property
     def config_fingerprint(self) -> str:
         """Hash of everything whose change would invalidate a partial run.
@@ -95,10 +107,14 @@ class RunManifest:
         differ between the first attempt and the resume of the same run, and
         including them would refuse every resumption.
 
-        Deliberately *includes* the commit. A code change mid-run is exactly
-        the kind of thing that produces a result nobody can interpret, and it
-        is the easiest one to do by accident -- fix a bug, re-run, and half the
-        questions were answered by the old code.
+        **The commit is recorded and deliberately not hashed.** A code change
+        mid-run does produce a result nobody can interpret, and that is worth
+        refusing -- but the commit is a poor proxy for it in both directions. It
+        moves when a document moves, which is why every resume of the full-split
+        run needed a detached worktree; and it describes the repository the
+        process stands in rather than the code the process imported, which an
+        editable install can make different. :attr:`code_digest` is the same
+        guard aimed at the thing it was always about. ADR-046.
 
         And the baseline, for the same reason one step further out: `model`
         catches "answered by a different model", but two baselines share a model
@@ -111,7 +127,7 @@ class RunManifest:
                 "model": self.model,
                 "retriever_model_version": self.retriever_model_version,
                 "prompt_version": self.prompt_version,
-                "commit": self.commit,
+                "code_digest": self.code_digest,
                 "seed": self.seed,
                 "baseline": self.baseline,
             },
@@ -398,6 +414,83 @@ def _git(*args: str) -> str | None:
     return result.stdout
 
 
+ANSWERING_PATH_MODULES: Final = (
+    "adapters.embedding.factory",
+    "adapters.embedding.hashing",
+    "adapters.embedding.sentence_transformer",
+    "adapters.llm.factory",
+    "adapters.llm.fake",
+    "adapters.llm.fallback",
+    "adapters.llm.openai_compatible",
+    "answering.answerer",
+    "core.settings",
+    "evals.mcp_client",
+    "evals.pipeline",
+    "execution.executor",
+    "generation.generator",
+    "generation.prompts",
+    "schema.catalog",
+    "schema.models",
+    "schema.retrieval",
+    "schema.sensitivity",
+    "schema.serialization",
+    "validation.validator",
+)
+"""The modules whose text can change an answer.
+
+Deliberately a **list rather than a walk of** ``sys.modules``. A walk is
+self-maintaining and not deterministic: which modules are loaded depends on the
+configured provider and on import order, so two runs of the same configuration
+could hash differently and refuse a resume that was never invalid. A list is
+reproducible, and `tests/unit/test_code_digest.py` fails when a module is added
+to one of these packages and not to this tuple -- which is the staleness a
+hand-maintained list would otherwise develop quietly.
+
+Excluded on purpose: introspection and the indexer build the catalog *before* a
+run and are already covered by ``dataset`` and ``retriever_model_version``;
+ports are protocols with no behaviour; ``evals.run`` and this module are the
+harness around the measurement rather than the thing measured.
+"""
+
+
+def answering_path_digest(modules: tuple[str, ...] = ANSWERING_PATH_MODULES) -> str:
+    """A digest of the code that answers a question, as actually imported.
+
+    This exists because the commit is the wrong thing to fingerprint, in both
+    directions.
+
+    **It refuses too much.** The commit changes when a document changes, so
+    every resume of a multi-day run had to be made from a detached worktree at
+    the recorded commit -- a procedure invented to work around a guard that was
+    firing on prose. Days 2 and 3 of the full-split run were both run that way.
+
+    **And it permits too much.** The commit is read from the repository the
+    *process stands in*, while an editable install can be importing ``src/``
+    from a different one. That is not hypothetical: it is what day 3 found. The
+    guard could pass on precisely the run it exists to refuse, because it was
+    describing a directory rather than the code.
+
+    Hashing ``module.__file__`` fixes both. It is the file the interpreter
+    actually loaded, so a worktree that resolves to different source is a
+    different digest, and a docs commit is the same one.
+
+    Raises rather than degrading to a sentinel. ``current_commit`` fails soft
+    because a run from a tarball has no repository and that is unusual but not
+    wrong -- there is no such excuse here. Every module in the tuple is one this
+    process imports to do its work, so if one cannot be read the digest would be
+    silently weaker than the guard it is standing in for.
+    """
+    digest = hashlib.sha256()
+    for name in sorted(modules):
+        module = importlib.import_module(name)
+        source = getattr(module, "__file__", None)
+        if source is None:  # pragma: no cover - namespace packages only
+            raise ValueError(f"{name} has no file to hash; it cannot be fingerprinted")
+        digest.update(name.encode())
+        digest.update(Path(source).read_bytes())
+    return digest.hexdigest()[:16]
+
+
 def current_commit() -> str:
     """The commit under test, or ``unknown`` outside a repository.
 
@@ -436,10 +529,12 @@ def new_run_id(prefix: str = "run") -> str:
 
 
 __all__ = [
+    "ANSWERING_PATH_MODULES",
     "MAX_PERSISTED_ROWS",
     "QuestionArtifact",
     "RunManifest",
     "RunStore",
+    "answering_path_digest",
     "current_commit",
     "new_run_id",
 ]

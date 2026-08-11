@@ -169,9 +169,28 @@ Writes one JSONL file per split plus `spider-assignment.json`, under `data/split
 
 **Assignment is a hash of the database name, not a seeded shuffle.** A shuffle is reproducible only while the input list is unchanged; add one database and every later one can move to a different split, silently training on what used to be held out. Hashing each name independently makes membership a property of the name alone, so adding databases never moves the ones already assigned. See [ADR-021](../architecture/DECISIONS.md#adr-021--splits-are-a-hash-of-the-database-name-not-a-seeded-shuffle).
 
-Spider's 160 databases assign as **104 train / 16 dev / 7 smoke / 33 held-out** — smoke being a sub-band of dev, so the dev band is 23 of 160 rather than 16.
+Spider's 166 databases assign as **98 train / 14 dev / 5 smoke / 49 held-out** — smoke being a sub-band of dev, so the dev band is 19 rather than 14. Held-out carries Spider's own twenty dev databases by reservation ([ADR-047](../architecture/DECISIONS.md#adr-047--spiders-own-split-is-the-evaluation-boundary-and-the-training-set-is-carved-around-it)), which is why it exceeds its 15% band.
 
-> **Open, and it affects what any number here may be compared to.** This split cuts across Spider's *own* train/dev boundary: `spider-dev` is a hash-selected slice of both files, not Spider's `dev.json`. Published Spider numbers are computed on Spider's dev set, so **a score from this split is not comparable to them** — only to other scores from this split. The alternative is to adopt Spider's dev set as held-out and carve an internal dev from their train, which buys comparability and gives up the property [ADR-021](../architecture/DECISIONS.md#adr-021--splits-are-a-hash-of-the-database-name-not-a-seeded-shuffle) was written for. ADR-021's own *Revisit* clause anticipates exactly this. Undecided; every BENCHMARKS.md row must state which split it used until it is.
+> **These counts read 104 / 16 / 7 / 33 before 2026-08-11.** The difference is the reservation, not a change of policy: six databases moved out of `train` and the rest of the shift is the twenty reserved ones landing in held-out.
+
+> **Decided 2026-08-11, and the audit that decided it found a defect** ([ADR-047](../architecture/DECISIONS.md#adr-047--spiders-own-split-is-the-evaluation-boundary-and-the-training-set-is-carved-around-it)). Spider's official `dev.json` is the reported evaluation set — which is what every published row already used — and the hash split is now carved **around** it.
+>
+> **What the audit found.** Hashing Spider's twenty dev database names by ADR-021's rule put **11 of them in the `train` band, carrying 605 questions**, and five more in `dev`/`smoke`. So 16 of the 20 databases every published number is measured on sat in a band this project would have trained on or tuned against. A Stage 5 fine-tune over that band would have fitted the retriever to 11 of the 20 schemas it is scored on — and the failure produces no error and no implausible number, only a **better** Recall@k, arriving exactly when a fine-tune is being judged on Recall@k.
+>
+> **The fix is a reservation, not a new policy.** `assign()` takes a `reserved` set forced to held-out regardless of hash; `benchmark.load splits --reserve` supplies it from the benchmark's own question file. ADR-021's stability property survives untouched — reserved membership is still a property of the database's name alone, and a test asserts that reserving one database cannot move another.
+>
+> **What it still does not buy.** Comparability of *sample* is not comparability of *result*: every BENCHMARKS row remains incomparable to a Spider leaderboard number for the two reasons it already states — single-database execution accuracy rather than Test Suite Accuracy, and 113 excluded questions. What changed is that a fine-tuned retriever can now be evaluated on schemas it has never seen.
+
+**The realised assignment**, regenerated with the reservation on 2026-08-11:
+
+| Split | Databases | Questions |
+|---|---|---|
+| Train | 98 | 5,906 |
+| Dev | 14 | 585 |
+| Smoke | 5 | 783 |
+| Held-out | 49 | 2,419 |
+
+Held-out includes Spider's twenty dev databases by reservation, which is why it is larger than the 15% band implies.
 
 | Split | Share | Purpose |
 |---|---|---|

@@ -79,7 +79,12 @@ def bucket(db_id: str, *, seed: str) -> int:
     return int.from_bytes(digest, "big") % _BUCKETS
 
 
-def assign(db_ids: Iterable[str], *, policy: SplitPolicy | None = None) -> dict[str, Split]:
+def assign(
+    db_ids: Iterable[str],
+    *,
+    policy: SplitPolicy | None = None,
+    reserved: Iterable[str] = (),
+) -> dict[str, Split]:
     """Map each database to a split.
 
     The bands are laid end to end over ``[0, _BUCKETS)`` and a database's
@@ -91,14 +96,34 @@ def assign(db_ids: Iterable[str], *, policy: SplitPolicy | None = None) -> dict[
     Every boundary is a constant, so membership depends only on the database's
     own name. That is the whole point: no ranking, no counting, nothing that
     could make one database's split depend on which others were loaded.
+
+    **``reserved`` overrides the hash, and it is not an exception to the rule
+    above.** Membership of the reserved set is also a property of the name
+    alone -- it is the benchmark's own published evaluation set, not a list this
+    project ranks or trims -- so adding databases still never moves the ones
+    already assigned.
+
+    It exists because the hash does not know what the benchmark already decided.
+    Spider ships an official train/dev boundary, and hashing its database names
+    ignores it: **11 of the 20 databases in Spider's dev set hash into this
+    project's ``train`` band**, carrying 605 questions. Fine-tuning on that band
+    would fit the retriever to 11 of the 20 schemas every published number here
+    is measured on, and Recall@k would rise for the least interesting possible
+    reason. Reserved databases are forced to ``HELD_OUT``, whose documented
+    meaning -- reported numbers only, never iterated on -- is exactly right for
+    a benchmark's own evaluation set. ADR-047.
     """
     rules = policy or SplitPolicy()
     smoke_edge = rules.train * _BUCKETS + rules.smoke * _BUCKETS
     train_edge = rules.train * _BUCKETS
     dev_edge = train_edge + rules.dev * _BUCKETS
+    off_limits = frozenset(reserved)
 
     assignment: dict[str, Split] = {}
     for db_id in sorted(set(db_ids)):
+        if db_id in off_limits:
+            assignment[db_id] = Split.HELD_OUT
+            continue
         position = bucket(db_id, seed=rules.seed)
         if position < train_edge:
             assignment[db_id] = Split.TRAIN
@@ -110,6 +135,30 @@ def assign(db_ids: Iterable[str], *, policy: SplitPolicy | None = None) -> dict[
             assignment[db_id] = Split.HELD_OUT
 
     return assignment
+
+
+def leaked_databases(assignment: dict[str, Split], evaluated: Iterable[str]) -> frozenset[str]:
+    """Databases that are both trained on and reported from.
+
+    The check Stage 5 lists as "verify database-level split disjointness",
+    landed before Stage 5 so that it is a function rather than a checklist line
+    somebody ticks.
+
+    A leak here does not produce an error, a crash or an implausible number. It
+    produces a **better** Recall@k, arriving exactly when a fine-tune is being
+    evaluated for whether it improved Recall@k. That is the failure mode worth
+    building a guard for: the ones that look like success.
+
+    ``DEV`` and ``SMOKE`` count as trained-on for this purpose. They are not
+    fitted to, but they are iterated against, and a number reported from a
+    database that prompts were tuned on is not a held-out number either.
+    """
+    evaluated_set = frozenset(evaluated)
+    return frozenset(
+        db
+        for db, split in assignment.items()
+        if db in evaluated_set and split in (Split.TRAIN, Split.DEV, Split.SMOKE)
+    )
 
 
 def apply(questions: Sequence[Question], assignment: dict[str, Split]) -> list[Question]:

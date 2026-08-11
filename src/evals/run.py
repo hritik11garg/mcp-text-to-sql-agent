@@ -40,8 +40,15 @@ from adapters.embedding.factory import build_embedder
 from adapters.llm.factory import build_llm_client
 from core.dsn import libpq_dsn, redact_dsn
 from core.exceptions import ConfigurationError
-from core.settings import Settings
-from evals.artifacts import QuestionArtifact, RunManifest, RunStore, current_commit, new_run_id
+from core.settings import RetrievalSettings, Settings
+from evals.artifacts import (
+    QuestionArtifact,
+    RunManifest,
+    RunStore,
+    answering_path_digest,
+    current_commit,
+    new_run_id,
+)
 from evals.dataset import Question, Split, load_questions
 from evals.gold import Applied, apply_verified_gold, load_verified_gold
 from evals.mcp_client import McpClientPool
@@ -78,7 +85,15 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--dataset", default="default")
     parser.add_argument("--model", default="", help="Recorded in the manifest, not used to call")
-    parser.add_argument("--retriever", default="", help="Retriever model_version")
+    parser.add_argument(
+        "--retriever",
+        default="",
+        help=(
+            "Assert the retriever model_version rather than supply it. Derived "
+            "from the configured embedder when omitted; a value that disagrees "
+            "with the embedder is refused"
+        ),
+    )
     parser.add_argument("--prompt-version", default="sql_gen/v1")
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--notes", default="")
@@ -162,14 +177,21 @@ def main(argv: list[str] | None = None) -> int:
         logger.error("%s", exc)
         return 2
 
+    try:
+        retriever_model_version = _retriever_version(args.retriever, settings.retrieval)
+    except ConfigurationError as exc:
+        logger.error("%s", exc)
+        return 2
+
     manifest = RunManifest(
         run_id=args.run_id or new_run_id(f"{args.dataset}-{args.split.value}"),
         dataset=args.dataset,
         split=args.split.value,
         model=args.model or settings.llm.llm_model,
-        retriever_model_version=args.retriever,
+        retriever_model_version=retriever_model_version,
         prompt_version=args.prompt_version,
         commit=current_commit(),
+        code_digest=answering_path_digest(),
         seed=args.seed,
         notes=args.notes,
         baseline=args.baseline.value,
@@ -262,6 +284,36 @@ class Pipeline:
     answerer: PipelineAnswerer
     run_query: SchemaScopedQueryRunner
     mcp_pool: McpClientPool | None = None
+
+
+def _retriever_version(asserted: str, retrieval: RetrievalSettings) -> str:
+    """The retriever this run will actually read vectors under.
+
+    ``--retriever`` used to *supply* this, defaulting to the empty string. That
+    made the one guard standing between a baseline run and a fine-tuned run
+    resuming into each other inert unless an operator remembered a flag -- and
+    it would first be needed at Stage 5, by which point every existing run
+    carried the same empty value and would have looked resumable into a
+    fine-tuned one.
+
+    The embedder is the honest source: ``model_version`` is what
+    ``SchemaRetriever`` binds into the ``(dataset, model_version)`` predicate,
+    so it is by construction the vector space a run reads. Reading it costs
+    nothing -- both adapters return a configured string, and the
+    sentence-transformer one does not open a checkpoint to answer.
+
+    The flag survives as an **assertion**. A caller who states the retriever and
+    is wrong about it has a misconfiguration worth failing on, which is more
+    useful than the value they supplied.
+    """
+    derived = build_embedder(retrieval).model_version
+    if asserted and asserted != derived:
+        raise ConfigurationError(
+            f"--retriever says {asserted!r} but the configured embedder is {derived!r}. "
+            f"Omit the flag to record what the run will use, or fix EMBEDDER_PROVIDER "
+            f"/ RETRIEVER_MODEL to match"
+        )
+    return derived
 
 
 def build_pipeline(

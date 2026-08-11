@@ -369,7 +369,24 @@ def command_splits(args: argparse.Namespace, settings: LoaderSettings) -> int:
     policy = splits.SplitPolicy(
         train=args.train, dev=args.dev, held_out=args.held_out, smoke=args.smoke, seed=args.seed
     )
-    assignment = splits.assign((question.db_id for question in questions), policy=policy)
+
+    # The benchmark's own evaluation set, kept out of the training band. Without
+    # it the hash puts 11 of Spider's 20 dev databases into `train` -- ADR-047.
+    reserved = _reserved_databases(args.reserve)
+    assignment = splits.assign(
+        (question.db_id for question in questions), policy=policy, reserved=reserved
+    )
+
+    # Belt and braces: the reservation above should make this impossible, so a
+    # hit means the reservation was wrong rather than that a database slipped.
+    leaked = splits.leaked_databases(assignment, reserved)
+    if leaked:
+        print(
+            f"reserved databases were still assigned to a trained-on split: {sorted(leaked)}",
+            file=sys.stderr,
+        )
+        return EXIT_USAGE
+
     stamped = splits.apply(questions, assignment)
 
     args.out.mkdir(parents=True, exist_ok=True)
@@ -428,6 +445,26 @@ def _read_questions(args: argparse.Namespace) -> list[Question]:
     if not questions:
         raise BenchmarkError("no questions were read")
     return questions
+
+
+def _reserved_databases(paths: list[Path] | None) -> frozenset[str]:
+    """The database names appearing in the benchmark's own evaluation files.
+
+    Read from the question files rather than configured as a list, because a
+    hand-maintained list of "Spider's dev databases" is a second copy of
+    something the archive already states -- and the copy is what goes stale.
+    """
+    if not paths:
+        return frozenset()
+
+    names: set[str] = set()
+    for path in paths:
+        for line in path.read_text(encoding="utf-8").splitlines():
+            if line.strip():
+                names.add(str(json.loads(line)["db_id"]))
+    if not names:
+        raise BenchmarkError(f"--reserve named {paths} but no db_id was found in them")
+    return frozenset(names)
 
 
 def _connect(settings: LoaderSettings) -> psycopg.Connection[Any]:
@@ -562,6 +599,18 @@ def build_parser() -> argparse.ArgumentParser:
         "--smoke", type=float, default=0.025, help="fraction of the corpus, carved out of dev"
     )
     split.add_argument("--seed", default="t2sql-v1")
+    split.add_argument(
+        "--reserve",
+        type=Path,
+        nargs="+",
+        default=None,
+        help=(
+            "Question files whose databases must never be trained on -- the "
+            "benchmark's own evaluation set. Forced to held-out regardless of "
+            "their hash. For Spider, pass its dev.json: 11 of its 20 databases "
+            "otherwise hash into the train band (ADR-047)"
+        ),
+    )
     split.set_defaults(handler=command_splits)
 
     return parser

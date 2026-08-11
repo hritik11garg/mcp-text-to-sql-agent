@@ -32,12 +32,12 @@ Every category answers five questions, in order:
 
 **The 🟡 rows are where the useful work is, not the 🔴 rows.** Two of the highest-value actions in [§ Priorities](#priorities) sit inside categories marked partial — load testing (§28 has the concurrency half and none of the soak half), and property-based testing (§38 landed four of its five properties and names the one it did not). A category is 🟡 when a foundation exists; that says nothing about how sharp the remaining gap is.
 
-**Evidence base, measured 2026-08-10.** Counted by marker with `pytest --collect-only -m <marker>`, which is the same selection CI uses — an earlier revision counted `def test_` by hand and produced numbers nobody could reproduce.
+**Evidence base, measured 2026-08-11.** Counted by marker with `pytest --collect-only -m <marker>`, which is the same selection CI uses — an earlier revision counted `def test_` by hand and produced numbers nobody could reproduce.
 
 | Layer | Cases collected |
 |---|---|
-| **Total** | **1,562** |
-| unit | 1,041 |
+| **Total** | **1,606** |
+| unit | 1,085 |
 | security | 296 |
 | integration | 199 |
 | contract | 99 |

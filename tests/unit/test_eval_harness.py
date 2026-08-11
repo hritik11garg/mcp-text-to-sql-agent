@@ -306,13 +306,34 @@ class TestResumption:
         with pytest.raises(ValueError, match="different configuration"):
             RunStore(tmp_path, manifest(model="model-b")).resume()
 
-    def test_resuming_a_different_commit_is_refused(self, tmp_path: Path) -> None:
-        """Fix a bug, re-run, and half the questions were answered by the old
-        code — the easiest way to produce a result nobody can interpret."""
+    def test_resuming_a_different_commit_is_allowed(self, tmp_path: Path) -> None:
+        """Reversed on 2026-08-11, and the reversal is the fix (ADR-046).
+
+        This used to assert that a changed commit refuses the resume. The
+        intent was right -- half the questions answered by the old code is a
+        result nobody can interpret -- and the commit was the wrong proxy for
+        it, in both directions.
+
+        Too strict: the commit moves when a *document* moves, so days 2 and 3
+        of the full-split run each had to be resumed from a detached worktree,
+        a procedure invented entirely to work around a guard firing on prose.
+
+        Too weak: the commit describes the repository the process stands in,
+        while an editable install can import ``src/`` from a different one --
+        so the guard could pass on precisely the run it exists to refuse.
+
+        ``code_digest`` is the same intent aimed at the bytes that were loaded.
+        """
         RunStore(tmp_path, manifest(commit="aaa")).start()
 
+        RunStore(tmp_path, manifest(commit="bbb")).resume()  # must not raise
+
+    def test_resuming_different_answering_code_is_refused(self, tmp_path: Path) -> None:
+        """What the commit check was always trying to be."""
+        RunStore(tmp_path, manifest(code_digest="1111111111111111")).start()
+
         with pytest.raises(ValueError, match="different configuration"):
-            RunStore(tmp_path, manifest(commit="bbb")).resume()
+            RunStore(tmp_path, manifest(code_digest="2222222222222222")).resume()
 
     def test_resuming_a_different_baseline_is_refused(self, tmp_path: Path) -> None:
         """The baselines exist to be *compared*, so mixing two is the one
