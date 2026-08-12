@@ -156,7 +156,7 @@ The consequence for anyone reading logs: **the `request_id` in a log line is alw
 
 ## 4. Alerts
 
-> **TBD — Stage 6** for thresholds, which need a baseline to be meaningful.
+> **TBD — v2.0** for thresholds, which need a baseline to be meaningful.
 
 | Alert | Condition | Severity | Why |
 |---|---|---|---|
@@ -173,7 +173,7 @@ The invalid-SQL alert is the one that catches genuine quality regressions in pro
 
 ## 5. Dashboards
 
-> **TBD — Stage 6.** Three, by audience:
+> **TBD — v2.0.** Three, by audience:
 
 **Service health** — request rate, error rate, latency percentiles, pool saturation, active streams. The on-call view.
 
@@ -187,4 +187,4 @@ Latency targets and measured results: [PERFORMANCE.md](PERFORMANCE.md). Instrume
 
 ## 7. What good looks like
 
-> **TBD — Stage 6.** Once a baseline exists, this section records the normal operating range for each metric. Without it, "elevated" has no meaning and every alert threshold is a guess.
+> **TBD — v2.0.** Once a baseline exists, this section records the normal operating range for each metric. Without it, "elevated" has no meaning and every alert threshold is a guess.

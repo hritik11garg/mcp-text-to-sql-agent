@@ -46,9 +46,17 @@ const WIRE = [
 ];
 
 function ask(question: string): void {
-  fireEvent.change(screen.getByPlaceholderText(/how many singers/i), {
-    target: { value: question },
-  });
+  // By role, not by placeholder. This matched `/how many singers/i` until
+  // 2026-08-12 -- a copy of the component's placeholder text, spelled again
+  // here. Changing that placeholder (it suggested a question the shipped demo
+  // database cannot answer) broke five tests that have nothing to do with
+  // placeholder copy, which is the tell: the locator was coupled to
+  // presentation rather than to what the element *is*.
+  //
+  // There is exactly one textbox on this page and it is the question input.
+  // Its identity is its role; its placeholder is a hint that may be reworded
+  // any time somebody improves the wording.
+  fireEvent.change(screen.getByRole('textbox'), { target: { value: question } });
   fireEvent.click(screen.getByRole('button', { name: /^ask$/i }));
 }
 

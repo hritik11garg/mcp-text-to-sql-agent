@@ -186,13 +186,13 @@ Neither failure is self-evident from the symptom, which is why the adapter maps 
 | Variable | Type | Default | Notes |
 |---|---|---|---|
 | `RETRIEVAL_TOP_K` | int | `10` | Elements per search when the caller does not ask for a count. Range 1–50 |
-| `HNSW_EF_SEARCH` | int | `40` | Recall/latency knob, range 1–1000; swept in Stage 6. Raised to `k` automatically when a caller asks for more than this |
+| `HNSW_EF_SEARCH` | int | `40` | Recall/latency knob, range 1–1000; swept in v2.0. Raised to `k` automatically when a caller asks for more than this |
 
 **There is no `RETRIEVAL_TOP_K_CEILING` setting.** The hard ceiling is `MAX_K = 50` in `schema.retrieval`, because it has to match the published `schema_search` tool schema in [../architecture/MCP.md](../architecture/MCP.md) §3.1 — a ceiling an operator can raise past the contract is not a ceiling. Every caller-supplied `k` is clamped there regardless of configuration, so `RETRIEVAL_TOP_K` is bounded twice: once at the configuration edge for operator typos, once at request time for hostile callers.
 
 **`hnsw.iterative_scan` is not configurable and is deliberately always on.** Turning it off makes searches faster and silently returns fewer results than asked for — a correctness setting wearing a performance setting's clothes. See [../architecture/DATABASE.md](../architecture/DATABASE.md) §5.1 for the measurements.
 
-### Retrieval tuning — planned (Stage 6)
+### Retrieval tuning — planned (v2.0)
 
 | Variable | Type | Default | Notes |
 |---|---|---|---|
@@ -308,11 +308,11 @@ This is the same defect the project has now recorded three times in different cl
 | `RATE_LIMIT_PER_MINUTE` | int | `30` | Per client. Needs an identity to key on, so it lands with `API_KEY` |
 | `MAX_IN_FLIGHT_PER_CLIENT` | int | `2` | The *per-client* half of the in-flight cap. The global half exists — see above. Same prerequisite: authentication |
 
-## 7. Observability — planned (Stage 6)
+## 7. Observability — planned (v2.0)
 
 > None of these exist yet. Logging today is `logging.basicConfig` at the server entrypoints, forced onto stderr.
 >
-> They are **not** in `.env.example` as assignments, only named in a comment there — see §10. Until Stage 6, setting any of them has no effect.
+> They are **not** in `.env.example` as assignments, only named in a comment there — see §10. Until v2.0, setting any of them has no effect.
 
 | Variable | Type | Default | Notes |
 |---|---|---|---|

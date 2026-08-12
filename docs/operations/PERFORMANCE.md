@@ -92,7 +92,7 @@ Everything else  ███                            ~7%
 
 Retrieval is the number to watch. At ~600–900 ms for the first stage event it is already larger than the ~5% assumed, and that is over a schema with four tables. It is question-embedding cost, which is roughly constant, plus an ANN search, which is not — so the share will move in both directions as the corpus grows.
 
-If LLM generation stops being dominant, something is wrong upstream and the optimization target changes completely. Confirming this ordering **on a realistic corpus** is the first Stage 6 measurement, because optimizing the wrong component is the default failure mode here — and §1 is a worked example of how confidently that can happen.
+If LLM generation stops being dominant, something is wrong upstream and the optimization target changes completely. Confirming this ordering **on a realistic corpus** is the first measurement v2.0 owes, because optimizing the wrong component is the default failure mode here — and §1 is a worked example of how confidently that can happen.
 
 ## 3. Optimization levers, in order
 
@@ -115,7 +115,7 @@ The second-order effect of better retrieval is worth naming: each avoided retry 
 
 ## 4. Load characteristics
 
-> **TBD — Stage 6.** There is no load generator pinned any more: `locust` was removed on 2026-08-09 for having no importer, and the property it was pinned for turned out to need none — see [TESTING.md](../development/TESTING.md) §8. **The concurrency half is done and is not this** — `tests/unit/test_concurrency.py` proves callers at the cap run simultaneously, that callers past it are refused rather than queued, and that every slot comes back. Concurrency is a correctness property and belongs on every commit; the numbers below are a *measurement* and need a running server and a pipeline.
+> **TBD — v2.0.** There is no load generator pinned any more: `locust` was removed on 2026-08-09 for having no importer, and the property it was pinned for turned out to need none — see [TESTING.md](../development/TESTING.md) §8. **The concurrency half is done and is not this** — `tests/unit/test_concurrency.py` proves callers at the cap run simultaneously, that callers past it are refused rather than queued, and that every slot comes back. Concurrency is a correctness property and belongs on every commit; the numbers below are a *measurement* and need a running server and a pipeline.
 
 Questions to answer with numbers rather than intuition:
 
@@ -139,7 +139,7 @@ Provider quota therefore belongs in the capacity model alongside `DB_POOL_MAX_SI
 
 ## 5. Measured results
 
-> **One row is measured; the component rows are still Stage 6.** Populated from [BENCHMARKS.md](../ml/BENCHMARKS.md) §5. Every row carries hardware — a latency number without it is not comparable to anything.
+> **The end-to-end row is measured; the component rows are v2.0.** Populated from [BENCHMARKS.md](../ml/BENCHMARKS.md) §5. Every row carries hardware — a latency number without it is not comparable to anything.
 
 | Component | Target | p50 | p95 | p99 | Hardware | Status |
 |---|---|---|---|---|---|---|
@@ -152,7 +152,7 @@ Provider quota therefore belongs in the capacity model alongside `DB_POOL_MAX_SI
 
 **The measured row meets its p95 target and should not be read as meeting it.** The dominant term is a remote provider's queue: shared, rate-limited, and outside this repository's control. Minimum 0.50 s, maximum **71.4 s**, mean 3.72 s — the gap between p95 and p99, and that maximum, are what throttling looks like from the client side. The components this project actually controls are milliseconds by comparison.
 
-**So this is a measurement of the conditions, not of the system**, and it does not close Stage 6. A row that would needs the components separated, a local model or a paid tier with predictable queueing, and a stated concurrency. It is recorded because 921 samples under the conditions the project really runs in beats an empty table — and because it sets the honest expectation for the demo: **about three seconds, and occasionally a minute.**
+**So this is a measurement of the conditions, not of the system**, and it does not close the saturation work, which is v2.0. A row that would needs the components separated, a local model or a paid tier with predictable queueing, and a stated concurrency. It is recorded because 921 samples under the conditions the project really runs in beats an empty table — and because it sets the honest expectation for the demo: **about three seconds, and occasionally a minute.**
 
 **What it does establish** is that the end-to-end budget is not being spent where the targets above assume. Retrieval, validation and execution together are a rounding error against generation; any optimisation effort aimed at the first three is aimed at the wrong place while the provider is a free tier.
 

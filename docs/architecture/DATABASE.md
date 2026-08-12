@@ -210,7 +210,7 @@ Points that matter:
 - **Functions are not granted.** Without `EXECUTE`, `pg_read_file` and friends are unreachable regardless of what SQL is generated.
 - **`ALTER DEFAULT PRIVILEGES`** means a table added later is readable without re-granting — and, importantly, is the only thing that is automatic. Write access never is.
 
-> Verification is a **test**, not an assertion in a doc. [../development/TESTING.md](../development/TESTING.md) §5 specifies negative tests: the read-only role must fail on `INSERT`, `UPDATE`, `DELETE`, `CREATE TABLE`, `COPY ... TO PROGRAM`, and any `agent_meta` read. Thirty of them, and they gate Stage 1 rather than Stage 6.
+> Verification is a **test**, not an assertion in a doc. [../development/TESTING.md](../development/TESTING.md) §5 specifies negative tests: the read-only role must fail on `INSERT`, `UPDATE`, `DELETE`, `CREATE TABLE`, `COPY ... TO PROGRAM`, and any `agent_meta` read. Thirty of them, and they gated the first slice rather than being left to a hardening pass at the end.
 
 > **And verification is also a startup assertion, because the tests could not have caught the likelier failure.** Every one of those thirty builds this role from this migration inside a testcontainer. None of them looks at the role a deployment's `DATABASE_RO_URL` actually names — so they prove the DDL above is correct and say nothing about whether the running system connects as it. The check that existed for that compared the two connection strings for inequality, which two spellings of the same superuser pass.
 >
@@ -230,7 +230,7 @@ Rules:
 
 ## 9. Query optimization
 
-> **TBD — Stage 6**, with `EXPLAIN ANALYZE` output against real plans.
+> **TBD — v2.0**, with `EXPLAIN ANALYZE` output against real plans.
 
 Planned analysis:
 

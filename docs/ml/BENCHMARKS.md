@@ -302,7 +302,7 @@ So the finding is: **on Spider, with this model, the validation tier has nothing
 
 ## 4. Multi-step task success
 
-> **TBD — Stage 4.** Grading method must be recorded per row — rubric-automatic vs human changes what the number means.
+> **TBD — v2.0.** Grading method must be recorded per row — rubric-automatic vs human changes what the number means.
 
 | Date | Commit | Split | Tasks | Success | Grading | Notes |
 |---|---|---|---|---|---|---|
@@ -310,7 +310,7 @@ So the finding is: **on Spider, with this model, the validation tier has nothing
 
 ## 5. Latency
 
-> **One row, and it is not the Stage 6 measurement.** Targets in [../operations/PERFORMANCE.md](../operations/PERFORMANCE.md).
+> **One row, and it is not the saturation measurement.** Targets in [../operations/PERFORMANCE.md](../operations/PERFORMANCE.md).
 
 | Date | Commit | Component | p50 | p95 | p99 | Hardware | Notes |
 |---|---|---|---|---|---|---|---|
@@ -318,7 +318,7 @@ So the finding is: **on Spider, with this model, the validation tier has nothing
 
 **This is a measurement of a free tier, not of this system.** The dominant term is a remote provider's queue, and it is shared, rate-limited and outside this repository's control. The 71-second maximum and the gap between p95 and p99 are what provider throttling looks like from the client side; they say nothing about retrieval, validation or execution, all of which are milliseconds by comparison (§1.1's `execute` stage runs 10–26 ms).
 
-**So it does not satisfy Stage 6 and must not be quoted as a latency budget.** A real row needs the components separated, a fixed local model or a paid tier with predictable queueing, and a stated concurrency. It is recorded because 921 samples of end-to-end latency under the conditions this project actually runs in is worth more than an empty table — and because it sets the honest expectation for anyone running the demo: **a question takes about three seconds, and sometimes it takes a minute.**
+**So it does not close the saturation work, and must not be quoted as a latency budget.** A real row needs the components separated, a fixed local model or a paid tier with predictable queueing, and a stated concurrency. It is recorded because 921 samples of end-to-end latency under the conditions this project actually runs in is worth more than an empty table — and because it sets the honest expectation for anyone running the demo: **a question takes about three seconds, and sometimes it takes a minute.**
 
 ## 6. Cost
 
@@ -401,7 +401,7 @@ A second row arrives with the first configuration that changes the token profile
 
 ## 7. Ablations
 
-> **TBD — Stage 5.** Design in [TRAINING.md](TRAINING.md) §8.
+> **TBD — v2.0.** Design in [TRAINING.md](TRAINING.md) §8.
 
 | ID | Comparison | Result | Verdict |
 |---|---|---|---|

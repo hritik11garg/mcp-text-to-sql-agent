@@ -100,13 +100,13 @@ Production-specific requirements:
 
 **`API_HOST=0.0.0.0` is a startup error, including inside a container.** That looks inconvenient and is deliberate: this service has no authentication, so binding all interfaces makes an endpoint that runs model-generated SQL against the target database reachable by anything that can route to it. Publishing the port (`-p 8000:8000`, or a Kubernetes Service) forwards to loopback inside the network namespace and works unchanged — the difference is that exposing the service becomes something a deployment declares rather than something a default does.
 
-**`API_KEY` does not exist yet.** Earlier revisions of this page listed it as required in production. It is Stage 6 work; until it lands, "front it with something that authenticates" is the whole of the answer, and the loopback refusal is what stops that being optional.
+**`API_KEY` does not exist yet.** Earlier revisions of this page listed it as required in production. It is v2.0 work; until it lands, "front it with something that authenticates" is the whole of the answer, and the loopback refusal is what stops that being optional.
 
 Secrets come from the orchestrator's secret store, not from a `.env` file baked into the image.
 
 ## 4. Production setup
 
-> **TBD — Stage 6.**
+> **TBD — v2.0.**
 
 Checklist to be verified, not just written:
 
@@ -126,7 +126,7 @@ Checklist to be verified, not just written:
 
 ## 5. Scaling
 
-> **TBD — Stage 6**, with load-test numbers.
+> **TBD — v2.0**, with load-test numbers.
 
 - **API/agent is stateless** — sessions live in Postgres, so replicas scale horizontally.
 - **The database is the shared bottleneck.** Total concurrent queries = replicas × `DB_POOL_MAX_SIZE`. Scaling replicas without accounting for this scales load onto a single database.
@@ -198,7 +198,7 @@ The catalog, the retriever and the MCP servers are **not** probed. All are loade
 
 ## 8. Backup and recovery
 
-> **TBD — Stage 6.**
+> **TBD — v2.0.**
 
 - `agent_meta` — sessions are disposable; **`query_audit` is not**. It is the security record.
 - Embeddings are regenerable from the target schema, but regeneration is not instant; a backup is cheaper than a rebuild.
@@ -206,4 +206,4 @@ The catalog, the retriever and the MCP servers are **not** probed. All are loade
 
 ## 9. Rollback
 
-> **TBD — Stage 6.** Image tags are immutable; every migration has a working `downgrade()`. The awkward case is a migration that re-embeds under a new `model_version` — rollback is a config change back to the previous version, which is exactly why old vectors are kept until the new set is verified.
+> **TBD — v2.0.** Image tags are immutable; every migration has a working `downgrade()`. The awkward case is a migration that re-embeds under a new `model_version` — rollback is a config change back to the previous version, which is exactly why old vectors are kept until the new set is verified.

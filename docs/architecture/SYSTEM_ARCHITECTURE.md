@@ -391,7 +391,7 @@ sequenceDiagram
     Note over API,X: The executor is never reached.<br/>No retry, no feedback to the model —<br/>self-correction is Stage 4 and does<br/>not exist in any code path.
 ```
 
-> **TBD — Stage 4.** Two diagrams cannot be drawn honestly yet, because the loop they describe is unbuilt: **(c) validation failure with self-correction**, and **(d) multi-step decomposition with synthesis**. Drawing them now would put arrows on this page for code that does not exist, which is the failure [ADR-012](DECISIONS.md#adr-012--documentation-written-per-stage-not-up-front) exists to prevent. Diagram (b) above is what actually happens in the failure case today.
+> **TBD — v2.0.** Two diagrams cannot be drawn honestly yet, because the loop they describe is unbuilt: **(c) validation failure with self-correction**, and **(d) multi-step decomposition with synthesis**. Drawing them now would put arrows on this page for code that does not exist, which is the failure [ADR-012](DECISIONS.md#adr-012--documentation-written-per-stage-not-up-front) exists to prevent. Diagram (b) above is what actually happens in the failure case today.
 
 The distinction worth diagramming carefully when (c) lands: what the agent observes on a **timeout** versus a **syntax error**. A syntax error is deterministic and structural — retry with a fixed query. A timeout is a resource signal — retry with a narrower query, a tighter filter, or give up and report. Conflating them makes the self-correction loop retry the wrong thing.
 
@@ -416,7 +416,7 @@ Recorded with alternatives and tradeoffs in [DECISIONS.md](DECISIONS.md). The lo
 
 ## 7. Scalability
 
-> **TBD — Stage 6**, with numbers from the load tests in [../development/TESTING.md](../development/TESTING.md).
+> **TBD — v2.0**, with numbers from the load tests in [../development/TESTING.md](../development/TESTING.md).
 
 Planned analysis:
 

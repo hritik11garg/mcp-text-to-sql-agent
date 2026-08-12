@@ -193,17 +193,17 @@ Its scoping is a design constraint rather than a configuration choice: the publi
 
 | Configuration | Exec. acc. | Recall@5 | Invalid (pre) | Invalid (post) | p95 latency | $/query |
 |---|---|---|---|---|---|---|
-| Full schema, no retrieval | TBD — Stage 2 | — | TBD | TBD | TBD — Stage 6 | TBD |
+| Full schema, no retrieval | TBD — Stage 2 | — | TBD | TBD | TBD — v2.0 | TBD |
 | Baseline retriever (`retrieval-only`, `k=30`) | **79.9%** | **0.9435** | **1.4%** | — | **p95 7.62 s** ⚠ | **$0.00** † |
-| Baseline + validation | TBD — Stage 2 | TBD | TBD | TBD | TBD — Stage 6 | TBD |
-| Baseline + validation + self-correction | TBD — Stage 4 | TBD | TBD | TBD | TBD — Stage 6 | TBD |
-| **Fine-tuned retriever (full pipeline)** | TBD — Stage 5 | TBD | TBD | TBD | TBD — Stage 6 | TBD |
+| Baseline + validation | TBD — Stage 2 | TBD | TBD | TBD | TBD — v2.0 | TBD |
+| Baseline + validation + self-correction | TBD — Stage 4 | TBD | TBD | TBD | TBD — v2.0 | TBD |
+| **Fine-tuned retriever (full pipeline)** | TBD — Stage 5 | TBD | TBD | TBD | TBD — v2.0 | TBD |
 
 **The measured row now covers the whole split — 921 of 921 questions, 20 of 20 databases ([BENCHMARKS.md](BENCHMARKS.md) §1.1) — and still must not be read as a Spider result**, for the two reasons stated on every row there: single-database execution accuracy rather than Test Suite Accuracy, and 113 questions excluded with reasons. Per-database it spans 54.8% to 100%, so the average describes no individual schema. `k` belongs to the row: the same configuration at `k=10` scores 42.7%.
 
 **† on the cost cell** — `$0.00` is the free tier the run actually used. At **standard on-demand** list price on 2026-08-08 the same run bills **$0.17**, or about half that batched; [BENCHMARKS §6](BENCHMARKS.md) prices it across thirteen models and `python -m evals.cost` regenerates the table.
 
-**⚠ on the latency cell** — it is measured over 921 questions but the dominant term is a free-tier provider's queue, not this system; it does not close Stage 6. See [PERFORMANCE.md](../operations/PERFORMANCE.md) §5.
+**⚠ on the latency cell** — it is measured over 921 questions but the dominant term is a free-tier provider's queue, not this system; it does not close the saturation work, which is v2.0. See [PERFORMANCE.md](../operations/PERFORMANCE.md) §5.
 
 **The `Invalid (post)` column is empty, and the `Baseline + validation` row will not fill it.** `retrieval-only` runs no validator, so `validation_attempts` is 0 on all 921 artifacts *by construction* and the 1.4% is queries PostgreSQL refused.
 

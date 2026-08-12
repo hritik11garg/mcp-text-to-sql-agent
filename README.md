@@ -74,34 +74,39 @@ Why validation and execution are separate capabilities, how blast radius is boun
 
 > **There is a page now.** `npm run build` in `web/`, point `API_STATIC_DIR` at `web/dist`, and `http://127.0.0.1:8000/` asks a question and draws each phase against a real time axis as the events arrive. Exact commands and expected output: [DEMO_SCRIPT.md](docs/project/DEMO_SCRIPT.md).
 >
-> The `curl` below is the same thing without a browser, and it is still the fastest way to confirm the service works.
+> The `curl` below is the same question without a browser, and it is still the fastest way to confirm the service works.
 
 ![Asking a question and watching it answered](docs/assets/demo.gif)
 
-*Recorded against Spider's `concert_singer` schema. The question is English; everything below it is the system's own output.*
+*Recorded 2026-08-12 against the **demo schema `docker compose up` seeds** — the same question, database and build a reader gets from the two commands above. The question is English; everything below it is the system's own output.*
 
 **What to look at, in the order it appears.** The **generated SQL** arrives before any row does — a `JOIN` with a `GROUP BY` and a `HAVING`, which the model wrote and which validation and the read-only role both had to pass. Then the rows. Then, down the left, **how long each phase actually took**, drawn to scale.
 
-That rail is the point. It is a time axis, not a progress bar: `retrieve` 344 ms, `generate` 930 ms, `execute` 27 ms — and the segments are that different in length. A stepper with four checkmarks would look identical whether execution took 27 milliseconds or twenty seconds, which is precisely how a model checkpoint load once hid inside an aggregate here and got written up as a slow provider ([ADR-040](docs/architecture/DECISIONS.md#adr-040--startup-opens-the-model-because-naming-it-is-not-loading-it)).
+That rail is the point. It is a time axis, not a progress bar: `retrieve` 97 ms, `generate` 843 ms, `execute` 32 ms — and the segments are that different in length. A stepper with four checkmarks would look identical whether execution took 32 milliseconds or twenty seconds, which is precisely how a model checkpoint load once hid inside an aggregate here and got written up as a slow provider ([ADR-040](docs/architecture/DECISIONS.md#adr-040--startup-opens-the-model-because-naming-it-is-not-loading-it)).
 
-The footer carries a **second** set of timings — the server's own, measured inside the process. The rail is what the browser observed, network included. They are different quantities, so both are shown and neither is quietly substituted for the other ([ADR-044](docs/architecture/DECISIONS.md#adr-044--two-clocks-both-reported-neither-substituted-for-the-other)).
+The footer carries a **second** set of timings — `answer 917 ms · execute 17 ms · server total 934 ms`, the server's own, measured inside the process. The rail is what the browser observed, network included. They are different quantities, so both are shown and neither is quietly substituted for the other ([ADR-044](docs/architecture/DECISIONS.md#adr-044--two-clocks-both-reported-neither-substituted-for-the-other)).
+
+> **Until 2026-08-12 this recording was made against Spider's `concert_singer`**, which is the corpus the 79.9% is measured on and is *not* what the one-command path loads. So the page a reader saw first showed a schema they did not have — and the input's placeholder suggested *"How many singers are there?"*, a question that could only fail against the seeded demo database. Both are fixed. The rule it cost: **a demo has to run on the thing the install instructions install.**
 
 ```console
-$ curl -s -X POST http://127.0.0.1:8000/v1/query -H 'Content-Type: application/json'     -d '{"question": "How many singers are there?"}'
+$ curl -s -X POST http://127.0.0.1:8000/v1/query -H 'Content-Type: application/json' \
+      -d '{"question": "How many events did each genre have? Only genres with more than 50 events."}'
 {
-  "sql": "SELECT COUNT(*) FROM singer;",
-  "columns": ["count"], "rows": [[6]], "row_count": 1,
-  "truncated": false, "executed": true,
-  "steps": [{"stage": "answer",  "duration_ms": 1542.0, "status": "ok"},
-            {"stage": "execute", "duration_ms": 10.6,   "status": "ok"}],
-  "usage": {"input_tokens": 501, "output_tokens": 43}
+  "sql": "SELECT a.genre, COUNT(*) AS event_count\nFROM event e\nJOIN artist a ON e.artist_id = a.id\nGROUP BY a.genre\nHAVING COUNT(*) > 50;",
+  "columns": ["genre", "event_count"],
+  "rows": [["rock",80],["folk",88],["jazz",75],["electronic",84],["classical",73]],
+  "row_count": 5, "truncated": false, "executed": true,
+  "steps": [{"stage": "answer",  "duration_ms": 1046.0, "status": "ok"},
+            {"stage": "execute", "duration_ms": 12.9,   "status": "ok"}],
+  "usage": {"input_tokens": 435, "output_tokens": 209}
 }
 ```
 
 Or streamed, which is the same work reported as it happens — the generated SQL arrives before any row does:
 
 ```console
-$ curl -sN -X POST http://127.0.0.1:8000/v1/query -H 'Content-Type: application/json'       -d '{"question": "How many singers are there?", "stream": true}'
+$ curl -sN -X POST http://127.0.0.1:8000/v1/query -H 'Content-Type: application/json' \
+      -d '{"question": "How many events did each genre have? Only genres with more than 50 events.", "stream": true}'
 event: stage
 data: {"stage":"retrieve","status":"ok"}
 
@@ -109,16 +114,16 @@ event: stage
 data: {"stage":"generate","status":"ok"}
 
 event: sql
-data: {"sql":"SELECT COUNT(*) FROM singer;","attempt":1}
+data: {"sql":"SELECT a.genre, COUNT(*) AS event_count\nFROM event e\nJOIN artist a ON e.artist_id = a.id\nGROUP BY a.genre\nHAVING COUNT(*) > 50;","attempt":1}
 
 event: stage
 data: {"stage":"execute","status":"ok"}
 
 event: rows
-data: {"columns":["count"],"rows":[[6]],"truncated":false}
+data: {"columns":["genre","event_count"],"rows":[["rock",80],["folk",88],["jazz",75],["electronic",84],["classical",73]],"truncated":false}
 
 event: done
-data: {"row_count":1,"executed":true,"steps":[...],"usage":{...}}
+data: {"row_count":5,"executed":true,"steps":[...],"usage":{"input_tokens":435,"output_tokens":251}}
 ```
 
 Run against Spider's `concert_singer` schema, converted and loaded by this repo's own benchmark loader. Ask for `max_rows: 3` on a larger result and the limit is injected into the AST, with `truncated: true` on the way back — a client is never handed a clipped result that claims to be complete.
@@ -476,16 +481,16 @@ Each document is **filled in as its stage lands** — one that would otherwise c
 | [DATABASE](docs/architecture/DATABASE.md) | ER diagram, tables, indexes, read-only role, migrations | Stage 1 |
 | [DECISIONS](docs/architecture/DECISIONS.md) | Decision log with alternatives and tradeoffs | Continuous |
 | **Machine learning** | | |
-| [TRAINING](docs/ml/TRAINING.md) | Dataset, pipeline, hyperparameters, loss, ablations, export | Stage 5 |
+| [TRAINING](docs/ml/TRAINING.md) | Dataset, pipeline, hyperparameters, loss, ablations, export | **v2.0 — not started** |
 | [EVALUATION](docs/ml/EVALUATION.md) | Metric definitions, harness design, failure taxonomy | Stage 2 |
 | [BENCHMARKS](docs/ml/BENCHMARKS.md) | Append-only log of every measured run | Stage 2+ |
 | [DATASETS](docs/ml/DATASETS.md) | Spider, BIRD, splits, licenses | Stage 2 |
 | [PROMPTS](docs/ml/PROMPTS.md) | System, planner, SQL, retry, summarizer prompts | Stage 1 |
 | **Operations** | | |
-| [SECURITY](docs/operations/SECURITY.md) | Threat model, SQL/prompt injection, secrets, audit | Stage 1 / 6 |
-| [DEPLOYMENT](docs/operations/DEPLOYMENT.md) | Docker, Compose, production setup, scaling, health checks | Stage 6 |
-| [OBSERVABILITY](docs/operations/OBSERVABILITY.md) | Logging, tracing, metrics, alerts, dashboards | Stage 6 |
-| [PERFORMANCE](docs/operations/PERFORMANCE.md) | Latency targets and measured results | Stage 6 |
+| [SECURITY](docs/operations/SECURITY.md) | Threat model, SQL/prompt injection, secrets, audit | v1.0 · authentication v2.0 |
+| [DEPLOYMENT](docs/operations/DEPLOYMENT.md) | Docker, Compose, the demo dataset, health checks | v1.0 · shared deploys v2.0 |
+| [OBSERVABILITY](docs/operations/OBSERVABILITY.md) | Logging, tracing, metrics, alerts, dashboards | **v2.0 — design only, nothing wired** |
+| [PERFORMANCE](docs/operations/PERFORMANCE.md) | Latency targets and measured results | v1.0 end-to-end · saturation v2.0 |
 | [CONFIG](docs/operations/CONFIG.md) | Every env var, feature flag, limit, and default | Stage 1 |
 | [TROUBLESHOOTING](docs/operations/TROUBLESHOOTING.md) | Docker, Postgres, pgvector, MCP, LLM, training failures | Continuous |
 | **Development** | | |

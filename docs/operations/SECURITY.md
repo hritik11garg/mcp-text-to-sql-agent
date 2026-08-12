@@ -1,6 +1,6 @@
 # Security
 
-> **Status: threat model and containment design are decided now** — they shape Stage 1 rather than being retrofitted in Stage 6. Rate limiting, dependency scanning, and audit implementation are marked per stage.
+> **Status: threat model and containment design are decided now** — they shape the first slice rather than being retrofitted at the end. Rate limiting, dependency scanning, and audit implementation are marked per stage.
 
 The core security claim of this project: **an LLM writes SQL that runs against a real database, and the blast radius is bounded regardless of what the LLM writes.** That has to hold when the model is wrong, when the model is manipulated, and when the validation layer has a bug.
 
@@ -134,7 +134,7 @@ That last point is why §4's limitation matters: with a single trust level, "dat
 
 ## 8. Rate limiting
 
-> **TBD — Stage 6.**
+> **TBD — v2.0.**
 
 Two independent reasons: the database (concurrent expensive queries) and the LLM bill.
 
@@ -156,8 +156,8 @@ Planned:
 - Loaded from environment via `pydantic-settings`; `.env` is gitignored, `.env.example` carries placeholders only. See [CONFIG.md](CONFIG.md).
 - Secret-typed settings use `SecretStr` so accidental `repr()` does not leak them.
 - Database URL is redacted in every log line and span attribute — **and in driver exception text**, which is where it actually escaped. psycopg quotes the connection string it was handed in its parse errors, so `str(exc)` renders the password. `core/dsn.redact_dsn()` is applied where the exception becomes a message, and §14.2.10 has the full analysis. This bullet existed before anything enforced it.
-- **Rotation:** database password and API key rotate independently. Procedure **TBD — Stage 6**.
-- Pre-commit secret scanning: **TBD — Stage 6**.
+- **Rotation:** database password and API key rotate independently. Procedure **TBD — v2.0**.
+- Pre-commit secret scanning: **TBD — v2.0**.
 
 ## 10. Dependency scanning
 
@@ -313,7 +313,7 @@ Reviewed twice: once when the app skeleton landed (`create_app`, `/health`, `/re
 3. **SSRF from another service.** An unrelated app on the same network with a request-forgery bug becomes a proxy into this one — no credential to steal, because there isn't one.
 4. **Cost exhaustion.** Not a data attack at all: a loop against `/v1/query` spends the daily token cap, which on a free tier is the whole day's budget.
 
-**Secure implementation.** Authentication is Stage 6 work and is not in this slice. What *is* in this slice is refusing the configurations where its absence is exploitable:
+**Secure implementation.** Authentication is v2.0 work and is not in this release. What *is* in this slice is refusing the configurations where its absence is exploitable:
 
 | Control | What it does |
 |---|---|
@@ -764,7 +764,7 @@ On the AST all four are the same operation. **Smaller wins**: a caller asking fo
 
 **The audit runs as the owner, on a separate connection.** The read-only role has no privileges on `agent_meta`, so generated SQL cannot read, alter or erase the record of itself — asserted directly, with `SELECT`, `DELETE` and `INSERT` against `query_audit` all refused for the read-only role. Rejected attempts are recorded too: a query that never ran is exactly what an audit trail is for. **Result values are never stored**, only shapes and outcomes; writing rows here would copy the protected data into a second store and undo the point of bounding what the role can reach.
 
-**One trade, stated rather than buried.** An audit write failure is logged, not raised. A transient problem with `agent_meta` would otherwise fail every read the system serves. The compensating control is that the error log carries the same fields, so the record survives in a second place — and Stage 6 must alert on it, because an audit gap nobody is told about is the same as no audit. **CIA: Integrity** of the trail, traded for **Availability** of the service.
+**One trade, stated rather than buried.** An audit write failure is logged, not raised. A transient problem with `agent_meta` would otherwise fail every read the system serves. The compensating control is that the error log carries the same fields, so the record survives in a second place — and v2.0's alerting must cover it, because an audit gap nobody is told about is the same as no audit. **CIA: Integrity** of the trail, traded for **Availability** of the service.
 
 ### 14.2.5 What actually crosses the network boundary
 
@@ -1057,6 +1057,6 @@ except SqlglotError as exc:
 
 ## 15. Incident response
 
-> **TBD — Stage 6.**
+> **TBD — v2.0.**
 
 Minimum viable procedure: revoke the read-only role's login → query `query_audit` by time range → correlate to traces via `request_id` → rotate credentials → record findings here.

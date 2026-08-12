@@ -209,7 +209,7 @@ Split assignments are committed as a file, not regenerated — a split that chan
 
 ## 6. Custom evaluation set
 
-> **TBD — Stage 4.**
+> **TBD — v2.0.**
 
 Spider and BIRD are single-query benchmarks. The multi-step decomposition claim needs compound questions ("compare Q3 vs Q4 growth by region and flag anomalies"), which neither provides. A small hand-authored set (~30–50 tasks) over the same databases will be needed, with rubrics rather than gold SQL, since multiple query decompositions can be correct.
 

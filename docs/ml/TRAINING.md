@@ -100,7 +100,7 @@ Runs are driven by a `typer` CLI so every result is reproducible from a recorded
 
 ## 6. Hyperparameters
 
-> **TBD — Stage 5.** Starting points, to be swept:
+> **TBD — v2.0.** Starting points, to be swept:
 
 | Parameter | Starting value | Notes |
 |---|---|---|
@@ -125,7 +125,7 @@ Runs are driven by a `typer` CLI so every result is reproducible from a recorded
 
 ## 8. Ablation studies
 
-> **TBD — Stage 5.** The comparisons that determine whether the ML work earned its place:
+> **TBD — v2.0.** The comparisons that determine whether the ML work earned its place:
 
 | # | Comparison | Question answered |
 |---|---|---|
@@ -155,4 +155,4 @@ Defined in [EVALUATION.md](EVALUATION.md). Rules enforced here:
 
 ## 11. Reproducing a run
 
-> **TBD — Stage 5.** Exact command line, expected wall-clock, and hardware requirements. Written so the run can be reproduced from a clean checkout — a training result that cannot be re-run is not a result.
+> **TBD — v2.0.** Exact command line, expected wall-clock, and hardware requirements. Written so the run can be reproduced from a clean checkout — a training result that cannot be re-run is not a result.

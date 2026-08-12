@@ -174,7 +174,7 @@ Three deliberate breaks to `_Admission` — remove the refusal, make `release()`
 
 > **A concurrency test that hangs when the property breaks is worse than no test**: it fails the build with a timeout that names nothing, and locally it just stops.
 
-### Load and soak — TBD, Stage 6
+### Load and soak — TBD, v2.0
 
 Still absent, and needing a running server and a pipeline: sustained throughput within the p95 target; behaviour past pool saturation against a real database; memory per replica over hours; the effect of one expensive query on concurrent latency. Feeds [../operations/PERFORMANCE.md](../operations/PERFORMANCE.md) §4.
 

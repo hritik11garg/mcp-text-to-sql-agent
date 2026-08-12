@@ -172,44 +172,36 @@ data: {"row_count":1,"executed":true,"steps":[...],"usage":{...}}
 
 **This is the demo now.** Segments 1 and 1b are the same work in a terminal and remain the fastest way to prove the service is up, but nobody evaluating this project will read `curl` output on a shared screen if a page is available.
 
-**Setup** — one extra step over segment 1, done well before the room:
+**Setup — nothing beyond segment 0.** `docker compose up` builds the bundle, serves it, and seeds the schema this is recorded against. Open `http://127.0.0.1:8000/`.
+
+To run it from a checkout instead, `web/dist` has to exist and `API_STATIC_DIR` has to point at it:
 
 ```powershell
 cd web; npm ci; npm run build           # produces web/dist
 $env:API_STATIC_DIR   = "$PWD\..\web\dist"
-$env:DB_TARGET_SCHEMA = "spider_concert_singer"
-$env:DATASET          = "spider_concert_singer"
-$env:RETRIEVAL_TOP_K  = "30"
 python -m api                           # then open http://127.0.0.1:8000/
 ```
 
-The equivalent in `bash` is `API_STATIC_DIR=... DB_TARGET_SCHEMA=... python -m api` — the setup above is PowerShell, and `$env:` syntax pasted into `bash` sets nothing and fails silently on a schema the catalog does not have.
+The equivalent in `bash` is `API_STATIC_DIR=... python -m api` — the block above is PowerShell, and `$env:` syntax pasted into `bash` sets nothing and fails silently.
 
 ![The page answering a question](../assets/demo.gif)
-
-**Verified 2026-08-08 in Chrome**, against `spider_concert_singer`, question *"Show the name and country of every singer, oldest first"*:
-
-| What appears | Value in that run |
-|---|---|
-| Generated SQL, highlighted | `SELECT name, country FROM singer ORDER BY age DESC;` |
-| Result | 6 rows, name and country |
-| Rail — observed, per phase | `retrieve` 342 ms · `generate` 674 ms · `execute` 12 ms · `done` 2 ms |
-| Footer — server's own timings | `answer` 698 ms · `execute` 12 ms · **server total 711 ms** · 506 in / 119 out |
-
-**A second recorded run, and the better question to ask on a shared screen** — *"Which stadiums have hosted more than one concert?"* It produces a `JOIN` with a `GROUP BY` and a `HAVING`, which reads as real SQL rather than a `COUNT(*)`:
 
 ![The generated SQL and the result](../assets/ui-answer.jpg)
 
 ![The rail, with per-phase timings](../assets/ui-timings.jpg)
 
-| | |
-|---|---|
-| Generated SQL | `SELECT s.name FROM stadium s JOIN concert c ON c.stadium_id = s.stadium_id GROUP BY s.stadium_id, s.name HAVING COUNT(c.concert_id) > 1;` |
-| Result | 1 row — `Somerset Park` |
-| Rail — observed | `retrieve` 344 ms · `generate` 930 ms · `execute` 27 ms · `done` 1 ms |
-| Footer — server-timed | `answer` 962 ms · `execute` 27 ms · **server total 989 ms** · 505 in / 218 out |
+**Recorded 2026-08-12 in Chrome**, against the seeded demo schema, question *"How many events did each genre have? Only genres with more than 50 events."*:
 
-**Use this question rather than the counting one if there is time for only one.** A `COUNT(*)` is a weak demonstration — a viewer cannot tell whether the model understood the schema or guessed. A join with a grouped having clause has to get four things right, and the read-only role and the validator both had to pass it.
+| What appears | Value in that run |
+|---|---|
+| Generated SQL, highlighted | `SELECT a.genre, COUNT(*) AS event_count FROM event e JOIN artist a ON e.artist_id = a.id GROUP BY a.genre HAVING COUNT(*) > 50;` |
+| Result | 5 rows — rock 80, folk 88, jazz 75, electronic 84, classical 73 |
+| Rail — observed, per phase | `retrieve` 97 ms · `generate` 843 ms · `execute` 32 ms · `done` 0 ms |
+| Footer — server's own timings | `answer` 917 ms · `execute` 17 ms · **server total 934 ms** · 435 in / 251 out |
+
+**Ask a question that produces a join, not a `COUNT(*)`.** A bare count is a weak demonstration — a viewer cannot tell whether the model understood the schema or guessed. A join with a grouped `HAVING` clause has to get four things right, and the validator and the read-only role both had to pass it.
+
+> **These three images were re-recorded on 2026-08-12, and the reason is the reusable lesson.** They previously showed Spider's `concert_singer` — *"Which stadiums have hosted more than one concert?"*, `retrieve` 344 ms · `generate` 930 ms · `execute` 27 ms — which was a real run, correctly captioned, and **not a schema a reader could reach.** `docker compose up` seeds the demo database; the recording showed something else, and the page's placeholder went further and *suggested* a Spider question that could only fail. Nothing was factually wrong and the whole thing was still misleading. **A demo has to run on what the install instructions install**, and the way to keep that true is to re-record from the documented path rather than from whatever is convenient on the machine.
 
 **Three things to narrate, in this order.**
 
@@ -308,7 +300,7 @@ Three things worth adding, in this order:
 
 ## Segment 6 — Multi-step decomposition (v2.0)
 
-> **TBD — Stage 4.**
+> **TBD — v2.0.**
 
 **Question:** "Compare Q3 vs Q4 growth by region and flag anomalies."
 
@@ -316,7 +308,7 @@ Expected: the planner decomposes it, sub-queries execute, session memory holds i
 
 ## Segment 7 — Fine-tuned retriever ablation (v2.0)
 
-> **TBD — Stage 5.**
+> **TBD — v2.0.**
 
 **Point being made:** a measured ML contribution, honestly reported.
 

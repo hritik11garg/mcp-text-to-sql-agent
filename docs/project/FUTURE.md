@@ -59,7 +59,7 @@ Cut reasons: `scope` (good, doesn't fit 6 weeks) · `unproven` (needs a measurem
 ### Distributed execution
 `complexity` · Route queries across read replicas.
 
-**Why not v1.** Solves a scale problem that does not exist yet. The load tests in Stage 6 will say whether a single database is actually the constraint.
+**Why not v1.** Solves a scale problem that does not exist yet. The load tests in v2.0 will say whether a single database is actually the constraint.
 
 ### Incremental / streaming results
 `scope` · Stream rows as they arrive rather than materializing the full set.

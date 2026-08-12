@@ -58,7 +58,16 @@ export function QuestionForm({
           onChange={(e) => onQuestionChange(e.target.value)}
           maxLength={MAX_QUESTION_CHARS}
           rows={2}
-          placeholder="How many singers are there?"
+          // A placeholder is a suggestion, and a suggestion that fails is worse
+          // than none. This read "How many singers are there?" until 2026-08-12
+          // -- a question about Spider's `concert_singer`, which is what the
+          // page was first demoed against. The one-command path seeds the demo
+          // schema (venue / artist / event), which has no `singer` table, so
+          // the first thing a new reader saw was an invitation to a query that
+          // could only fail. Kept generic on purpose: this component does not
+          // know which schema is loaded, and inventing a per-schema hint here
+          // would put a second source of truth for the catalog in the browser.
+          placeholder="Which artists played the most events?"
           spellCheck={false}
           disabled={busy}
         />

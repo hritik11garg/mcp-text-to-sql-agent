@@ -71,7 +71,7 @@ Collapsing these into "the query failed, try again" wastes the retry budget re-s
 
 ## 4. Prompt caching strategy
 
-> **TBD — Stage 6** for measured hit rates.
+> **TBD — v2.0** for measured hit rates.
 
 Render order is `tools` → `system` → `messages`. Stability order must match:
 
