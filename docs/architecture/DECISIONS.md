@@ -1248,6 +1248,8 @@ That is a complete, coherent product with a defensible boundary: **one question 
 5. Container image builds, the compose stack starts, and migrations run as a one-shot service.
 6. CI is green and load-bearing: lint, types, tests, docs links, and a security suite that fails rather than skips.
 
+**All six met, verified 2026-08-12** at commit `30ad669` — five jobs green on the runner, not on a laptop. Criterion 6 is listed last and was the last to close, which is not a coincidence: it is the only one whose subject is the *pipeline* rather than the code, and it had been failing since the workflow landed while the other five were true. **"Green" was assumed for four commits** because every local run used `python -m pytest` and CI used `pytest`, and only the first form puts the repository root on `sys.path`. The wording *"green **and load-bearing**"* was written to guard against a pipeline that passes without checking anything; the failure that actually occurred was the opposite and the criterion caught it anyway, for the reason both halves are one sentence — **a pipeline nobody reads is not load-bearing, whatever colour it is.**
+
 **Generalises to:** scope is a claim about what is finished, and it is the one claim a reader evaluates before any other. A project is not made more impressive by describing a larger system than it contains — the comparison a reader makes is against the description, and the description is the only part the author controls.
 
 ---
