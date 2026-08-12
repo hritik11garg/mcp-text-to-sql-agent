@@ -1,8 +1,8 @@
 # Demo Script
 
-> **Status: segments 1, 1b and 1c are real and recorded — non-streaming, streamed, and in a browser. The rest are TBD per stage.** Structure and discipline below were decided at Stage 0; these segments carry output that was actually produced rather than imagined. **Segment 1 was re-recorded on 2026-08-07 because the original narration turned out to be wrong**, which is still the most useful thing in this file, and everything here was re-run on 2026-08-08 against the current code.
+> **Status: segments 0, 1, 1b and 1c are real and recorded** — one-command startup, non-streaming, streamed, and in a browser. Segments 6–8 are **v2.0** and are marked as unbuilt rather than as unwritten. Structure and discipline below were decided at Stage 0; the recorded segments carry output that was actually produced rather than imagined. **Segment 1 was re-recorded on 2026-08-07 because the original narration turned out to be wrong**, which is still the most useful thing in this file.
 >
-> **Open with 1c.** It is the only segment a person can watch, and the two before it are the same work without a browser.
+> **Open with 0, then 1c.** Segment 0 is the shortest path from nothing to a working system and it is the claim most portfolios cannot make. 1c is the only segment a person can *watch*.
 
 Exact commands, exact questions, expected output. Written so the demo can be run under pressure without improvising — an interview is not the place to discover that the database needs re-seeding.
 
@@ -14,14 +14,24 @@ Exact commands, exact questions, expected output. Written so the demo can be run
 
 Run 10 minutes before, not 30 seconds before.
 
-- [ ] `docker compose ps` — Postgres healthy
-- [ ] `curl localhost:8000/ready` — all dependencies green
+**If demoing from Compose (segment 0), which is the recommended path:**
+
+- [ ] `.env` exists with `POSTGRES_PASSWORD`, `SQL_AGENT_RO_PASSWORD` and `LLM_API_KEY` set
+- [ ] `docker compose up` run **once already**, so the image is built and the ~90 MB embedding model is in the `hfcache` volume. A cold first build is several minutes and is not a demo
+- [ ] `curl 127.0.0.1:8000/ready` — `{"database":"up","database_readonly":"up"}`
+- [ ] `curl -s -o /dev/null -w '%{http_code}' 127.0.0.1:8000/` returns `200`
+- [ ] **One throwaway question already asked**, so the model checkpoint is loaded and the browser cache is warm. The first request after startup is the slow one
+
+**Additionally, if demoing the Spider segments (1, 1b, 1c, 4) from a local checkout:**
+
 - [ ] Vectors present for the configured `RETRIEVER_MODEL`
 - [ ] `LLM_API_KEY` set and working — `python -m generation.check` verifies the provider in one round trip
 - [ ] Target dataset loaded **and verified** — `python -m benchmark.load verify ...` exits 0
-- [ ] Terminal font large enough to read on a shared screen
 - [ ] **`web/dist` built and `API_STATIC_DIR` pointing at it** — `curl localhost:8000/` returns HTML, not a `404`. The process refuses to start if the path is wrong, so a successful start is the check
-- [ ] **One throwaway question already asked**, so the model checkpoint is loaded and the browser cache is warm. The first request after startup is the slow one
+
+**Always:**
+
+- [ ] Terminal font large enough to read on a shared screen
 - [ ] Recorded fallback video accessible offline
 - [ ] An MCP host configured (MCP Inspector via `npx` is the zero-account option; any stdio host works)
 
@@ -29,9 +39,46 @@ Run 10 minutes before, not 30 seconds before.
 
 ---
 
-## Segment 1 — Single-query text-to-SQL (Stage 1) — **runnable**
+## Segment 0 — Nothing to a working system, in one command — **runnable**
+
+**Point being made:** this is not a repository of components. It starts.
+
+```bash
+cp .env.example .env      # set POSTGRES_PASSWORD, SQL_AGENT_RO_PASSWORD, LLM_API_KEY
+docker compose up
+```
+
+Four services in order: Postgres with pgvector comes up healthy, `migrate` applies every Alembic revision and exits, `seed` builds and indexes the demo database and exits, `api` serves the endpoint and the built UI. Then open **http://127.0.0.1:8000**.
+
+**Recorded output** — run 2026-08-11 from **empty volumes**, commit `371754a`:
+
+```console
+$ curl -s -X POST http://127.0.0.1:8000/v1/query -H 'Content-Type: application/json' \
+      -d '{"question": "How many events did each genre have? Only genres with more than 50 events."}'
+{"sql": "SELECT a.genre, COUNT(*) AS event_count\nFROM event e\nJOIN artist a ON e.artist_id = a.id\nGROUP BY a.genre\nHAVING COUNT(*) > 50;",
+ "columns": ["genre", "event_count"],
+ "rows": [["rock",80],["folk",88],["jazz",75],["electronic",84],["classical",73]],
+ "row_count": 5, "truncated": false, "executed": true,
+ "usage": {"input_tokens": 435, "output_tokens": 249}}
+```
+
+2.7 seconds, and the counts match what the read-only role returns for the same query by hand.
+
+**Three things worth saying over this, in order of how much they land:**
+
+1. **The dataset is generated, not downloaded.** `src/demo/` builds an original three-table schema from a fixed seed. Spider is what the *benchmark* measures — it is 100 MB under CC BY-SA, and asking a reader to fetch it before anything works is how a "one command" claim becomes four.
+2. **The model wrote a `JOIN` with a `GROUP BY` and a `HAVING`** from a sentence, and it passed five stages of validation and a read-only role before a row came back.
+3. **The published port is `127.0.0.1:8000`, not `8000`.** The API binds `0.0.0.0` inside its namespace with `API_ALLOW_NON_LOOPBACK` set, because a container's published port forwards to its bridge interface and not its loopback. Those two halves are one decision — [SECURITY.md §13.17](../operations/SECURITY.md). It is a good answer to "how do you think about deploying something that has no auth yet".
+
+**If asked what breaks this:** the LLM provider. Everything else in the stack is local, and the whole test suite runs with no key at all.
+
+---
+
+## Segment 1 — Single-query text-to-SQL, against Spider — **runnable**
 
 **Point being made:** English in, correct SQL out, against a real database under real constraints.
+
+> **This segment needs a local Spider load; segment 0 does not.** It is kept because the database it runs against is **the same one the 79.9% was measured on**, which is a different claim from the demo dataset's — here the answer can be checked against a gold query somebody else wrote. If Spider is not loaded, run segment 0 and say so.
 
 **Setup.** Spider's `concert_singer` converted into PostgreSQL by this repo's own loader, indexed, and served:
 
@@ -186,7 +233,7 @@ Mention that the scale is square-root compressed and labelled as such on the pag
 **Failure mode to know before the room.** If the page loads but no events arrive and the answer lands all at once, a proxy is buffering the stream — [DEPLOYMENT.md](../operations/DEPLOYMENT.md) §5.1. It fails *silently*: the answer is still correct, so nothing looks broken except the thing being demonstrated. Locally there is no proxy, which is why the demo runs against `127.0.0.1` directly.
 
 
-## Segment 2 — The validation tier (Stage 1)
+## Segment 2 — The validation tier
 
 > **TBD — Stage 1.**
 
@@ -198,7 +245,7 @@ Show a question that produces a wrong column reference on the first attempt: `va
 
 **Recorded output:** TBD
 
-## Segment 3 — Bounded blast radius (Stage 1)
+## Segment 3 — Bounded blast radius
 
 > **TBD — Stage 1.**
 
@@ -216,7 +263,7 @@ Step 3 is the one worth doing deliberately. Blocking `DELETE` is the obvious con
 
 **Recorded output:** TBD
 
-## Segment 4 — Eval harness (Stage 2) — **the numbers exist**
+## Segment 4 — Eval harness — **the numbers exist**
 
 **Point being made:** the numbers are reproducible, and the baseline exists before any claimed improvement.
 
@@ -244,7 +291,7 @@ Three things worth adding, in this order:
 
 **If asked about self-correction, say it is not built.** The `with-validation` baseline validates once and drops a failing query — a gate, with no retry and no feedback to the model. Error-feedback self-correction is Stage 4. Claiming otherwise is the mistake this file exists to prevent.
 
-## Segment 5 — MCP from any host (Stage 3)
+## Segment 5 — MCP from any host
 
 > **TBD — Stage 3.**
 
@@ -259,7 +306,7 @@ Three things worth adding, in this order:
 
 **The strongest segment for a portfolio.** Someone can point their own host at these servers and query their own database — rare enough that people actually try it.
 
-## Segment 6 — Multi-step decomposition (Stage 4)
+## Segment 6 — Multi-step decomposition (v2.0)
 
 > **TBD — Stage 4.**
 
@@ -267,7 +314,7 @@ Three things worth adding, in this order:
 
 Expected: the planner decomposes it, sub-queries execute, session memory holds intermediates, synthesis composes the answer. Then a follow-up ("just the top three") resolving against memory without re-running everything.
 
-## Segment 7 — Fine-tuned retriever ablation (Stage 5)
+## Segment 7 — Fine-tuned retriever ablation (v2.0)
 
 > **TBD — Stage 5.**
 
@@ -277,9 +324,9 @@ Side-by-side retrieval on a question the baseline misses. Then the A1/A2/A5 abla
 
 **Report the result whichever way it went.** If the fine-tune did not help, saying so with the measurement that shows it is a stronger position than an unmeasured claim.
 
-## Segment 8 — Observability (Stage 6)
+## Segment 8 — Observability (v2.0)
 
-> **TBD — Stage 6.**
+> **Not built — v2.0.** Do not promise this segment; say the agent loop is the next release and that the single-query path is what is measured.
 
 A trace of a self-correcting multi-step query: retries as sibling spans, latency attributed per component, cache hit rate, token spend.
 

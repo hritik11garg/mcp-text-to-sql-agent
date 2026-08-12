@@ -1,6 +1,6 @@
 # Testing
 
-> **Status: philosophy and the security test suite are decided now** (the negative tests gate Stage 1). Coverage numbers and load results are **TBD — Stage 6**.
+> **Status: the suite and its gates are built and enforced.** 1,640 collected cases across four layers; the security layer is a separately-named CI gate; **coverage is enforced at `fail_under = 85` and measured 85.12%** — wired 2026-08-12, after sitting configured and unexecuted since Stage 0. Load and soak results remain **TBD — v2.0**: they need a running deployment and a pipeline to run it in, and the concurrency half of that question is already asserted deterministically in `tests/unit/test_concurrency.py`.
 
 ---
 
@@ -190,6 +190,12 @@ These are **regression guards, not measurements**: they fail when a component ge
 
 Target: **85% on `src/`**, with 100% on validation, limit enforcement, and error classification.
 
+**Enforced 2026-08-12, and measured 85.12%.** `--cov` rides on the suite CI already runs, so `fail_under = 85` in `pyproject.toml` fails the build rather than describing an intention. It had been configured and unexecuted since Stage 0 — a published target that nothing measured, sitting in the file a reader would check to confirm it was measured ([RISKS R-17](../project/RISKS.md#r-17--documentation-drifts-from-implementation)).
+
+**The margin is 0.12 points — about seven statements — and that is recorded rather than padded.** The next commit that adds an uncovered module will fail this gate. The correct response is a test. A floor that gets lowered whenever it binds has never once held, and lowering it is indistinguishable in a diff from raising coverage.
+
+The security gate runs as a **separate invocation without `--cov`**, deliberately: coverage of that layer alone is far below the floor, so reporting it would either fail the step for the wrong reason or teach a reader to ignore a coverage line.
+
 Coverage is a floor, not a goal. The security suite would contribute a handful of percentage points and is worth more than the rest combined — which is the argument against optimizing the number. Uncovered branches are reviewed individually; a line that is genuinely untestable gets `# pragma: no cover` **with a comment saying why**.
 
 ## 11. CI
@@ -271,7 +277,9 @@ The message names the consequence and the correct fix on purpose — an error th
 
 **The security layer runs twice**, once inside the full suite and once as its own step. The second invocation costs seconds and buys an unambiguous line in the log: if that step is green, the release gate passed *by name* rather than by being included in a total.
 
-**Not yet in the pipeline**, and named rather than implied: the 85% coverage floor configured in `pyproject.toml` and currently unused; dependency, secret and container scanning; branch protection and required status checks, which are repository settings rather than a file and are the half that makes a green run mean something.
+**Landed 2026-08-12:** the 85% coverage floor is executed rather than configured, and a fifth **audit** job runs `pip-audit` over both requirement files and `npm audit` over both npm trees — four hard gates at any severity, no threshold ([ADR-050](../architecture/DECISIONS.md#adr-050--dependency-audits-are-hard-gates-at-any-severity-and-the-escape-hatch-is-a-named-exception)).
+
+**Still not in the pipeline**, named rather than implied: secret and container scanning; an SBOM and a license check; and branch protection with required status checks, which are repository settings rather than a file and are the half that makes a green run mean something.
 
 ## 15. Property-based tests
 

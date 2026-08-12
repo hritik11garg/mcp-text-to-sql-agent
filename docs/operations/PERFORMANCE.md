@@ -1,6 +1,6 @@
 # Performance
 
-> **Status: targets are set; one end-to-end row is measured, the component rows are still Stage 6.** The targets below are budgets to design against, not measurements. Measured numbers go to [../ml/BENCHMARKS.md](../ml/BENCHMARKS.md) §5 and are reflected in §5 here — including why a row that meets its target still does not close the stage.
+> **Status: targets are set; the end-to-end rows are measured, the saturation rows are v2.0.** The targets below are budgets to design against, not measurements. Measured numbers go to [../ml/BENCHMARKS.md](../ml/BENCHMARKS.md) §5 and are reflected in §5 here — including why a row that meets its target still does not close the stage.
 
 ---
 

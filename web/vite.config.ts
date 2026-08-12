@@ -26,11 +26,15 @@ export default defineConfig({
         changeOrigin: false,
         // Compression would buffer the event stream, which is the one thing
         // this UI exists to show arriving in pieces.
-        configure: (proxy) => {
-          proxy.on('proxyReq', (proxyReq) => {
-            proxyReq.setHeader('accept-encoding', 'identity');
-          });
-        },
+        //
+        // Declared rather than hooked. This was a `configure` callback reaching
+        // for `proxy.on('proxyReq', ...)` until Vite 7 swapped its proxy
+        // implementation and the handle stopped being an EventEmitter of that
+        // shape. `headers` is the option the proxy has always documented for
+        // exactly this, it is typed, and it does not reach past the interface
+        // into the library behind it -- which is why the swap broke the old
+        // form and cannot break this one.
+        headers: { 'accept-encoding': 'identity' },
       },
       '/health': { target: 'http://127.0.0.1:8000' },
       '/ready': { target: 'http://127.0.0.1:8000' },

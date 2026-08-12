@@ -161,16 +161,33 @@ Planned:
 
 ## 10. Dependency scanning
 
-> **Automation is TBD — Stage 6.** One manual scan has been run, and its results are below rather than in a terminal somebody closed.
+**Automated since 2026-08-12.** The `audit` job in `.github/workflows/ci.yml` runs four scans on every push and pull request:
 
-- `pip-audit` in CI against the pinned requirements.
-- Dependabot or equivalent for advisories.
-- Versions are pinned exactly (`==`) so a scan result maps to a known set — a floating range makes the scan a snapshot of nothing.
+| Surface | Command | Why it is its own step |
+|---|---|---|
+| Python runtime pins | `pip-audit -r requirements.txt` | What a deployment runs; reachable by anyone who can reach the service |
+| Python dev pins | `pip-audit -r requirements-dev.txt` | What a developer and a CI runner execute |
+| npm production tree | `npm audit --omit=dev` | What a user's browser loads |
+| npm dev tree | `npm audit` | The dev server and test runner, on a developer's machine |
+
+- **Every scan fails the build at any severity.** There is no `--audit-level` threshold anywhere, deliberately: a threshold silently accumulates everything beneath it and nobody ever reads the accumulation. The escape hatch is an explicit `--ignore-vuln GHSA-...` with its reason beside it, which puts the decision in a diff where it can be reviewed and revisited.
+- **The shipped and development surfaces are separate steps** so a red build says which one it is. If the production step is red and the dev step is green, the vulnerability is in something a user's browser actually loads — a different conversation from a vulnerable test runner.
+- Versions are pinned exactly (`==`) so a scan result maps to a known set — a floating range makes the scan a snapshot of nothing. The scans read the pinned **files**, not an installed environment, for the same reason.
 - `torch` and `transformers` are large surfaces; they carry more scrutiny on upgrade.
+- **Still open:** no SBOM, no license check, no secret scanning in the pipeline. Dependabot or equivalent is a repository setting rather than a file and is not enabled.
 
-### 10.1 `npm audit`, run 2026-08-10 — five advisories, all in the dev toolchain — **Medium**, and **High for a developer on Windows**
+> **What automating it was worth, measured on the one case available.** §10.1 below was found by a hand-run scan on 2026-08-10 — run because somebody happened to be installing a package, not because anything asked. It then sat open for two days as a *documented* vulnerability, which is better than an undocumented one and is not a fix. A scan that runs when a human remembers is a control whose coverage is somebody's attention.
 
-Run while adding `fast-check`. **Nothing here reaches a deployed user**: production serves files built by `vite build` and handed to FastAPI, and every advisory below is in code that only runs on a developer's machine — the dev server, its bundler, or the Vitest UI.
+### 10.1 ~~`npm audit`, run 2026-08-10~~ — five advisories, all in the dev toolchain — **Medium**, and **High for a developer on Windows** — **fixed 2026-08-12**
+
+> **Closed by upgrading `vite` 5 → 7 and `vitest` 2 → 3**, which is exactly what the *Secure implementation* line below said it would take. `npm audit` now reports zero on both trees, and the job described in §10 above means the next one of these is found by the pipeline rather than by coincidence. The finding is kept in full rather than deleted, because the reachability analysis is the part worth re-reading the next time a dev-only advisory is dismissed as dev-only.
+>
+> **Two notes from doing it**, both about taking the *minimum* fix rather than the offered one:
+>
+> - `npm audit fix --force` proposed **`vite` 8**, and 8 was wrong. It replaces the bundler with rolldown — a native binding that would not install — while every advisory range here stops at `<=6.4.2`. Accepting a tool's suggested version instead of the lowest version that clears the advisory trades a known problem for an unknown one.
+> - The upgrade broke exactly one line, and it was the line that reached past an interface into the library behind it: a `configure` callback calling `proxy.on('proxyReq', ...)`. It is now `headers: {'accept-encoding': 'identity'}` — the documented option for that behaviour, which the implementation swap could not break. **The proxy is a security control here** (see below), so it mattered that the replacement preserved it exactly rather than being dropped to make a type error go away.
+
+Run while adding `fast-check`. **Nothing here reached a deployed user**: production serves files built by `vite build` and handed to FastAPI, and every advisory below is in code that only runs on a developer's machine — the dev server, its bundler, or the Vitest UI.
 
 | Advisory | Package | Rated | Reachable here? |
 |---|---|---|---|
@@ -493,7 +510,7 @@ Each was a prerequisite rather than a deferred finding: unexploitable while no e
 
 **Why the fix is secure.** Layer 1 removes the capability rather than filtering for it — a sanitiser is a denylist maintained against an attacker who needs to be right once, while a renderer that cannot express markup has nothing to filter. Layers 2 and 3 are defence in depth for a mistake in layer 1. Tests assert markup in a cell and in a **column name** renders as characters (`document.querySelector('img')` is null), that `script-src` never gains `unsafe-inline`, and that the tokenizer's output concatenates back to its input exactly.
 
-**Note the build coupling.** `script-src 'self'` only holds because `vite.config.ts` sets `assetsInlineLimit: 0`, so every script has its own URL. A build option can silently weaken this policy, which is why both live next to a comment saying so.
+**Note the build coupling — and it is now asserted rather than commented.** `script-src 'self'` only holds because `vite.config.ts` sets `assetsInlineLimit: 0`, so every script has its own URL. A build option can silently weaken this policy. Both files carried a comment saying so, and CI's build step claimed to prove it — **which it did not**: `vite build` succeeds whether or not assets are inlined, so the "proof" was a comment describing a check that did not exist. `web/scripts/assert-no-inline-assets.mjs` now reads the emitted HTML and fails the build on an inline `<script>`, an inline `<style>`, or a stylesheet arriving as a `data:` URI, and it exits non-zero on an empty `dist/` rather than reporting success over nothing examined. Verified in both directions before it was trusted: green on the real bundle, red on a planted violation. See §13.18.
 
 **CIA impact.** Confidentiality and integrity.
 
@@ -569,6 +586,51 @@ It also keeps the diagnostic that made the field worth reporting: `body.questoin
 **CIA impact.** Integrity of downstream logs and any client that renders the field. No confidentiality or availability impact.
 
 **Regression guard.** `tests/security/test_property_request_body.py` — generated bodies and generated field *names*, asserting that no submitted value appears in a response, that every reported path is bounded and drawn from a safe character set, and that no body of any shape produces a 5xx. The bound is imported from `api.errors` rather than restated, because a limit a test copies by hand is a limit that drifts.
+
+### 13.17 The loopback refusal made containers impossible, and its docstring said otherwise — **Medium** (a control that would have been deleted)
+
+Found 2026-08-11 while building the container image. [ADR-049](../architecture/DECISIONS.md#adr-049--binding-beyond-loopback-is-an-operators-assertion-not-a-detection).
+
+**Vulnerability.** §13.1 records that this API has no authentication, and [ADR-034](../architecture/DECISIONS.md#adr-034--the-api-refuses-to-bind-beyond-loopback-while-it-has-no-authentication) enforces the consequence: `APISettings` refuses to start on any non-loopback bind. The setting's docstring stated that **containers are unaffected**. That was false. `docker run -p 8000:8000` forwards to the container's **bridge** interface, not its loopback, so a process bound to `127.0.0.1` inside its own network namespace is running, healthy, listening — and reachable by nobody. *(OWASP A05:2021, Security Misconfiguration — here the misconfiguration is in the control itself.)*
+
+**Why it is dangerous, and the danger is not the one it looks like.** Nothing is exposed by this. The risk runs the other way and it is the more durable kind: **a security control that makes a legitimate deployment impossible gets removed by whoever needs to deploy, and they remove all of it.** The person hitting this is not attacking anything — they are trying to run the project in the documented way, they will find one line refusing them, and the fastest fix is to delete the validator. At that point every deployment is wide open, including the ones that never needed to be, and no document records that a decision was made. A guard people have a standard procedure for evading is not a control.
+
+**Attack scenario.** Indirect, and it is the realistic one. An operator deploys the image, gets no response on the published port, finds `_refuse_to_publish_an_unauthenticated_service`, comments it out, and ships. Six months later the service is on a network interface nobody audited, with no authentication, executing model-authored SQL. The read-only role (§5) still bounds the damage to disclosure — which on a real analytics database is the whole database.
+
+**Severity — Medium.** No direct exposure; the impact is the predictable erosion of a Critical-severity control (§13.1). Rated on that rather than on the immediate effect, which is zero.
+
+**Secure implementation.** `API_ALLOW_NON_LOOPBACK`, default `false`. When it is set, the refusal becomes an opt-in and the process logs a warning at startup naming what is still missing:
+
+```
+binding 0.0.0.0 beyond loopback: API_ALLOW_NON_LOOPBACK asserts that this
+process's network namespace is the boundary. There is still no authentication,
+so whatever publishes this port decides who can run generated SQL against the
+target database
+```
+
+The refusal message itself names the variable, so the operator who hits it finds the supported route before they find the validator.
+
+**Why the fix is secure, and what was rejected.** **Detecting the container was rejected outright.** Reading `/.dockerenv` or `/proc/1/cgroup` decides a security question from evidence any image can fabricate, and — worse — it answers *yes* under `--network=host`, which is precisely the case where the refusal was correct. An opt-in inverts both problems: the decision is made by the operator rather than inferred, it is recorded in the environment that deployed the service rather than in a process's guess about itself, and the default stays closed for anyone who does not make it. **The control is not weaker; it is expressible.** Six tests in `tests/security/test_api_boundary.py` assert that the flag is off by default, that the closed path is unchanged without it, that setting it permits a wide bind, and that the refusal message names the way out.
+
+**CIA impact.** None directly. It protects the integrity of §13.1's containment argument, which is what everything in §5 rests on.
+
+### 13.18 A CI comment claimed a check that did not exist — **Low** (the CSP's build coupling)
+
+Found 2026-08-12 while wiring dependency scanning.
+
+**Vulnerability.** The Content-Security-Policy in §13.13 is `script-src 'self'` with no `unsafe-inline`, which is only serveable because `vite.config.ts` sets `assetsInlineLimit: 0`. CI's build step carried a comment reading *"Proves the bundle still builds, and that `assetsInlineLimit: 0` still holds"*. **It proved the first and not the second** — `vite build` exits zero either way. *(OWASP A05:2021; the class is a control asserted in prose and absent in code.)*
+
+**Why it's dangerous.** Two outcomes, and the second is the bad one. Either an inlined script is blocked by the CSP and the demo page is silently blank in production while every test and the build pass — or somebody diagnoses the blank page, finds the CSP, and adds `unsafe-inline` to make it work. That single word removes the second of the three layers §13.13 depends on, and it removes it under the impression of fixing a bug. **A reader auditing this exact question would have read the CI comment and moved on**, which is the same failure as §13.16 and is why it is written up rather than quietly fixed.
+
+**Attack scenario.** No direct attacker. The precondition it creates is one: a page rendering model-authored SQL and untrusted row values, served same-origin with an unauthenticated API, under a CSP that now permits inline script. §13.13's layer 1 still holds — nothing renders markup — so this is a defence-in-depth loss rather than an exploit.
+
+**Severity — Low.** Defence in depth only; layer 1 is the control that matters and it is unaffected.
+
+**Secure implementation.** `web/scripts/assert-no-inline-assets.mjs`, wired into `npm run build` so it cannot be skipped by running the build the ordinary way. It parses the emitted HTML for an inline `<script>` body, an inline `<style>` block, or a stylesheet arriving as a `data:` URI, and **exits 2 on an empty `dist/`** — a checker that examines nothing and reports success is the failure it was written to prevent, one level down. Its failure message names both correct responses (restore the option, or change the CSP deliberately and record it here) and explicitly rules out the wrong one.
+
+**Why the fix is secure.** It asserts the property at the only place it is observable — the built artifact — rather than the configuration that is supposed to produce it. A test on `vite.config.ts` would pass while a plugin, a preset or a future Vite default reintroduced inlining. **Verified in both directions before being relied on:** green on the real bundle, red on a planted page containing an inline script and an inline style.
+
+**CIA impact.** Integrity of the CSP, and through it confidentiality of anything the unauthenticated API will answer.
 
 ## 14. Multi-provider LLM risks
 

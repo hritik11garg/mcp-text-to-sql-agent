@@ -6,25 +6,52 @@ Working checklist: [TASKS.md](TASKS.md).
 
 ---
 
+## Releases
+
+**Re-baselined 2026-08-12** ([ADR-048](../architecture/DECISIONS.md#adr-048--v10-is-the-single-query-system-the-agent-loop-is-v2)). The six stages were always one release, and the effect was that a finished single-query system read as an unfinished multi-step one. Every number on this page was measured against the single-query path; none of them was waiting on Stage 4. So the line is drawn where the measurements already are.
+
+| Release | Stages | Claim | State |
+|---|---|---|---|
+| **v1.0** | 0, 1, 2, 3, part of 6 | **Single-query text-to-SQL, MCP-native, measured on a public benchmark, deployable in one command** | Shipped |
+| **v2.0** | 4, 5, rest of 6 | Multi-step decomposition, session memory, self-correction, a fine-tuned schema linker, and production observability | Not started |
+
+**What moved, and what did not.** Nothing was deleted and no stage was re-scoped downward. Stages 4 and 5 keep every "Done when" line they had; they are behind a version number instead of behind a percentage. The two claims this makes possible are the point:
+
+- **v1.0 is finished** — it answers a question end to end, over HTTP and over MCP, from a clean checkout in one command, with 921 scored questions behind the accuracy figure.
+- **v2.0 is not started**, which is a different statement from "Stage 4 is 0%" only in that a reader can tell what the project *is* before they find out what it is not.
+
+The risk this accepts is stated rather than hidden: **a version number is a claim about scope, and moving the boundary after the fact is exactly how a project makes an unfinished thing sound complete.** The defence is that the boundary is drawn at the measurements — every v1.0 stage has a number in [BENCHMARKS](../ml/BENCHMARKS.md), and every v2.0 stage has none. Nothing was promoted into v1.0 that could not be demonstrated.
+
+---
+
 ## Progress
 
 Percentages are checkbox counts from [TASKS.md](TASKS.md), not confidence — a half-done item counts half. **Stages have not been built in order**, and the two that jumped the queue each carry an explicit cost recorded in their section below.
 
-| Stage | Output | Status | % |
-|---|---|---|---|
-| 0 | Scaffolding — docs, deps, interpreter pin | ✅ Done | 100% |
-| 1 | **Core loop** — retrieval, generation, validation, execution, profiling, API, demo UI | 🚧 In progress | 71% |
-| 2 | **Eval harness** — comparison, Recall@k, artifacts, resumption, benchmark loading, pipeline seam | 🚧 In progress | 82% |
-| 3 | **MCP servers + client refactor** | 🚧 In progress | 91% |
-| 4 | **Agent layer** — decomposition, session memory, self-correction | ⬜ Not started | 0% |
-| 5 | **Fine-tuned schema linker** | ⬜ Not started | 0% |
-| 6 | **Hardening** — limits, tracing, tests | ⬜ Not started | 0% |
+| Stage | Release | Output | Status | % |
+|---|---|---|---|---|
+| 0 | v1.0 | Scaffolding — docs, deps, interpreter pin | ✅ Done | 100% |
+| 1 | v1.0 | **Core loop** — retrieval, generation, validation, execution, profiling, API, demo UI | ✅ Shipped | 77% |
+| 2 | v1.0 | **Eval harness** — comparison, Recall@k, artifacts, resumption, benchmark loading, pipeline seam | ✅ Shipped | 91% |
+| 3 | v1.0 | **MCP servers + client refactor** | ✅ Shipped | 91% |
+| 6a | v1.0 | **Hardening — the deployable half**: image, compose, CI, coverage floor, dependency audits | ✅ Shipped | 58% |
+| 4 | v2.0 | **Agent layer** — decomposition, session memory, self-correction | ⬜ Not started | 0% |
+| 5 | v2.0 | **Fine-tuned schema linker** | ⬜ Not started | 7% |
+| 6b | v2.0 | **Hardening — the measured half**: tracing, metrics, load tests, authentication | ⬜ Not started | — |
 
-**Two things that had blocked this roadmap for weeks are done.** The full-split run finished on 2026-08-08 — all 921 scoreable questions, all 20 databases, 79.9% — and the demo UI is built, served and verified in a browser. Neither is a blocker any more.
+> **"Shipped" and a percentage under 100 are not in conflict, and collapsing them would lose the more useful of the two.** A stage ships when its *output* — the thing in the Output column — is built, demonstrable and measured. The percentage is a checkbox count over a list that grows every time a slice finds something, and Stage 1's remaining 23% is almost entirely items that were **added by the work**, not deferred from the plan: a per-client cap that needs authentication, an `explain_only` timing channel, a prompt cache never observed against a real provider, eight production pins with no importer. Rounding those away to reach 100% would be the "number that only moves up" this page complains about two paragraphs down.
+>
+> Stage 6 splits across the boundary and is shown as two rows for that reason; its own list is marked item by item in [TASKS.md](TASKS.md#stage-6--hardening). **6b has no percentage** because it is the remainder of one list, and giving it a second denominator would let the same items be counted twice.
+>
+> **Recounted 2026-08-12** against TASKS.md, which is the only method this page accepts. Stage 1 71% → **77%** (68 done, 4 partial, 19 open) as the clean-checkout, architecture-diagram and changelog items closed. Stage 2 82% → **91%**: it had drifted *downward* — the split decision closed on 2026-08-11 and this table was never recounted. Stage 6 0% → **58%**, which is the largest correction here and the least flattering to the old number in a different direction: the Dockerfile, compose, CI and the README benchmark table had all landed while the row said "Not started". Stage 5 0% → **7%**, one item: the split-disjointness check, landed early by the audit that found the leak.
 
-**What is genuinely blocking now, in order:** the **agent loop** (Stage 4), which is what makes the four MCP servers a system rather than four callable capabilities. Behind it, one measurement gap that remains cheap: a **`with-validation` run** over the same split, which measures the validation tier as a *gate*, not self-correction, because no baseline self-corrects. The MCP gap closed on 2026-08-10 — the retrieval hop is measured identical over 1,034 questions ([BENCHMARKS](../ml/BENCHMARKS.md) §8).
+**Three things that had blocked this roadmap for weeks are done.** The full-split run finished on 2026-08-08 — all 921 scoreable questions, all 20 databases, 79.9%. The demo UI is built, served and verified in a browser. And on 2026-08-11 the project ran **from a clean checkout in one command**, which had been Stage 1's oldest open checkbox and was blocked not on a component but on there being no dataset a reader could load without downloading Spider first.
 
-**Stage 1 went 75% → 59% → 69% → 88% → 71%.** It dropped once when the demo UI entered its scope, climbed as the pool, the endpoint, streaming and the UI landed — and **dropped again on 2026-08-10, without a single item being un-done.**
+**What is left inside v1.0** is one cheap measurement gap: a **`with-validation` run** over the same split, which measures the validation tier as a *gate* rather than as self-correction, because no baseline self-corrects. It is halted at 120 of 921 on a spent daily budget and the finding it was run for is already in. Everything else on the v1.0 side is closed.
+
+**What v2.0 starts with** is the **agent loop** (Stage 4) — what makes the four MCP servers a system rather than four callable capabilities. The MCP measurement gap closed on 2026-08-10: the retrieval hop is identical over 1,034 questions ([BENCHMARKS](../ml/BENCHMARKS.md) §8).
+
+**Stage 1 went 75% → 59% → 69% → 88% → 71% → 77%.** It dropped once when the demo UI entered its scope, climbed as the pool, the endpoint, streaming and the UI landed, **dropped again on 2026-08-10 without a single item being un-done**, and has now risen on close-out.
 
 > **Recounted 2026-08-10, and the drop is the interesting part.** These percentages are checkbox counts, and 88% could not be reproduced from any count in the repository: Stage 1's rows in TASKS.md give **71%** (63 done, 4 partial, 24 open), and this page's own *Done when* list gives 67%. Stage 2 read 87% and counts 82%. Stage 3's 84% reproduced exactly, which is what showed the other two had drifted rather than the method being wrong.
 >
@@ -32,7 +59,7 @@ Percentages are checkbox counts from [TASKS.md](TASKS.md), not confidence — a 
 >
 > **Nothing regressed. The denominator grew.** Every slice since 2026-08-08 closed items *and* wrote down gaps it had found — failure injection, property tests, the audit finding, the toolchain upgrade — and a checklist that gets more honest as work proceeds is a checklist whose percentage falls while the project improves. **A number that only moves up is a number nobody is recounting**, which is precisely how 88% survived four rounds of new open items.
 
-What remains in Stage 1 is close-out work — screenshots, an architecture diagram, an end-to-end run from a clean checkout — plus the named gaps each recent slice added. Not components.
+**Stage 1's close-out is finished.** Screenshots and a GIF were captured on 2026-08-08; the architecture diagram is committed as Mermaid rather than a PNG, so it lives in the same diff as the code it describes; and the clean-checkout run happened on 2026-08-11. What remains under Stage 1 is not close-out and not components — it is **the gaps the work itself found**, every one of which needs something v1.0 deliberately does not have: a per-client cap and the `explain_only` timing channel both need authentication, the prompt cache needs a provider that reports cache hits, and the eight unimported production pins need a decision rather than a build.
 
 **Stage 1 is now "the core loop works end to end, and you can watch it".** Every component is built and tested, Spider's dev split is in the database converted and verified, the pipeline is connected to the harness, and it has produced a complete measured result. `POST /v1/query` answers from outside the harness in both response shapes. And the half a reader can **see** exists: a page that asks a question and draws retrieval, generation and execution against a real time axis as the events arrive. The distinction this project keeps insisting on — wired, then measured, then served, then *seen* — is closed for the single-query path.
 
@@ -57,7 +84,7 @@ Scope: Postgres + pgvector up with roles and migrations; schema ingestion and em
 **Demo:** a question over a loaded schema returns a correct answer, with progress streaming.
 
 **Done when:**
-- [ ] Runs end to end from a clean checkout per the README
+- [x] **Runs end to end from a clean checkout per the README** — `docker compose up` on 2026-08-11, from empty volumes: image built, migrations applied as a one-shot, the demo schema seeded and indexed, the API served, and a real question answered in 2.7 s. This was the stage's oldest open item and the blocker was never a component — it was that the only loadable data was a 100 MB CC BY-SA download, so `src/demo/` generates an original one instead
 - [x] **The read-only negative test suite is green** — this gates the stage, not Stage 6
 - [x] Row limits and statement timeouts are enforced and tested — at the role level *and* per request, the latter injected into the AST rather than requested in the prompt
 - [x] **`.env.example` and [CONFIG.md](../operations/CONFIG.md) match the implementation** — and it is now *asserted* rather than reviewed. `tests/unit/test_settings.py` enumerates every field on every settings class and fails if one is missing from either file. Added after an audit found 18 of 50 settings had reached the code without reaching the template
@@ -186,13 +213,20 @@ A5 is the honest one and the easiest to skip. If retrieval improves and end-to-e
 
 Scope: OpenTelemetry instrumentation; rate limiting; cost caps; Docker + Compose; load tests; dependency scanning; coverage to target; final performance numbers.
 
-**Done when:**
+**This is the one stage that straddles the release boundary**, and it splits along a clean line: what makes the repository *deployable and checked* shipped in v1.0, and what *measures a running deployment* is v2.0. The second half genuinely needs the first — load tests need something to deploy, and traces are most useful across an agent loop that does not exist yet.
+
+**Done when — v1.0:**
+- [x] **`docker compose up` works from a clean clone** — verified 2026-08-11 from empty volumes
+- [x] **Coverage floor enforced in CI** — `fail_under = 85` had been configured and unexecuted since Stage 0; measured **85.12%** the day it was wired, so the margin is 0.12 points
+- [x] **Security suite at 100%** — it is a separately-named CI step, so a green build says the release gate passed *by name*
+- [x] **Dependency scanning** — `pip-audit` over both requirement files and `npm audit` over both npm trees, all four as hard gates at any severity. Five dev-tooling advisories were cleared by upgrading Vite and Vitest rather than by thresholding them away
+- [x] **Demo script verified end to end** — against the seeded demo dataset, which is the version a reader can actually run
+
+**Done when — v2.0:**
 - [ ] Traces show the full agent → MCP → database path with retries as sibling spans
 - [ ] Load tests establish throughput and saturation behaviour
 - [ ] Performance targets measured — including the ones that were missed
-- [ ] Coverage ≥ 85%, security suite at 100%
-- [ ] `docker compose up` works from a clean clone
-- [ ] Demo script verified end to end
+- [ ] Authentication, and the per-client controls behind it
 
 ---
 

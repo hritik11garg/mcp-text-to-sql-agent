@@ -1,6 +1,6 @@
 # Observability
 
-> **Status: TBD — Stage 6** for implementation and dashboards. The instrumentation design below is decided; **none of it is wired.**
+> **Status: TBD — v2.0** for implementation and dashboards. The instrumentation design below is decided; **none of it is wired**, and nothing in the repository imports `opentelemetry`. It is deliberately behind the agent loop: the spans this design is shaped around — retries as siblings, a tool call per step — are spans v1.0's single-query path does not produce.
 >
 > **Corrected 2026-08-10.** This line previously read *"span boundaries are wired in Stage 1 rather than retrofitted"*. They are not. Nothing under `src/` imports `opentelemetry` — the only `trace_id` in the codebase is an audit column that callers pass in. ROADMAP's own Stage 1 checkbox, *"span boundaries are in place (instrumentation added later, structure now)"*, is **unchecked** and always was, so two documents disagreed and the honest one was the checklist. The four `opentelemetry-*` pins in `requirements.txt` have no importer either — [ENGINEERING_MATRIX](../project/ENGINEERING_MATRIX.md) §25.
 >

@@ -1,60 +1,80 @@
 # Deployment
 
-> **Status: TBD — Stage 6.** Structure and constraints below are the plan; Dockerfiles, Compose files, and verified commands land with the hardening stage.
+> **Status: the local shape is built and verified; the production shape is v2.0.** `docker compose up` builds the image, applies migrations, seeds a demo database and serves the API with its UI — run end to end from empty volumes on 2026-08-11. What is **not** here is a deployment anyone else can reach, and the reason is one sentence: **the service has no authentication**, so the only supported audience is a person on the machine it runs on.
 
 Two deployment shapes, with different security postures:
 
-| Shape | Transport | Auth | Audience |
-|---|---|---|---|
-| **MCP host** (any stdio host) | stdio subprocesses | Host-managed, user privileges | The "point it at your own database" story |
-| **HTTP service** | Streamable HTTP + SSE | API key required | Demo / production-style deployment |
+| Shape | Transport | Auth | Audience | State |
+|---|---|---|---|---|
+| **MCP host** (any stdio host) | stdio subprocesses | Host-managed, user privileges | The "point it at your own database" story | **Works today** |
+| **HTTP service, local** | HTTP + SSE on loopback, or a published container port | **None** | One operator, on their own machine | **Works today** |
+| **HTTP service, shared** | HTTP + SSE behind a proxy | API key required | Demo / production-style deployment | **v2.0** — blocked on authentication |
 
 The MCP-host shape is the one that makes this project runnable by other people, so it gets the more polished setup path.
 
 **The first shape works today.** The four servers run over stdio and the host configuration is in [../architecture/MCP.md](../architecture/MCP.md) §9 — no Docker image and no HTTP endpoint required, because the host launches them as subprocesses with the environment it is given.
 
-**The second shape is not deployable yet, and the process enforces that rather than documenting it.** The HTTP layer exists — `python -m api` serves `/health`, `/ready` and `POST /v1/query` — but it has **no authentication**, so `APISettings` refuses any `API_HOST` that is not loopback ([ADR-034](../architecture/DECISIONS.md#adr-034--the-api-refuses-to-bind-beyond-loopback-while-it-has-no-authentication)). A container can still publish the port, which is the supported path below; what it cannot do is bind `0.0.0.0` inside the container and pretend that is the same thing.
+**The second shape works today and is bounded rather than documented.** `python -m api` — or the `api` service in Compose — serves `/health`, `/ready` and `POST /v1/query`. It has **no authentication**, so `APISettings` refuses any `API_HOST` that is not loopback ([ADR-034](../architecture/DECISIONS.md#adr-034--the-api-refuses-to-bind-beyond-loopback-while-it-has-no-authentication)) unless an operator sets `API_ALLOW_NON_LOOPBACK`, which the container image does and which the compose file pairs with publishing to `127.0.0.1` only. That pairing is the whole containment argument for the container shape and it is explained in §2.
 
-There is a reason that ordering is not accidental: an HTTP-reachable `execute_sql` is a different risk class from a subprocess a host launched, and it needs authentication before it needs a Dockerfile.
+**The third shape is not deployable and the process says so rather than the prose.** An HTTP-reachable `execute_sql` is a different risk class from a subprocess a host launched, and it needs authentication before it needs anything else here. [SECURITY.md §13.1](SECURITY.md) rates that gap Critical and it is open.
 
 ---
 
 ## 1. Docker
 
-> **TBD — Stage 6.**
+`Dockerfile`, five stages, built and run on 2026-08-11.
 
-Planned: multi-stage build on `python:3.12-slim` ([ADR-010](../architecture/DECISIONS.md#adr-010--python-312)).
+| Stage | Base | What it produces |
+|---|---|---|
+| `web` | `node:22-slim` | `npm ci` then `npm run build` — typecheck, bundle, and the no-inline-assets assertion the CSP depends on ([SECURITY.md §13.18](SECURITY.md)) |
+| `deps` | `python:3.12-slim` | A virtualenv at `/opt/venv` |
+| `runtime` | `python:3.12-slim` | The venv, `src/`, the built bundle, and a non-root user |
+| `migrate` | `runtime` | One-shot `alembic upgrade head` |
+| `api` | `runtime` | `python -m api` |
 
-**Any OCI-compatible runtime.** The images and Compose file target the standard format, so Podman, Rancher Desktop, colima or Docker Engine all serve. Docker Desktop is free for personal use and requires a paid subscription for larger commercial organisations — convenient on Windows, and deliberately not a requirement, given the constraint in [PROJECT.md](../../PROJECT.md).
+**Any OCI-compatible runtime.** The image and Compose file target the standard format, so Podman, Rancher Desktop, colima or Docker Engine all serve. Docker Desktop is free for personal use and requires a paid subscription for larger commercial organisations — convenient on Windows, and deliberately not a requirement, given the constraint in [PROJECT.md](../../PROJECT.md).
 
-Constraints to design for rather than discover:
+What the constraints turned into:
 
-- **Image size.** `torch` dominates. The CPU-only wheel index cuts the image by well over a gigabyte, and inference does not need CUDA. GPU is a separate build target used for training.
-- **Model weights.** Baking the sentence-transformer into the image makes it large but removes a cold-start download and a runtime network dependency. Mounting it keeps the image small but adds a volume. Decision **TBD**, recorded in DECISIONS.md when made.
-- **Non-root user.** Container runs as an unprivileged user; nothing in the runtime path needs root.
+- **Image size — `torch` dominates, and it is installed first, from PyTorch's own CPU index.** `pip install --index-url https://download.pytorch.org/whl/cpu` before the rest of `requirements.txt`, so the resolver never reaches PyPI for a CUDA build. That is well over a gigabyte of CUDA libraries not downloaded. Inference does not need a GPU; training is a separate concern and a separate build.
+- **Model weights are mounted, not baked.** A named volume at `/home/appuser/.cache/huggingface`. Baking would remove the ~90 MB first-run download at the cost of putting it in every layer pull. The volume is created **in the image with the right ownership** — a Docker named volume inherits ownership from the image path at first mount, and creating it implicitly leaves it root-owned under a non-root user, which fails as a `PermissionError` inside `huggingface_hub` rather than as anything about permissions.
+- **Non-root user.** `appuser`, uid 10001. Nothing in the runtime path needs root.
 - **No build toolchain in the runtime layer.** Every pinned dependency ships a wheel, so the final stage carries no compiler.
-- **Read-only root filesystem** where possible, with explicit writable mounts.
+- **`pip` retries are raised** (`PIP_RETRIES=10 PIP_TIMEOUT=120`). The torch wheel is large enough that a default-timeout read failure is a routine build failure rather than an exceptional one.
+- **Read-only root filesystem** is *not* set. Recorded as open rather than claimed.
+
+`.dockerignore` keeps `data/`, `results/`, `.git/`, `web/node_modules/` and every `.env*` except the example out of the build context — the first two are gigabytes, and the last is the one that would bake a credential into a layer.
 
 ## 2. Docker Compose
 
-> **TBD — Stage 6.**
+Four services. `docker compose up` runs all of them in order and ends with a served API.
 
-Services planned:
+| Service | Purpose | Gate |
+|---|---|---|
+| `postgres` | Postgres 16 + pgvector | `pg_isready` healthcheck |
+| `migrate` | One-shot Alembic run — schema, extension, HNSW index, read-only role | waits for `postgres` healthy |
+| `seed` | One-shot: creates the demo schema, loads it, grants `SELECT` to the read-only role, indexes the catalog | waits for `migrate` **completed successfully** |
+| `api` | FastAPI, serving the built UI | waits for both one-shots completed successfully |
 
-| Service | Purpose |
-|---|---|
-| `postgres` | Postgres 16 + pgvector, initialized with roles and extensions |
-| `migrate` | One-shot Alembic run; the API waits on its completion |
-| `api` | FastAPI + agent |
-| `mcp-*` | The four MCP servers, when running over HTTP transport |
-| `otel-collector` | Optional; traces to a local backend |
-
-Two points that matter:
+Points that matter:
 
 - **Migrations are a separate one-shot service**, not an entrypoint hook in the API container. Running migrations from N replicas racing each other is a reliable way to corrupt schema state.
-- **`depends_on` with `condition: service_healthy`.** Container-started is not database-ready; without a real healthcheck the API starts, fails to connect, and restart-loops.
+- **`depends_on` with `condition: service_healthy` for the database, and `service_completed_successfully` for the one-shots.** Container-started is not database-ready, and a migration that is still running is a schema the application must not touch.
+- **The published port is `127.0.0.1:${API_PORT:-8000}:8000`, and that binding is a security control, not a preference.** Inside the namespace the API binds `0.0.0.0` with `API_ALLOW_NON_LOOPBACK=true`, because `-p` forwards to the container's **bridge** interface and a process on the container's loopback is reachable by nobody ([ADR-049](../architecture/DECISIONS.md#adr-049--binding-beyond-loopback-is-an-operators-assertion-not-a-detection), [SECURITY.md §13.17](SECURITY.md)). **The two halves are one decision:** binding wide inside the namespace is only safe because the host side of the mapping is loopback. Change `ports` to `8000:8000` and the unauthenticated service is on every interface the host has.
+- **`env_file: .env` is inherited wholesale rather than enumerated.** A list of `LLM_*` variables in the compose file is a second copy of `core.settings` that goes stale silently, and the symptom is a container running on defaults while the host runs on the configured values — which presents as a code difference. Only what must *differ* inside the namespace is set explicitly: the two database URLs, the bind, and the demo dataset names.
+- **`DATASET` and `DB_TARGET_SCHEMA` are literals, not `${VAR:-demo}`.** Compose interpolates `${VAR:-default}` from `.env` — the same file passed as `env_file` — so a `.env` carrying `DB_TARGET_SCHEMA=public` wins and the default never fires. The failure it produced was `relation "event" does not exist` from a container that had seeded the data correctly into a schema it was not reading.
 
 The read-only role is created by a migration, not by an init script, so the security posture is reproducible from a clean database and testable in CI. See [../architecture/DATABASE.md](../architecture/DATABASE.md) §7–8.
+
+### 2.1 The demo dataset
+
+`seed` runs `python -m demo.seed`, which builds an **original** three-table schema — venues, artists, events; 432 rows from a fixed seed — in the `demo` PostgreSQL schema, grants `USAGE` and `SELECT` on it to `sql_agent_ro`, and indexes the catalog so retrieval has vectors to search.
+
+It exists because the clean-checkout path needed data and the only data this repository knew how to load was Spider: a 100 MB download under CC BY-SA, which is fine for a benchmark and wrong for a first run. The demo set is generated rather than vendored, so it ships under the repository's own MIT licence, and it is deterministic, so the README's example output is reproducible.
+
+**No number anywhere in this repository comes from it.** Every measurement is Spider ([BENCHMARKS.md](../ml/BENCHMARKS.md)); the demo dataset is a thing to ask questions of, not a thing to score against.
+
+`create_schema()` sets `search_path` under a `try/finally` that resets it. That is not tidiness: the connection is shared, and a leaked `search_path` made the *indexer* fail two steps later with `vector type not found in the database` — an error naming neither the schema nor the setting that caused it. A regression test pins the reset.
 
 ## 3. Environment variables
 

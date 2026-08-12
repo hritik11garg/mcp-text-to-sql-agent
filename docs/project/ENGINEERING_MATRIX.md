@@ -32,14 +32,14 @@ Every category answers five questions, in order:
 
 **The 🟡 rows are where the useful work is, not the 🔴 rows.** Two of the highest-value actions in [§ Priorities](#priorities) sit inside categories marked partial — load testing (§28 has the concurrency half and none of the soak half), and property-based testing (§38 landed four of its five properties and names the one it did not). A category is 🟡 when a foundation exists; that says nothing about how sharp the remaining gap is.
 
-**Evidence base, measured 2026-08-11.** Counted by marker with `pytest --collect-only -m <marker>`, which is the same selection CI uses — an earlier revision counted `def test_` by hand and produced numbers nobody could reproduce.
+**Evidence base, re-measured 2026-08-12.** Counted by marker with `pytest --collect-only -m <marker>`, which is the same selection CI uses — an earlier revision counted `def test_` by hand and produced numbers nobody could reproduce.
 
 | Layer | Cases collected |
 |---|---|
-| **Total** | **1,606** |
-| unit | 1,085 |
-| security | 296 |
-| integration | 199 |
+| **Total** | **1,640** |
+| unit | 1,100 |
+| security | 305 |
+| integration | 209 |
 | contract | 99 |
 | e2e | **0** |
 | *of which* `property` | *40* |
@@ -396,7 +396,11 @@ Layers overlap by design — a security test needing a real database carries bot
 
 **Failure mode — the one this design is actually about.** The suite gets its PostgreSQL from testcontainers, and without a Docker daemon that fixture **skips**. In CI a skip is worse than a failure: the integration and security layers vanish, everything remaining passes, and the run reports green over the release gate that proves an LLM cannot write to the database. So `require_docker()` skips locally and **raises in CI**, keyed on the `CI` environment variable — and the guard has its own tests (`tests/unit/test_ci_guard.py`), because a safety mechanism nobody has watched fail is the shape this repository keeps finding.
 
-**Still 🟡, not 🟢.** No security scanning, dependency scanning or secret scanning in the pipeline (§25). No coverage gate wired in, despite `fail_under = 85` sitting configured in `pyproject.toml` and unused. No branch protection or required status checks — those are repository settings rather than a file, and they are the half that makes a green run mean something.
+**Two of the three gaps closed 2026-08-12.** A fifth job, **audit**, runs `pip-audit` over both requirement files and `npm audit` over both npm trees, all four as hard gates at any severity (§25). And the coverage floor is executed: `--cov` rides on the suite CI already runs, so `fail_under = 85` is enforced instead of merely configured.
+
+> **The floor had been configured and unmeasured since Stage 0**, which is the [R-17](RISKS.md) shape in its purest form — a published target that nothing checked, sitting in the file a reader would look at to confirm it was checked. It measured **85.12%** the day it was wired. The margin is **0.12 points, about seven statements**, and that is recorded rather than padded: the next commit that adds an uncovered module fails the build, and the correct response is a test.
+
+**Still 🟡, not 🟢.** No secret scanning in the pipeline, and no SBOM (§25). No branch protection or required status checks — those are repository settings rather than a file, and they are the half that makes a green run mean something.
 
 ---
 
@@ -412,11 +416,18 @@ Layers overlap by design — a security test needing a real database carries bot
 
 **Failure mode.** A compromised transitive dependency in the frontend build executes on a page served same-origin with an unauthenticated API.
 
-**Gaps.** No `pip-audit`, no `npm audit` in CI, no SBOM, no license check.
+**Gaps — two of four closed 2026-08-12.** `pip-audit` and `npm audit` now run in CI as hard gates over four surfaces (runtime and dev, Python and npm), with no `--audit-level` threshold anywhere: a threshold silently accumulates everything beneath it, so the escape hatch is an explicit `--ignore-vuln` with its reason in a diff. **Still open: no SBOM, no license check.**
 
 **A dependency added 2026-08-10, and the test it had to pass.** `fast-check` 4.9.0, dev-only, for the property tests in `web/` (§37, §38). **Two packages installed.** That number is the point: the `locust` removal below set the standard, and a tool that arrives with a second web framework does not meet it. It has importers on the day it was added, which is the other half of ADR-014's rule.
 
-**Live defect, opened 2026-08-10 by the first `npm audit` this project has run.** Five advisories — one critical, one high, three moderate — in `vite`, `esbuild` and `vitest`. **None reach a deployed user**; all are dev-toolchain code. The one that matters is the dev server answering any origin *while proxying an unauthenticated API*, combined with a Windows `server.fs.deny` bypass that reaches `.env`. Written up with the reachability analysis and the mitigation in force at [SECURITY.md §10.1](../operations/SECURITY.md). **`npm audit fix` resolves none of them** — every fix is a major version (`vite` 5 → 7, `vitest` 2 → 3), so it is its own piece of work rather than a line in an unrelated commit. **This is the argument for the row's own gap**: the scan that found it was run by hand, once, because a human happened to install something.
+**~~Live defect, opened 2026-08-10 by the first `npm audit` this project has run~~ — closed 2026-08-12.** Five advisories — one critical, one high, three moderate — in `vite`, `esbuild` and `vitest`. **None reached a deployed user**; all were dev-toolchain code. The one that mattered was the dev server answering any origin *while proxying an unauthenticated API*, combined with a Windows `server.fs.deny` bypass that reaches `.env`. Written up with the reachability analysis at [SECURITY.md §10.1](../operations/SECURITY.md). **This was the argument for the row's own gap**: the scan that found it was run by hand, once, because a human happened to install something.
+
+> **Closed by doing exactly what the row said it would take.** `vite` 5 → 7 and `vitest` 2 → 3, as its own piece of work; `npm audit` now reports zero on both trees. Two things are worth keeping from how it went:
+>
+> - **`npm audit fix --force` proposed `vite` 8, and 8 was the wrong answer.** Vite 8 replaces the bundler with rolldown — a native binding that failed to install here at all — while every advisory range stops at `<=6.4.2`. Taking the tool's suggested version rather than the *minimum version that clears the advisory* would have imported a new class of problem to fix an old one.
+> - **The upgrade broke exactly one thing, and it was the code that reached past an interface.** A `configure` callback grabbing `proxy.on('proxyReq', ...)` stopped type-checking when Vite swapped its proxy implementation. Replaced by `headers: {'accept-encoding': 'identity'}` — the documented option for that behaviour, which the swap could not break.
+>
+> **Still hand-run before this**, and that is the part now fixed structurally rather than by attention: §24's `audit` job runs all four scans on every push.
 
 **Live defect, opened 2026-08-10 — and it is the same defect as the one closed below, eight times over, in `requirements.txt` rather than the dev file.** A documentation sweep asked which pins have an importer. **Eight production dependencies have none:**
 
@@ -688,7 +699,9 @@ The behaviour it was pinned for is now asserted deterministically and in-process
 
 **Proof.** All internal links and anchors resolve (`scripts/check_docs_links.py`, in CI).
 
-**Failure mode.** R-17 — documentation drifting from implementation — is the project's most frequent recorded risk, at **five** occurrences ([RISKS](RISKS.md#materialized-risks); the count is rows in that register, because the previous tallies here and there disagreed and neither was reproducible). The latest is the largest: after the MCP baseline landed, **seven** places still asserted the servers were "proven to answer as well by nothing", including the interview script, while three others asserted the measured opposite. **None of it was reachable by the link checker** — every link resolved; the false statements were prose. That is the argument for keeping the script and the reason it is not sufficient.
+**Failure mode.** R-17 — documentation drifting from implementation — is the project's most frequent recorded risk, at **six** occurrences ([RISKS](RISKS.md#materialized-risks); the count is rows in that register, because the previous tallies here and there disagreed and neither was reproducible). The largest is 2026-08-11: after the MCP baseline landed, **seven** places still asserted the servers were "proven to answer as well by nothing", including the interview script, while three others asserted the measured opposite. **None of it was reachable by the link checker** — every link resolved; the false statements were prose. That is the argument for keeping the script and the reason it is not sufficient.
+
+**The 2026-08-12 occurrence is the one that bounds this category rather than illustrating it.** A comment in the CI file claimed the build step *proved* the Vite option the Content-Security-Policy depends on; it proved nothing of the kind. No document contradicted any other, every link resolved, and the sentence was accurate about everything except whether the check existed. **A whole-tree prose audit does not find this either** — it reads as a description of a control, which is what an auditor is looking for. The only thing that finds it is asking, of each claimed check, *what command fails when this stops being true*. That question is now the thing this section is for.
 
 **Gaps.** No runbook and no incident-response document (§43). **The diagram gap closed on 2026-08-11**, and not the way it had been promised since Stage 0: the architecture, sequence and ER diagrams are committed as **Mermaid in the documents they belong to** rather than as PNGs under `docs/assets/`. A binary image cannot be diffed, so a drawing that stops matching the code changes silently — the text version turns up in a pull request beside the migration that invalidated it. Two sequence diagrams are still `TBD — Stage 4`, because the self-correction loop they would draw does not exist.
 
@@ -775,7 +788,7 @@ Ranked by leverage — value delivered per unit of work — not by category numb
 | # | Action | Category | Why first |
 |---|---|---|---|
 | 1 | ~~Rotate the exposed database password~~ — **done 2026-08-08** | §33 | Both credentials rotated, old one confirmed dead, backup and worktree copy removed |
-| 2 | ~~Add a CI workflow~~ — **done 2026-08-08** | §24 | Landed. Next in that category: wire the unused 85% coverage floor, add dependency scanning, turn on branch protection |
+| 2 | ~~Add a CI workflow~~ — **done 2026-08-08** | §24 | Landed. ~~Wire the unused 85% coverage floor~~ and ~~add dependency scanning~~ both **done 2026-08-12**. Next in that category: branch protection and required status checks, which are repository settings rather than a file |
 | 3 | ~~**Benchmark the MCP path**~~ — **done 2026-08-10** | §19 | `mcp-retrieval` baseline built ([ADR-045](../architecture/DECISIONS.md)). Retrieval over the wire returns byte-identical element lists on **1,034 of 1,034** dev questions, at a constant **+7.8 ms**. Closed as an identity rather than an accuracy row, because everything downstream is the same code and a subset accuracy would have been sampling noise — [BENCHMARKS](../ml/BENCHMARKS.md) §8 |
 | 4 | ~~**Resolve the `locust` pin** — write the first concurrency test or remove the dependency~~ — **both, done 2026-08-09** | §25, §28 | The test was written *and* the pin removed: the property is deterministic and in-process, so it needed no load generator. Dropped 15 transitive dependencies including Flask and gevent |
 | 5 | ~~`SECURITY_INVARIANTS.md`~~ — **done 2026-08-08** | §12 | Ten claims, each naming the test that proves it. Writing it exposed the one invariant with no test |

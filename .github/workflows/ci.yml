@@ -3,9 +3,9 @@
 # Everything here already existed as a command someone had to remember to run.
 # The point of this file is that nobody has to remember.
 #
-# Four jobs, deliberately separate so a failure names its own layer rather than
+# Five jobs, deliberately separate so a failure names its own layer rather than
 # reporting "CI failed": lint and types, the Python suite, the browser suite,
-# and the documentation link check.
+# the documentation link check, and dependency auditing.
 #
 # The security layer is a **release gate**, and it is the reason `python` runs
 # with Docker rather than being split into a fast unit-only job. Its tests
@@ -49,7 +49,12 @@ permissions:
 
 env:
   PYTHON_VERSION: "3.12"
-  NODE_VERSION: "20"
+  # 22 rather than 20, and pinned to the same major the Dockerfile's `web`
+  # stage builds with -- two Node versions building one bundle is a difference
+  # that shows up as "works in CI, not in the image". Vite 7 also requires
+  # 20.19+ or 22.12+, which "20" satisfies only by luck of whichever 20.x the
+  # runner happens to ship.
+  NODE_VERSION: "22"
 
 jobs:
   lint:
@@ -109,12 +114,26 @@ jobs:
       - name: Verify the Docker daemon is up
         run: docker info --format '{{.ServerVersion}}'
 
-      - name: Run the suite
-        run: pytest -q -ra
+      # `--cov` rides on the run that already happens rather than being a
+      # second full pass. The floor is `fail_under = 85` in pyproject.toml,
+      # which sat there configured and unexecuted from Stage 0 until
+      # 2026-08-12 -- a published target that nothing measured.
+      #
+      # Measured 85.12% when it was first wired, so the margin is **0.12
+      # points, about seven statements**. That is deliberate and it is tight:
+      # the first commit that adds an uncovered module will fail here. The
+      # response to that is a test, not a smaller number. A floor that gets
+      # lowered whenever it binds is a floor that has never once held.
+      - name: Run the suite (with coverage floor)
+        run: pytest -q -ra --cov --cov-report=term-missing
 
       # A separate invocation so the gate's verdict is its own line in the log.
       # It re-runs the security layer, which is cheap and unambiguous: if this
       # step is green, the release gate passed *by name*.
+      #
+      # No `--cov` here on purpose: coverage of the security layer alone is a
+      # number well under the floor, and reporting it would either fail the
+      # step for the wrong reason or teach a reader to ignore a coverage line.
       - name: Security gate
         run: pytest -m security -q -ra
 
@@ -146,9 +165,13 @@ jobs:
       - name: Tests
         run: npm test
 
-      # Proves the bundle still builds, and that `assetsInlineLimit: 0` still
-      # holds -- the build option the Content-Security-Policy depends on.
-      - name: Build
+      # `npm run build` ends in `verify:csp`, which asserts what this comment
+      # used to merely claim. `vite build` succeeds whether or not assets are
+      # inlined; the script reads the emitted HTML and fails on an inline
+      # <script>, an inline <style>, or a stylesheet arriving as a data: URI.
+      # The served CSP is `script-src 'self'` with no `unsafe-inline`, so an
+      # inlined asset is a blank page in production or a widened header.
+      - name: Build (and assert nothing is inlined)
         run: npm run build
 
   docs:
@@ -165,3 +188,81 @@ jobs:
       # stays fast and cannot fail for a reason unrelated to the documents.
       - name: Relative links and anchors
         run: python scripts/check_docs_links.py
+
+  # ---------------------------------------------------------------------------
+  # Dependency auditing.
+  #
+  # ENGINEERING_MATRIX section 25 recorded "no pip-audit, no SBOM" as an open
+  # supply-chain gap from Stage 0. This closes the first half of it.
+  #
+  # Four audits, and the split is not cosmetic -- the two surfaces have
+  # different blast radii:
+  #
+  #   * `requirements.txt` and the production `npm` tree are what a deployment
+  #     runs. A vulnerability there is reachable by whoever can reach the
+  #     service.
+  #   * `requirements-dev.txt` and the dev `npm` tree are what a *developer*
+  #     runs. A vulnerability there is reachable by whoever can reach a
+  #     laptop or a runner -- narrower, and not zero. The five advisories this
+  #     job was written against were all of this kind: a Vite dev server that
+  #     answers any origin, and a Vitest UI that reads arbitrary files. Both
+  #     listen on a developer's machine while they work.
+  #
+  # Every audit fails the build at any severity, and there is no
+  # `--audit-level` threshold anywhere here on purpose. A threshold silently
+  # accumulates everything under it; the escape hatch is an explicit
+  # `--ignore-vuln GHSA-...` with the reason beside it, which puts the decision
+  # in a diff where it can be reviewed and revisited.
+  #
+  # All four were clean when this job was added (2026-08-12), after upgrading
+  # Vite 5 -> 7 and Vitest 2 -> 3 to clear the advisories rather than
+  # configuring around them.
+  audit:
+    name: Dependency audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      # Audits the pinned *files*, not an installed environment. The pins are
+      # the reproducibility record every benchmark cites, so they are what has
+      # to be clean -- an environment can drift from them in either direction.
+      #
+      # Pinned here rather than in requirements-dev.txt, and that is the same
+      # judgement that removed `locust`: pip-audit brings its own dependency
+      # tree, nothing in `src/` or `tests/` imports it, and it runs in exactly
+      # one place. A tool that runs only in CI belongs in the CI file, where
+      # its version sits next to the command that uses it.
+      - name: Install pip-audit
+        run: pip install pip-audit==2.10.1
+
+      - name: Audit runtime dependencies
+        run: pip-audit -r requirements.txt --progress-spinner=off
+
+      - name: Audit development dependencies
+        run: pip-audit -r requirements-dev.txt --progress-spinner=off
+
+      - name: Install the browser client
+        working-directory: web
+        run: npm ci --ignore-scripts
+
+      # The shipped surface first and on its own line: if this step is red and
+      # the next is green, the vulnerability is in something a user's browser
+      # actually loads.
+      - name: Audit the production bundle's dependencies
+        working-directory: web
+        run: npm audit --omit=dev
+
+      - name: Audit the browser client's dev dependencies
+        working-directory: web
+        run: npm audit

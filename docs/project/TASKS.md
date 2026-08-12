@@ -125,11 +125,11 @@ Convention: `[ ]` open · `[x]` done · `[~]` in progress · `[!]` blocked
 - [x] **Screenshots + GIF for the README** — `docs/assets/demo.gif` plus two stills, recorded 2026-08-08 against `spider_concert_singer`. No overlays and no tooling watermark, so the asset shows the product and nothing else
 
 ### Stage 1 close-out
-- [ ] End-to-end from clean checkout — the last component blocker is loading a target dataset
+- [x] **End-to-end from clean checkout** — `docker compose up` on 2026-08-11: build, migrate, seed, serve, and a real question answered. The blocker was never the components; it was that there was no dataset a reader could load without downloading Spider. `src/demo/` is that dataset, generated rather than vendored ([ADR-048](../architecture/DECISIONS.md#adr-048--v10-is-the-single-query-system-the-agent-loop-is-v2))
 - [x] Fill in SYSTEM_ARCHITECTURE, API, CONFIG, PROMPTS with real content
-- [ ] Architecture diagram committed — `docs/assets/` now holds the demo GIF and two screenshots, but no diagram
+- [x] **Architecture diagram committed** — as Mermaid in [SYSTEM_ARCHITECTURE](../architecture/SYSTEM_ARCHITECTURE.md), the README, and an `erDiagram` in [DATABASE](../architecture/DATABASE.md). Deliberately *not* a PNG: a rendered image drifts from the code silently and cannot be reviewed in a diff, and this repository's whole complaint about its own documents is drift nobody could see
 - [x] **First DEMO_SCRIPT entry verified** — re-recorded 2026-08-08 against the current code, in both response shapes and in a browser
-- [ ] CHANGELOG v0.1
+- [x] CHANGELOG cut — as **v1.0** rather than v0.1. The per-stage version ladder in the original plan was never cut at any rung, so cutting six of them retroactively would be inventing release history that did not happen ([ROADMAP](ROADMAP.md#releases))
 - [x] Screenshots and a GIF — captured 2026-08-08, embedded in README and DEMO_SCRIPT 1c
 
 ## Stage 2 — Eval harness
@@ -210,23 +210,26 @@ Convention: `[ ]` open · `[x]` done · `[~]` in progress · `[!]` blocked
 
 ## Stage 6 — Hardening
 
-- [ ] OpenTelemetry spans per OBSERVABILITY.md §1 — retries as sibling spans
-- [ ] structlog with `request_id` / `trace_id` on every line
-- [ ] Metrics per OBSERVABILITY.md §3
-- [ ] Rate limiting: requests, tokens, concurrent streams
-- [ ] Multi-stage Dockerfile (CPU-only torch)
-- [ ] Compose: migrations as a one-shot service, healthcheck gating
-- [ ] Load tests; saturation behaviour documented
-- [ ] Benchmark regression guards
-- [ ] Coverage ≥ 85%; security suite 100%
-- [ ] `pip-audit` in CI
-- [ ] CI pipeline
-- [ ] PERFORMANCE.md measured results — **including missed targets**
-- [ ] DEPLOYMENT / OBSERVABILITY / TESTING filled in
-- [ ] Full DEMO_SCRIPT verified end to end
-- [ ] README benchmarks table populated from BENCHMARKS.md
-- [ ] Demo GIF + screenshots
-- [ ] CHANGELOG v0.6 → v1.0
+**This stage straddles the release boundary** ([ROADMAP](ROADMAP.md#releases)). The items marked **v1.0** are what "a deployable, tested repo" needs and they shipped with it; the rest are **v2.0**, because they are measurements that need a running deployment or instrumentation the agent loop will produce spans for anyway. The split is recorded here rather than in a separate document so a reader counting this list gets the same answer as the roadmap.
+
+- [x] **v1.0** — Multi-stage Dockerfile (CPU-only torch), non-root runtime user
+- [x] **v1.0** — Compose: migrations as a one-shot service, seeding gated on it, healthcheck-gated startup
+- [x] **v1.0** — CI pipeline — lint, types, the four test layers, the browser suite, docs links
+- [x] **v1.0** — Coverage floor enforced in CI; security suite is a separately-named gate
+- [x] **v1.0** — `pip-audit` in CI
+- [x] **v1.0** — README benchmarks table populated from BENCHMARKS.md
+- [x] **v1.0** — Demo GIF + screenshots
+- [x] **v1.0** — Full DEMO_SCRIPT verified end to end — against the seeded demo dataset, which is what makes it runnable by a reader who has not downloaded Spider
+- [x] **v1.0** — CHANGELOG cut at v1.0
+- [~] **v1.0** — DEPLOYMENT / OBSERVABILITY / TESTING filled in — DEPLOYMENT covers the compose path; the OTel sections stay TBD and are marked as v2.0 rather than as gaps
+- [~] **v1.0** — PERFORMANCE.md measured results, **including missed targets** — §1 latency and §6 cost carry measured rows from the full-split run; §5's saturation numbers need the load generator below
+- [~] v2.0 — Rate limiting: requests, tokens, concurrent streams — the in-flight cap exists and is **process-wide**, which is the honest half. Per-client anything needs authentication
+- [ ] v2.0 — OpenTelemetry spans per OBSERVABILITY.md §1 — retries as sibling spans
+- [ ] v2.0 — structlog with `request_id` / `trace_id` on every line
+- [ ] v2.0 — Metrics per OBSERVABILITY.md §3
+- [ ] v2.0 — Load tests; saturation behaviour documented
+- [ ] v2.0 — Benchmark regression guards
+- [ ] v2.0 — Authentication, and the per-client controls that wait on it
 
 ---
 

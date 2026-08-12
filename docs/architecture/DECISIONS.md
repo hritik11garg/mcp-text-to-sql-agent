@@ -1279,3 +1279,33 @@ The implementation carried a claim that was not: *"Containers are unaffected: pu
 **Scope of the waiver, deliberately narrow.** It waives the *exposure* question and nothing else. An `API_HOST` that cannot be bound still fails — loudly, at bind time — and every other closed default (`API_DOCS_ENABLED`, `API_CORS_ORIGINS`) is untouched. An escape hatch that turns off more than it was opened for is how one ends up set in every environment.
 
 **Generalises to:** a security control that makes a legitimate deployment impossible will be removed by whoever needs to deploy, and they will remove all of it. Give the legitimate case a named door — then the control survives contact with the people it inconveniences, and the exception is a thing you can search for.
+
+---
+
+## ADR-050 — Dependency audits are hard gates at any severity, and the escape hatch is a named exception
+
+**Status:** accepted · **Date:** 2026-08-12 · **Stage:** 6
+
+**Context.** [ENGINEERING_MATRIX](../project/ENGINEERING_MATRIX.md) §25 has recorded "no `pip-audit`, no `npm audit` in CI, no SBOM" as an open supply-chain gap since Stage 0. On 2026-08-10 somebody ran `npm audit` by hand while installing an unrelated package and found five advisories — one critical, one high, three moderate — all in the dev toolchain, one of them a dev server that answers any origin *while proxying an unauthenticated API*.
+
+**The finding matters less than how it was found.** The scan ran because a human happened to be installing something. That is not a control; it is a coincidence with good documentation. Two days later the advisories were still open, now as a *written-up* vulnerability, which is better and is not a fix.
+
+**Decision.** Four audits in CI — Python runtime pins, Python dev pins, the npm production tree, the npm dev tree — each its own step, **each failing the build at any severity**, with no `--audit-level` threshold anywhere.
+
+| Option | Verdict |
+|---|---|
+| `--audit-level=high` on the dev surfaces | **Rejected.** A threshold accumulates everything beneath it into a pile nobody reads. The moderate `esbuild` advisory — the dev server answering any origin — is the *most* reachable of the five here, and a high-only gate would have kept it invisible |
+| Report-only (`continue-on-error`) | **Rejected.** A security job that cannot fail a build is a log line. The first time it is inconvenient it will be ignored, and after that it is decoration |
+| **Hard gate, escape hatch is an explicit `--ignore-vuln GHSA-…` with its reason** | **Chosen** |
+
+**Why the exception form is the load-bearing part.** A threshold and an ignore-list both let a vulnerability through; the difference is where the decision lives. A threshold makes it once, invisibly, for every future advisory. An `--ignore-vuln` with a comment makes it **per advisory, in a diff, next to the reason** — reviewable when written, and greppable when someone asks six months later why the pipeline is quiet about a known issue. Same shape as [ADR-049](#adr-049--binding-beyond-loopback-is-an-operators-assertion-not-a-detection): the exception is expressible, named, and recorded rather than inferred.
+
+**The shipped and development surfaces are separate steps** because their blast radii differ and a single red job would flatten that. If production is red and dev is green, the vulnerability is in something a user's browser loads. That is a different conversation from a vulnerable test runner, and a reader should not have to open the log to know which one they are having.
+
+**Taking the minimum fix, not the offered one.** Clearing the five advisories meant `vite` 5 → 7 and `vitest` 2 → 3. `npm audit fix --force` proposed **`vite` 8**, which replaces the bundler with rolldown — a native binding that would not install here at all — while every advisory range stops at `<=6.4.2`. **The version that clears the advisory and the version the tool suggests are different questions**, and taking the second one trades a known problem for an unknown one on the day you are trying to reduce risk.
+
+**Cost, accepted.** A dev-tooling advisory published tomorrow turns every pull request red until somebody deals with it, including pull requests that touch only prose. That is the intended behaviour and it is the price of the gate meaning something. The pressure it creates points at two responses — upgrade, or write the exception down — and both are better than the third response a threshold silently provides.
+
+**Revisit if** the dev-surface gate produces more interruption than it prevents over a quarter, or when an SBOM and a license check land and the whole section can be reconsidered together.
+
+**Generalises to:** a control's strength is not the threshold it enforces but where its exceptions are recorded. Move the exception into a diff and the control survives being inconvenient; leave it in a configuration constant and the constant is what gets edited.

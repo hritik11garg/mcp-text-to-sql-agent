@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "mcp-text-to-sql-agent"
-version = "0.1.0.dev0"
+version = "1.0.0"
 description = "MCP-native text-to-SQL analytics agent with a fine-tuned schema linker"
 readme = "README.md"
 license = { file = "LICENSE" }

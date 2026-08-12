@@ -6,6 +6,7 @@ Text-to-SQL Analytics Agent (MCP-native) (AI + SDE; ML with the fine-tuned schem
 > - **Scope grew twice.** A React demo UI was added to Stage 1 after noticing the project had no surface a reader could see; the eval harness gained resumability, which the PRD does not mention and which the free-tier token cap made mandatory.
 > - **The API arrived in two slices, not one.** The PRD lists "FastAPI + SSE" as a single item. The non-streaming endpoint landed first with the six containment controls that had to accompany the project's first request-accepting surface; SSE follows. Splitting it was the difference between shipping an endpoint and shipping an endpoint with an unbounded request body.
 > - **Stages have not been built in order.** Stage 3 (MCP servers) and much of Stage 2 landed before Stage 1 closed. The cost of that ordering is recorded per stage in ROADMAP.md.
+> - **The six stages became two releases, on 2026-08-12.** Stages 0–3 and the deployable half of 6 shipped as **v1.0**; stages 4, 5 and the rest of 6 are **v2.0**. The PRD assumed one delivery, and the effect of holding to it was that a finished single-query system read as an unfinished multi-step one. The boundary is drawn where the measurements are: everything in v1.0 has a number in BENCHMARKS.md, and nothing in v2.0 does. See [ROADMAP §Releases](docs/project/ROADMAP.md#releases), which also states the risk that accepts.
 
 **Constraint: everything required to run, evaluate and demo this project is free and open source.** No paid tier, no proprietary application, no vendor account is a *requirement* at any point. Free-tier hosted models and proprietary local runtimes may be *supported* — they must never be the only path. This is why the LLM sits behind a port with Ollama as a first-class option (ADR-014), why the eval harness is resumable around free-tier token caps, and why the MCP servers are driven by the project's own client rather than by anyone's desktop app.
 
@@ -33,6 +34,17 @@ Built an MCP-native text-to-SQL agent exposing schema search, validation, execut
 Raised schema-linking Recall@5 from X% to Y% by fine-tuning a sentence-transformer with contrastive learning on question→column pairs, measured on a committed eval harness.
 Reduced invalid-query rate X%→Y% via a side-effect-free validation tier (sqlglot AST + EXPLAIN) and an error-feedback self-correction loop, with execution confined to a read-only role under row limits and statement timeouts.
 Implemented multi-step decomposition with session memory, scoring X% task success on compound analytical questions; SSE streaming and OpenTelemetry tracing across agent steps.
+
+**Which of those four v1.0 earns, and which it does not.** Two are writable today with real numbers behind them; two are not, and no rewording changes that — they describe features that are not built.
+
+| Bullet | v1.0 | Writable as |
+|---|---|---|
+| 1 — MCP servers + execution accuracy | ✅ **Earned** | *"Built an MCP-native text-to-SQL agent exposing schema search, validation, execution and profiling as four MCP servers with runtime tool discovery — **79.9% execution accuracy over all 921 scoreable questions of Spider's dev split**, on a single free-tier model, with database-level train/eval disjointness enforced in code."* The last clause is worth keeping: it is the part most such claims cannot make. |
+| 3 — invalid-query rate + validation tier | ⚠️ **Half** | The validation tier and the containment are real and measurable — **1.4% invalid-query rate, five-stage side-effect-free validation, execution confined to a `SELECT`-only role under AST-injected row limits and statement timeouts**. The *"X%→Y% via an error-feedback self-correction loop"* half is not: no baseline self-corrects. Claim the tier and the containment; do not claim the loop. |
+| 2 — Recall@5 fine-tune lift | ❌ **Not earned** | The **before** is measured and committed (R@1 0.7445, R@5 0.9435, R@20 0.9973). There is no after. Writable only as a baseline, and a baseline is not the bullet. |
+| 4 — multi-step task success | ❌ **Not earned** | Stage 4. SSE streaming is real and can be claimed on its own; OpenTelemetry is not built. |
+
+**A note on which of these is worth more in a room.** Bullet 1's honest version is stronger than the fine-tune bullet would have been, because the interesting finding here is the one that stopped a fine-tune from being meaningful: **11 of the 20 evaluated databases had hashed into this project's own training split**, invisible except as a *better* Recall@k arriving exactly when a fine-tune was being evaluated. Finding that before training is a better story than a Recall lift, and it is the kind of thing an interviewer can follow up on.
 
 **What is measurable so far, with the bound that stops it being the final number** — see [BENCHMARKS.md](docs/ml/BENCHMARKS.md) for the full rows:
 
