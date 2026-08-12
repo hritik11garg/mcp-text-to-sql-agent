@@ -106,6 +106,19 @@ disallow_untyped_defs = false
 testpaths = ["tests"]
 asyncio_mode = "auto"
 addopts = "--strict-markers --strict-config -ra"
+
+# Puts the repository root on sys.path, so `from tests.conftest import ...`
+# resolves. Nine test modules share helpers that way, and `tests/` is
+# deliberately not a package -- pytest's rootdir-relative `prepend` mode
+# inserts `tests/unit`, not the root.
+#
+# Without this the suite runs under `python -m pytest` and fails to *collect*
+# under `pytest`, because only the first form puts the working directory on
+# sys.path. That divergence hid a red pipeline for four commits: every local
+# run used one form and CI used the other, so "the tests pass" and "CI is
+# green" were statements about two different commands. This line makes them
+# the same command. See docs/development/TESTING.md section 11.
+pythonpath = ["."]
 markers = [
     "unit: no I/O, fakes throughout",
     "integration: requires a real Postgres via testcontainers",

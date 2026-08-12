@@ -200,7 +200,19 @@ Coverage is a floor, not a goal. The security suite would contribute a handful o
 
 ## 11. CI
 
-> **TBD — Stage 6.**
+**Five jobs, and one invocation.** `.github/workflows/ci.yml` runs lint and types, the Python suite with its coverage floor, the browser client, the documentation link check, and dependency auditing.
+
+> ### Run the suite exactly one way
+>
+> ```
+> pytest                    # not `python -m pytest`
+> ```
+>
+> **These were not the same command until 2026-08-12, and the difference hid a red pipeline for four commits.** `python -m pytest` puts the current directory on `sys.path`; the `pytest` console script does not. Nine test modules import shared helpers as `from tests.conftest import ...`, and `tests/` is deliberately not a package — pytest's rootdir-relative `prepend` mode inserts `tests/unit`, not the repository root. So the suite collected 1,640 tests under one form and **failed to collect at all under the other**, with nine `ModuleNotFoundError: No module named 'tests'`.
+>
+> Every local run used the first form and CI used the second. *"The tests pass"* and *"CI is green"* were therefore statements about two different commands, and only one of them was ever true. `pythonpath = ["."]` in `pyproject.toml` makes both forms identical; the instruction above survives as the shorter statement of the same thing.
+>
+> **The failure was not subtle and it was not seen.** Four consecutive runs failed, at the same job, at the same step, from the day the workflow landed. A pipeline nobody reads is a pipeline that is not running — which is the same defect as the unmarked tests below, one layer out: the mechanism worked, reported correctly, and nothing consumed the report.
 
 | Stage | Runs |
 |---|---|
