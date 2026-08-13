@@ -62,6 +62,10 @@ Planned filters, each with the count it removed recorded:
 
 **Databases must not straddle splits.** Splitting by *question* leaks: the same schema elements appear in train and eval, so the model memorizes the corpus instead of learning to link. Split by **database**, so eval schemas are entirely unseen. This is the difference between a real generalization number and a meaningless one.
 
+> **This rule was in force and violated anyway, and the audit that found it is the reason this note exists.** Splitting by database is necessary and not sufficient: the split is a hash of the database name ([ADR-021](../architecture/DECISIONS.md#adr-021--splits-are-a-hash-of-the-database-name-not-a-seeded-shuffle)), while the *reported* evaluation set is Spider's own `dev.json` — defined outside the hash and invisible to it. On 2026-08-11 that put **11 of Spider's 20 dev databases in this project's `train` band, carrying 605 questions**, and five more in `dev`/`smoke`: 16 of the 20 databases every published number is measured on ([ADR-047](../architecture/DECISIONS.md#adr-047--spiders-own-split-is-the-evaluation-boundary-and-the-training-set-is-carved-around-it), [DATASETS §5](DATASETS.md)). No fine-tune had run, so nothing published is affected.
+>
+> **The rule is now a function rather than a paragraph.** `assign(reserved=...)` forces the reported evaluation databases to held-out regardless of hash, and `benchmark.splits.leaked_databases()` is checked against the committed assignment by `tests/unit/test_split_disjointness.py`. **Before starting any fine-tune, run that test rather than re-reading this section** — a rule stated in prose is exactly what was in place when the leak happened.
+
 ## 4. Embedding model
 
 **Baseline / starting checkpoint.** A general-purpose sentence-transformer bi-encoder, chosen for a good quality/size tradeoff at 384 dimensions.

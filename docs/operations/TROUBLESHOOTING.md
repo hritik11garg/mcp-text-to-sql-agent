@@ -349,7 +349,17 @@ Reduce batch size — but note that with `MultipleNegativesRankingLoss`, **batch
 
 ### Recall@k is suspiciously high
 
-Check the split. If databases straddle train and eval, the model has memorized the corpus rather than learned to link, and the number is meaningless. Split by **database**, never by question — [../ml/DATASETS.md](../ml/DATASETS.md) §5.
+**Run the check rather than inspecting the split by eye:**
+
+```bash
+pytest tests/unit/test_split_disjointness.py -q
+```
+
+It calls `benchmark.splits.leaked_databases()` against the committed assignment and names any database that is both reported from and trained on — `dev` and `smoke` count as trained-on, because a number reported from a database prompts were tuned against is not a held-out number either.
+
+If databases straddle train and eval, the model has memorized the corpus rather than learned to link, and the number is meaningless. Split by **database**, never by question — [../ml/DATASETS.md](../ml/DATASETS.md) §5.
+
+**Splitting by database is not on its own enough, and this is the failure that actually occurred.** The split is a hash of the database name; the *reported* evaluation set is the benchmark's own dev split, which the hash knows nothing about. On 2026-08-11 that left **11 of Spider's 20 dev databases in the `train` band** with the split perfectly self-consistent ([ADR-047](../architecture/DECISIONS.md#adr-047--spiders-own-split-is-the-evaluation-boundary-and-the-training-set-is-carved-around-it)). If the test above is green and Recall@k still looks too good, check next that the databases you are *reporting* from are the ones the reservation covers — `benchmark.load splits --reserve` takes them from the benchmark's own question file.
 
 ### Fine-tuned model performs worse than baseline
 
